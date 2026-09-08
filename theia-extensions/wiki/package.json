@@ -1,0 +1,32 @@
+{
+  "name": "@wazoo-wiki/wiki-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wazoo Wiki editor extension (M1 foundation)",
+  "license": "MIT",
+  "author": "Wazoo Technologies",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wazootech/wiki-desktop.git"
+  },
+  "dependencies": {
+    "@theia/core": "latest"
+  },
+  "devDependencies": {
+    "@theia/cli": "latest",
+    "@types/node": "latest",
+    "typescript": "latest"
+  },
+  "scripts": {
+    "build": "theia extension:build",
+    "watch": "theia extension:watch",
+    "test": "echo 'no tests yet'",
+    "lint": "echo 'no lint config yet'"
+  },
+  "theia": {
+    "targets": {
+      "frontend": ["src/browser/index"],
+      "backend": ["src/node/index"]
+    }
+  }
+}
