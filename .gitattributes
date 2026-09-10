@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+# Deno-formatted source and config files: keep LF
+*.ts text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.txt text eol=lf
+
+# GitHub workflow files: keep LF
+.github/workflows/** text eol=lf
