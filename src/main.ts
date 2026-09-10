@@ -29,7 +29,7 @@ Deno.serve(() =>
 </body>
 </html>`,
     {
-      headers: { 'content-type': 'text/html; charset=utf-8' },
+      headers: { "content-type": "text/html; charset=utf-8" },
     },
-  ),
+  )
 );
