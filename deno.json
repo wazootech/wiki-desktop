@@ -1,16 +1,13 @@
 {
   "$schema": "https://docs.deno.com/runtime/desktop/",
-  "deno": {
-    "tasks": {
-      "dev": "deno desktop --hmr src/main.ts",
-      "build": "deno desktop --output wiki-desktop src/main.ts"
-    }
+  "tasks": {
+    "dev": "deno desktop --hmr src/main.ts",
+    "build": "deno desktop --output wiki-desktop src/main.ts"
   },
   "desktop": {
-    "name": "wiki-desktop",
-    "version": "0.1.0",
-    "description": "Wazoo Wiki deno desktop app",
-    "author": "Wazoo Technologies",
-    "license": "MIT"
+    "app": {
+      "name": "wiki-desktop",
+      "identifier": "com.wazoo.wiki-desktop"
+    }
   }
 }
