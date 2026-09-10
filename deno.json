@@ -2,8 +2,15 @@
   "$schema": "https://docs.deno.com/runtime/desktop/",
   "deno": {
     "tasks": {
-      "dev": "deno run --watch --allow-read --allow-env --allow-net --allow-import src/main.ts",
-      "build": "deno compile --output wiki-desktop --allow-read --allow-env --allow-net --allow-import src/main.ts"
+      "dev": "deno desktop --hmr src/main.ts",
+      "build": "deno desktop --output wiki-desktop src/main.ts"
     }
+  },
+  "desktop": {
+    "name": "wiki-desktop",
+    "version": "0.1.0",
+    "description": "Wazoo Wiki deno desktop app",
+    "author": "Wazoo Technologies",
+    "license": "MIT"
   }
 }
