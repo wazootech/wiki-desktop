@@ -1,0 +1,36 @@
+name: check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+
+      - name: format
+        run: deno fmt --check
+
+      - name: lint
+        run: deno lint
+
+      - name: type-check
+        run: deno check src/main.ts
+
+      - name: build
+        run: deno task build
