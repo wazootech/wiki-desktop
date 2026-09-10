@@ -1,9 +1,13 @@
 {
   "$schema": "https://docs.deno.com/runtime/desktop/",
-  "deno": {
-    "tasks": {
-      "dev": "deno run --watch --allow-read --allow-env --allow-net --allow-import src/main.ts",
-      "build": "deno compile --output wiki-desktop --allow-read --allow-env --allow-net --allow-import src/main.ts"
+  "tasks": {
+    "dev": "deno desktop --hmr src/main.ts",
+    "build": "deno desktop --output wiki-desktop src/main.ts"
+  },
+  "desktop": {
+    "app": {
+      "name": "wiki-desktop",
+      "identifier": "com.wazoo.wiki-desktop"
     }
   }
 }
