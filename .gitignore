@@ -1,3 +1,11 @@
-wiki-desktop/
-wiki-desktop.dll
-wiki-desktop.exe
+node_modules
+plugins
+*.tsbuildinfo
+dist
+build
+.theia
+.vite
+*.log
+.env*
+.DS_Store
+Thumbs.db

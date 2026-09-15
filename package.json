@@ -1,0 +1,32 @@
+{
+  "name": "wiki-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "Wazoo Technologies",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wazootech/wiki-desktop.git"
+  },
+  "scripts": {
+    "build": "lerna run build --concurrency 1",
+    "build:dev": "lerna run build --scope=@wazoo-wiki/app --concurrency 1",
+    "start": "lerna run start --scope=@wazoo-wiki/app --stream",
+    "test": "lerna run test --stream",
+    "lint": "lerna run lint --stream",
+    "clean": "lerna run clean --concurrency 1 && rimraf node_modules"
+  },
+  "workspaces": [
+    "applications/*",
+    "theia-extensions/*"
+  ],
+  "devDependencies": {
+    "lerna": "^9.0.0",
+    "rimraf": "^6.0.0"
+  },
+  "theiaPluginsDir": "plugins",
+  "theiaPlugins": {},
+  "resolutions": {
+    "**/cpy": "^10.1.2"
+  }
+}

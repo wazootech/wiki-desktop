@@ -1,10 +1,13 @@
 # wiki-desktop
 
-Wazoo Wiki deno desktop app — from-scratch Deno desktop boilerplate.
+Wazoo Wiki desktop app — Theia-based rebuild.
 
-This is the empty starting point for the Deno desktop app, built from zero with
-reference to the Deno runtime desktop docs:
+This is the Theia-based wiki-desktop product (lerna monorepo:
+`applications/*`, `theia-extensions/*`).
 
-- https://docs.deno.com/runtime/desktop/
+The earlier from-scratch React/Vite mock is preserved on branch
+`wip/react-mock` for reference only.
 
-Next step: add `deno.json` and `src/main.ts` on a feature branch.
+The previous iteration lives on in
+[wiki-desktop-experiment](https://github.com/wazootech/wiki-desktop-experiment)
+(Theia blueprint fork that was retired after Phase 2a branding).

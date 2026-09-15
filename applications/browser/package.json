@@ -1,0 +1,46 @@
+{
+  "name": "@wazoo-wiki/browser-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wazoo Wiki browser application",
+  "license": "MIT",
+  "author": "Wazoo Technologies",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wazootech/wiki-desktop.git"
+  },
+  "dependencies": {
+    "@theia/core": "latest",
+    "@theia/browser": "latest",
+    "@theia/filesystem": "latest",
+    "@theia/workspace": "latest",
+    "@theia/editor": "latest",
+    "@theia/editor-preview": "latest",
+    "@theia/monaco": "latest",
+    "@theia/navigator": "latest",
+    "@theia/terminal": "latest",
+    "@theia/output": "latest",
+    "@theia/markers": "latest",
+    "@theia/preferences": "latest",
+    "@theia/process": "latest",
+    "@theia/messages": "latest",
+    "@theia/ext-host": "latest",
+    "@theia/extension-editing": "latest",
+    "@theia/extension-manager": "latest",
+    "@wazoo-wiki/wiki-extension": "0.1.0",
+    "@wazoo-wiki/product-extension": "0.1.0",
+    "@wazoo-wiki/launcher-extension": "0.1.0"
+  },
+  "devDependencies": {
+    "@theia/cli": "latest"
+  },
+  "scripts": {
+    "build": "theia build --mode production",
+    "build:dev": "theia build --mode development",
+    "start": "theia start",
+    "watch": "theia build --watch"
+  },
+  "theia": {
+    "appName": "Wazoo Wiki"
+  }
+}
