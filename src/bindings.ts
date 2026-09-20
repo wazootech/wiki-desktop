@@ -2,8 +2,10 @@ import { basename } from "node:path";
 
 import {
   clampSidebarWidth,
+  coerceTheme,
   homeDirectory,
   loadConfig,
+  type ThemePreference,
   updateConfig,
   withRecentVault,
 } from "./config.ts";
@@ -30,6 +32,8 @@ export interface VaultState {
   sidebarCollapsed: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
+  /** Light/dark appearance the user last chose, `system` if they never did. */
+  theme: ThemePreference;
 }
 
 /**
@@ -53,6 +57,8 @@ export interface WikiBindings {
   setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
   /** Remember the sidebar column's width, so it survives a restart. */
   setSidebarWidth(width: number): Promise<VaultState>;
+  /** Remember the appearance, so it survives a restart. */
+  setTheme(theme: string): Promise<VaultState>;
 }
 
 /** The same operations as plain functions, ready for any transport. */
@@ -97,6 +103,12 @@ export function createVaultApi(): VaultApi {
       // Clamped here as well as in the webview: this is a trust boundary, and
       // a stored width outside the bounds would distort every future launch.
       await updateConfig({ sidebarWidth: clampSidebarWidth(width) });
+      return await readState();
+    }),
+    setTheme: guard(async (theme: string) => {
+      // Coerced for the same reason the width is clamped: the page is a caller
+      // like any other, and an unknown value here would outlive this session.
+      await updateConfig({ theme: coerceTheme(theme) });
       return await readState();
     }),
   };
@@ -155,6 +167,7 @@ async function readState(): Promise<VaultState> {
     recents: config.recentVaults,
     sidebarCollapsed: config.sidebarCollapsed,
     sidebarWidth: config.sidebarWidth,
+    theme: config.theme,
   };
   if (!config.vaultRoot) {
     return { root: null, name: null, ...ui };

@@ -13,7 +13,7 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
 } from "./config.ts";
-import { page } from "./page.ts";
+import { page, pageForTheme } from "./page.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -73,7 +73,7 @@ Deno.test("every token used resolves, and dark only overrides light", async () =
   // structure instead: a var() with no definition resolves to nothing and a
   // token that exists only in the dark block leaves light mode unstyled.
   const style = page.slice(0, page.indexOf("</style>"));
-  const darkAt = style.indexOf("@media (prefers-color-scheme: dark)");
+  const darkAt = style.indexOf(':root[data-theme="dark"]');
   assert(darkAt > 0, "there is a dark block");
   const light = readTokens(style.slice(0, darkAt));
   const dark = readTokens(style.slice(darkAt));
@@ -307,7 +307,9 @@ Deno.test("the top bar labels one command and icons another", () => {
 });
 
 Deno.test("the page edits through the bundled editor, not a bare input", () => {
-  const markup = page.slice(0, page.indexOf("<script"));
+  // The markup, not either script: the head's appearance script comes before
+  // the body, so the boundary is the body's own script.
+  const markup = page.slice(page.indexOf("<body"), page.lastIndexOf("<script"));
 
   // CodeMirror needs a host element it can own, and the handle is the only
   // thing the page is allowed to know about it.
@@ -514,6 +516,141 @@ Deno.test("the command menu is built from the command list", () => {
       ),
     "that check comes first in the handler",
   );
+});
+
+Deno.test("the appearance is one choice out of three, and the menu shows it", () => {
+  // The palette is plain CSS keyed on an attribute, so the attribute name is
+  // the whole coupling: if the script and the stylesheet ever disagree the app
+  // silently renders light forever and nothing else in this file would notice.
+  const style = page.slice(0, page.indexOf("</style>"));
+  assert(
+    style.includes(':root[data-theme="dark"]'),
+    "the dark palette is selected by the attribute",
+  );
+  // Comments are allowed to name it; rules are not.
+  const rules = style.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert(
+    !rules.includes("prefers-color-scheme"),
+    "a rule also keys on the OS, so the mode has two sources of truth",
+  );
+
+  const list = page.slice(
+    page.indexOf("const commands = ["),
+    page.indexOf("let menuIndex"),
+  );
+  const choices = [
+    ...list.matchAll(
+      /id: '(theme-\w+)'[^}]*?isActive: \(\) => vault\.theme === '(\w+)'/g,
+    ),
+  ]
+    .map(([, id, preference]) => ({ id, preference }));
+  assert(
+    choices.length === 3,
+    `expected three appearance choices, found ${choices.length}`,
+  );
+  assert(
+    choices.map((choice) => choice.preference).join(",") ===
+      "system,light,dark",
+    `the three preferences are not the stored ones: ${
+      choices.map((choice) => choice.preference).join(", ")
+    }`,
+  );
+  // Every one of them persists, and none of them bypasses setTheme: a choice
+  // that wrote the attribute directly would leave the menu mark and the stored
+  // preference disagreeing with what is on screen.
+  const runs = [...list.matchAll(/run: \(\) => setTheme\('(\w+)', true\)/g)]
+    .map(([, preference]) => preference);
+  assert(
+    runs.join(",") === "system,light,dark",
+    `the appearance commands do not all persist: ${runs.join(", ")}`,
+  );
+
+  // A command fires and closes the menu; a choice has to stay put and say which
+  // one is on, so the renderer has to treat it as a radio item.
+  assert(
+    page.includes("role', isChoice ? 'menuitemradio' : 'menuitem'"),
+    "a choice is rendered as a command",
+  );
+  assert(
+    page.includes(
+      "item.setAttribute('aria-checked', command.isActive() ? 'true' : 'false')",
+    ),
+    "the menu does not report which appearance is on",
+  );
+  assert(
+    /\.menu-check\s*\{[^}]*width:/.test(style),
+    "the check has no gutter, so the labels shift when the choice moves",
+  );
+
+  // Applied from stored state on the way in, persisted on the way out.
+  assert(
+    page.includes("setTheme(state.theme, false)"),
+    "stored state does not apply the appearance",
+  );
+  assert(
+    page.includes("if (persist) call('setTheme', [vault.theme]);"),
+    "a chosen appearance is not written to the config",
+  );
+  // An OS flip only matters while the preference defers to it.
+  assert(
+    /systemAppearance\.addEventListener\('change', \(\) => \{\s*if \(vault\.theme === 'system'\)/
+      .test(page),
+    "an OS flip is not heard, or is heard even after the user pinned a mode",
+  );
+});
+
+Deno.test("the first paint already has the stored appearance", () => {
+  // The window's mode must be settled in the document, not after the bindings
+  // answer: a dark desktop would otherwise get a white flash on every launch,
+  // and a user who pinned the opposite of their OS would see the wrong palette
+  // until the state arrived.
+  assert(
+    page.includes('data-theme-preference="system"'),
+    "the shipped page assumes an appearance instead of asking the OS",
+  );
+  assert(
+    (page.match(/data-theme-preference/g) ?? []).length === 1,
+    "the preference is baked in more than once",
+  );
+  const head = page.slice(page.indexOf("</style>"), page.indexOf("<body"));
+  assert(
+    head.includes(
+      "applyAppearance(document.documentElement.dataset.themePreference)",
+    ),
+    "the preference is not resolved before the first paint",
+  );
+  assert(
+    head.includes("document.documentElement.dataset.theme = resolved"),
+    "the head script does not set the attribute the stylesheet reads",
+  );
+  assert(
+    head.includes("window.matchMedia('(prefers-color-scheme: dark)')"),
+    "the head script never asks the OS, so system cannot resolve",
+  );
+
+  const dark = pageForTheme("dark");
+  assert(dark !== page, "pageForTheme does not change the document");
+  assert(
+    dark.replace(
+      'data-theme-preference="dark"',
+      'data-theme-preference="system"',
+    ) === page,
+    "pageForTheme rewrites more of the document than the preference",
+  );
+});
+
+Deno.test("both entrypoints bake the stored appearance in", async () => {
+  for (const file of ["main.ts", "dev_server.ts"]) {
+    const source = await Deno.readTextFile(join(import.meta.dirname!, file));
+    assert(
+      source.includes("pageForTheme("),
+      `${file} serves a document with no appearance baked in`,
+    );
+    assert(
+      !/new Response\(page[,)]/.test(source),
+      `${file} still serves the bare page`,
+    );
+  }
 });
 
 Deno.test("no menu entry advertises a shortcut the page does not handle", () => {

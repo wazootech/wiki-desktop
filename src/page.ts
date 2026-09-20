@@ -1,7 +1,9 @@
 import {
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_THEME,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  type ThemePreference,
 } from "./config.ts";
 
 /**
@@ -47,23 +49,25 @@ const RELOAD_ICON = chromeIcon(
  * written here twice, so the drag handle and the stored setting agree, and its
  * toggle's icon comes from the constant above for the same reason.
  */
-export const page = `<!DOCTYPE html>
+const pageTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f5f7fb" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#13151b" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f5f7fb" />
   <title>Wazoo Wiki</title>
   <style>
     /*
-     * Light is the default and dark follows the operating system, which is
-     * what the desktop runtime and every browser report through
-     * prefers-color-scheme. No toggle: both modes are one token set, so a
-     * future in-app override only has to reassign these values on :root.
+     * Two palettes, one per mode, selected by the data-theme attribute on <html>.
+     * Nothing here reads prefers-color-scheme, so that attribute is the single
+     * answer to "which mode is this": the head script below sets it from the
+     * stored preference (src/config.ts) and, when that preference is system, from
+     * the OS — before the first paint, and again whenever the OS flips. Each
+     * palette is written once, so they cannot drift apart, and a rename of the
+     * attribute is a failure rather than a silently unstyled window.
      */
     :root {
-      color-scheme: light dark;
+      color-scheme: light;
       --canvas: #f5f7fb;
       --panel: #ffffff;
       --panel-muted: #f8f9fc;
@@ -114,49 +118,47 @@ export const page = `<!DOCTYPE html>
       --statusbar-height: 26px;
     }
 
-    @media (prefers-color-scheme: dark) {
-      :root {
-        color-scheme: dark;
-        --canvas: #13151b;
-        --panel: #1a1d25;
-        --panel-muted: #20232c;
-        --line: #2b2f3a;
-        --line-strong: #3b4152;
-        --surface-hover: #252935;
-        --surface-raised: #232733;
-        --text: #e6e9f2;
-        --text-soft: #a7b0c2;
-        --text-faint: #8590a6;
-        --text-label: #c4cad8;
-        --text-body: #c9cfdb;
-        --text-editor: #dfe4ef;
-        --dot: #4b5364;
-        --muted: #8b95a9;
-        --brand: #6a5cf0;
-        --brand-dark: #7d70ff;
-        --brand-text: #b3a9ff;
-        --brand-soft: #2a2740;
-        --brand-marker: #6f63e8;
-        --kbd-bg: #232733;
-        --kbd-line: #3b4152;
-        --warn-text: #e8b566;
-        --success: #35c08c;
-        --warning: #e0a63c;
-        --selection-soft: rgba(139, 129, 255, 0.28);
-        --syntax-heading: #cdd6f0;
-        --syntax-link: #a99fff;
-        --syntax-code: #e8bd87;
-        --syntax-marker: #8590a6;
-        --syntax-muted: #939db1;
-        --syntax-keyword: #dfa6ff;
-        --syntax-string: #8fd9ad;
-        --syntax-number: #ffc27a;
-        --syntax-type: #8fc7ff;
-        --overlay: rgba(3, 5, 10, 0.62);
-        --focus-ring: rgba(139, 129, 255, 0.4);
-        --toast-bg: #232733;
-        --shadow: 0 18px 45px rgba(0, 0, 0, 0.5);
-      }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --canvas: #13151b;
+      --panel: #1a1d25;
+      --panel-muted: #20232c;
+      --line: #2b2f3a;
+      --line-strong: #3b4152;
+      --surface-hover: #252935;
+      --surface-raised: #232733;
+      --text: #e6e9f2;
+      --text-soft: #a7b0c2;
+      --text-faint: #8590a6;
+      --text-label: #c4cad8;
+      --text-body: #c9cfdb;
+      --text-editor: #dfe4ef;
+      --dot: #4b5364;
+      --muted: #8b95a9;
+      --brand: #6a5cf0;
+      --brand-dark: #7d70ff;
+      --brand-text: #b3a9ff;
+      --brand-soft: #2a2740;
+      --brand-marker: #6f63e8;
+      --kbd-bg: #232733;
+      --kbd-line: #3b4152;
+      --warn-text: #e8b566;
+      --success: #35c08c;
+      --warning: #e0a63c;
+      --selection-soft: rgba(139, 129, 255, 0.28);
+      --syntax-heading: #cdd6f0;
+      --syntax-link: #a99fff;
+      --syntax-code: #e8bd87;
+      --syntax-marker: #8590a6;
+      --syntax-muted: #939db1;
+      --syntax-keyword: #dfa6ff;
+      --syntax-string: #8fd9ad;
+      --syntax-number: #ffc27a;
+      --syntax-type: #8fc7ff;
+      --overlay: rgba(3, 5, 10, 0.62);
+      --focus-ring: rgba(139, 129, 255, 0.4);
+      --toast-bg: #232733;
+      --shadow: 0 18px 45px rgba(0, 0, 0, 0.5);
     }
 
     * { box-sizing: border-box; }
@@ -413,6 +415,9 @@ export const page = `<!DOCTYPE html>
     .menu-item:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: -1px; }
     .menu-item[aria-disabled="true"] { color: var(--text-faint); cursor: not-allowed; }
     .menu-item-label { flex: 1; }
+    /* A radio item keeps its gutter whether or not it is the active one, so the
+       labels of a group of choices line up. */
+    .menu-check { flex-shrink: 0; width: 11px; color: var(--brand-text); font-size: 11px; }
     .menu-keys { flex-shrink: 0; color: var(--text-faint); font-size: 10.5px; }
 
     .editor-region { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--panel-muted); }
@@ -529,6 +534,33 @@ export const page = `<!DOCTYPE html>
       .statusbar { flex-wrap: wrap; }
     }
   </style>
+  <script>
+    /*
+     * The palette is selected by an attribute on <html>, so something has to set
+     * that before the stylesheet paints — otherwise a dark desktop gets a white
+     * flash on every launch. This runs in the head, needs no bindings, and is
+     * also the function the app calls when the preference or the OS changes: the
+     * stored choice arrives baked into the tag by pageForTheme() in src/page.ts,
+     * and a preference of system is resolved right here.
+     */
+    function applyAppearance(preference) {
+      const resolved = preference === 'light' || preference === 'dark'
+        ? preference
+        : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.dataset.theme = resolved;
+      // The browser's own chrome follows this meta, and a meta cannot read a
+      // custom property, so the resolved value comes out of the stylesheet
+      // rather than being written here a second time.
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) {
+        meta.content = getComputedStyle(document.documentElement)
+          .getPropertyValue('--canvas').trim() || meta.content;
+      }
+      return resolved;
+    }
+
+    applyAppearance(document.documentElement.dataset.themePreference);
+  </script>
 </head>
 <body>
   <main class="app" id="app">
@@ -796,6 +828,7 @@ export const page = `<!DOCTYPE html>
         recents: [],
         sidebarCollapsed: false,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
+        theme: '${DEFAULT_THEME}',
       };
       let files = [];
       let listing = null;
@@ -1290,8 +1323,34 @@ export const page = `<!DOCTYPE html>
         showToast('Created ' + payload.path);
       }
 
+      /* Appearance */
+
+      // The OS is the source of truth only while the preference says so. A
+      // media-query stylesheet would follow it for free, but an attribute
+      // cannot, so the flip is heard here instead.
+      const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)');
+      systemAppearance.addEventListener('change', () => {
+        if (vault.theme === 'system') applyAppearance('system');
+      });
+
+      /**
+       * Show one appearance, and remember it unless this is stored state being
+       * applied. The attribute is written in exactly one place — applyAppearance
+       * in the head, before the first paint — so the head script, this, and the
+       * OS listener cannot disagree about which mode is on.
+       */
+      function setTheme(preference, persist) {
+        vault.theme = preference === 'light' || preference === 'dark'
+          ? preference
+          : 'system';
+        applyAppearance(vault.theme);
+        if (persist) call('setTheme', [vault.theme]);
+        refreshMenu();
+      }
+
       function applyState(state) {
         vault = state;
+        setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
         applySidebarWidth();
         renderVault();
@@ -1521,6 +1580,11 @@ export const page = `<!DOCTYPE html>
         { id: 'next-tab', group: 'Tabs', label: 'Next tab', keys: 'Ctrl+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(1) },
         { id: 'previous-tab', group: 'Tabs', label: 'Previous tab', keys: 'Ctrl+Shift+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(-1) },
         { id: 'toggle-sidebar', group: 'View', label: 'Toggle vault files', keys: 'Ctrl+B', canRun: () => true, run: toggleSidebar },
+        // Three choices rather than three commands, so each one reports whether
+        // it is the active one and the menu can show that.
+        { id: 'theme-system', group: 'Appearance', label: 'Match the system', keys: '', canRun: () => true, isActive: () => vault.theme === 'system', run: () => setTheme('system', true) },
+        { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
+        { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
         { id: 'close-vault', group: 'Vault', label: 'Close vault', keys: '', canRun: () => vault.root !== null, run: closeVault },
       ];
 
@@ -1571,7 +1635,18 @@ export const page = `<!DOCTYPE html>
           const item = document.createElement('button');
           item.type = 'button';
           item.className = 'menu-item';
-          item.setAttribute('role', 'menuitem');
+          // A command fires and closes the menu; a choice among a set stays put
+          // and has to say which one is on, so it is a radio item with a mark.
+          const isChoice = typeof command.isActive === 'function';
+          item.setAttribute('role', isChoice ? 'menuitemradio' : 'menuitem');
+          if (isChoice) {
+            item.setAttribute('aria-checked', command.isActive() ? 'true' : 'false');
+            const check = document.createElement('span');
+            check.className = 'menu-check';
+            check.setAttribute('aria-hidden', 'true');
+            check.textContent = command.isActive() ? '✓' : '';
+            item.appendChild(check);
+          }
           item.setAttribute('aria-disabled', command.canRun() ? 'false' : 'true');
           item.dataset.command = command.id;
           const name = document.createElement('span');
@@ -1746,3 +1821,22 @@ export const page = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+
+/**
+ * The document with the stored appearance baked into `<html>`, so the first
+ * paint is already in the right mode. Without it the head script would have to
+ * wait for the palette and the preference it stores over the bindings, and a
+ * user who pinned the opposite of their OS would see the wrong one until then.
+ *
+ * `theme` is the sanitized value from the config, so it is always a preference
+ * the head script recognises; an unrecognised one would resolve to `system`.
+ */
+export function pageForTheme(theme: ThemePreference): string {
+  return pageTemplate.replace(
+    '<html lang="en">',
+    `<html lang="en" data-theme-preference="${theme}">`,
+  );
+}
+
+/** The page as it ships: the default appearance, which follows the OS. */
+export const page: string = pageForTheme(DEFAULT_THEME);

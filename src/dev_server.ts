@@ -11,8 +11,9 @@
  * cross-origin callers, and should never be exposed beyond the local machine.
  */
 import { createVaultApi, type VaultApi } from "./bindings.ts";
+import { loadConfig } from "./config.ts";
 import { editorScriptResponse, isEditorScript } from "./editor_asset.ts";
-import { page } from "./page.ts";
+import { pageForTheme } from "./page.ts";
 
 const HOSTNAME = "127.0.0.1";
 const DEFAULT_PORT = 4555;
@@ -45,7 +46,10 @@ async function handle(request: Request, api: VaultApi): Promise<Response> {
     return editorScriptResponse();
   }
   if (url.pathname === "/" || url.pathname === "/index.html") {
-    return new Response(page, {
+    // Same as the desktop entrypoint: the appearance the user stored decides the
+    // document's first paint, rather than arriving over the API a moment later.
+    const config = await loadConfig();
+    return new Response(pageForTheme(config.theme), {
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",

@@ -9,13 +9,17 @@
 import { createVaultApi } from "./bindings.ts";
 import { loadConfig, updateConfig } from "./config.ts";
 import { editorScriptResponse, isEditorScript } from "./editor_asset.ts";
-import { page } from "./page.ts";
+import { pageForTheme } from "./page.ts";
 
-Deno.serve((request) => {
+Deno.serve(async (request) => {
   if (isEditorScript(new URL(request.url).pathname)) {
     return editorScriptResponse();
   }
-  return new Response(page, {
+  // The stored appearance is baked into the document so the window's first
+  // paint is already in the right mode: waiting for the bindings would show the
+  // wrong one, and a dark desktop would get a white flash on every launch.
+  const config = await loadConfig();
+  return new Response(pageForTheme(config.theme), {
     headers: { "content-type": "text/html; charset=utf-8" },
   });
 });
@@ -60,10 +64,10 @@ win.addEventListener("close", async (event) => {
   if (discard) win.close();
 });
 
-const config = await loadConfig();
-if (config.window) {
-  win.setSize(config.window.width, config.window.height);
-  if (config.window.x !== undefined && config.window.y !== undefined) {
-    win.setPosition(config.window.x, config.window.y);
+const startup = await loadConfig();
+if (startup.window) {
+  win.setSize(startup.window.width, startup.window.height);
+  if (startup.window.x !== undefined && startup.window.y !== undefined) {
+    win.setPosition(startup.window.x, startup.window.y);
   }
 }

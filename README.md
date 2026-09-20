@@ -59,7 +59,7 @@ operation (`createVaultApi()`), so the path guards below apply to both.
 | `src/page.ts`          | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                     |
 | `src/dev_server.ts`    | Browser transport: serves the page and the same operations over loopback HTTP.                                                                   |
 | `src/vault.ts`         | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                  |
-| `src/config.ts`        | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width).                     |
+| `src/config.ts`        | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance).         |
 | `src/editor.ts`        | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string. |
 | `src/editor_entry.ts`  | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                    |
 | `src/editor_bundle.js` | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact.                               |
@@ -79,11 +79,24 @@ operation (`createVaultApi()`), so the path guards below apply to both.
 - **Errors** — a handler that throws reaches the webview as
   `{ name, message, stack }`; `src/bindings.ts` translates filesystem failures
   into messages that are safe to show, and the UI surfaces them as a toast.
-- **Theming** — every color in `src/page.ts` is a custom property. Light is the
-  default and dark follows the operating system's setting
-  (`@media (prefers-color-scheme: dark)`), with `color-scheme: light dark` so
-  scrollbars, carets, and native controls match too. There is no in-app theme
-  toggle yet; adding one only means reassigning the token block on `:root`.
+- **Theming** — every color in `src/page.ts` is a custom property, and the two
+  palettes are written once each: light on `:root`, dark on
+  `:root[data-theme="dark"]`. No rule reads `prefers-color-scheme`, so that
+  attribute is the only answer to which mode is on. The page resolves it — from
+  the stored preference, and for `system` from the OS — in a head script that
+  runs before the first paint, and again from a `change` listener while the
+  preference is `system`. Both entrypoints bake the stored preference into
+  `<html>` (`pageForTheme`), so a user who pinned the opposite of their desktop
+  never sees the wrong palette flash on launch. `color-scheme` follows the
+  attribute, so scrollbars, carets, and native controls match too, and the
+  `theme-color` meta reads its value out of the stylesheet rather than repeating
+  it.
+- **Appearance** — `System`, `Light`, and `Dark`, under their own group in the
+  `☰` menu, stored in the app config beside the sidebar width and restored on
+  the next launch. They are rendered as radio items (`menuitemradio` +
+  `aria-checked`
+  - a check gutter) rather than commands, because a choice has to say which one
+    is on instead of firing and closing the menu.
 - **Tabs** — the tab strip holds one buffer per open file. Each tab keeps its
   own text, cursor, scroll position, and undo history, so switching never
   re-reads from disk and never loses an edit; a dot marks unsaved work, × or a
@@ -119,15 +132,15 @@ operation (`createVaultApi()`), so the path guards below apply to both.
   element, because the glyphs for "sidebar" are not in every font the desktop,
   browser and CI targets ship) and the menu keeps the hamburger the toggle used
   to borrow. Both are drawn from one constant and both rely on `aria-label` for
-  their name, since an `aria-hidden` SVG contributes none.- **The top bar holds
-  the open document's actions, not the inventory** — `Save` is the one control
-  that keeps a word, because it is what you reach for mid-sentence and the
-  `Saved` / `Unsaved changes` label beside it is what it acts on. Reloading from
-  disk is the same kind of action but the rarer of the two, so it keeps a glyph:
-  a 28px stroke-2 arrow whose name lives in `aria-label` and `title`, beside the
-  `☰`, where the rarer commands live. `New file` is not a document action at
-  all and has no slot: it is in the menu (`Ctrl+N`), the empty state, and the
-  `+` beside the filter in the sidebar.
+  their name, since an `aria-hidden` SVG contributes none.
+- **The top bar holds the open document's actions, not the inventory** — `Save`
+  is the one control that keeps a word, because it is what you reach for
+  mid-sentence and the `Saved` / `Unsaved changes` label beside it is what it
+  acts on. Reloading from disk is the same kind of action but the rarer of the
+  two, so it keeps a glyph: a 28px stroke-2 arrow whose name lives in
+  `aria-label` and `title`, beside the `☰`, where the rarer commands live.
+  `New file` is not a document action at all and has no slot: it is in the menu
+  (`Ctrl+N`), the empty state, and the `+` beside the filter in the sidebar.
 - **Commands** — one list in `src/page.ts` holds every action (File, Tabs, View,
   Vault) and the `☰` in the top bar renders that list instead of repeating it
   in the markup, so a command cannot exist twice or be named in two places. The

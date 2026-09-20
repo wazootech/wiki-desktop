@@ -1,6 +1,9 @@
 import {
   clampSidebarWidth,
+  coerceTheme,
+  DEFAULT_CONFIG,
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_THEME,
   homeDirectory,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
@@ -55,6 +58,27 @@ Deno.test("clampSidebarWidth keeps a stored width inside the layout's range", ()
     clampSidebarWidth(Number.NaN),
     DEFAULT_SIDEBAR_WIDTH,
     "a missing or corrupt width falls back to the default",
+  );
+});
+
+Deno.test("coerceTheme only ever yields a preference the page can apply", () => {
+  // The stored value outlives the window that wrote it, and this one is baked
+  // into the document before its first paint: an unrecognised value has to mean
+  // "follow the OS" rather than an attribute the stylesheet cannot match.
+  assertEqual(DEFAULT_THEME, "system", "the OS is the default appearance");
+  assertEqual(DEFAULT_CONFIG.theme, "system", "a fresh config follows the OS");
+  for (const preference of ["system", "light", "dark"] as const) {
+    assertEqual(coerceTheme(preference), preference, `${preference} is kept`);
+  }
+  assertEqual(coerceTheme("DARK"), "system", "case matters");
+  assertEqual(coerceTheme("auto"), "system", "an unknown word falls back");
+  assertEqual(coerceTheme(""), "system", "an empty string falls back");
+  assertEqual(coerceTheme(null), "system", "a missing value falls back");
+  assertEqual(coerceTheme(42), "system", "a number falls back");
+  assertEqual(
+    coerceTheme({ theme: "dark" }),
+    "system",
+    "an object falls back rather than being read as its contents",
   );
 });
 

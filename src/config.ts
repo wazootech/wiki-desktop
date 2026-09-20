@@ -14,6 +14,16 @@ export const SIDEBAR_MIN_WIDTH = 180;
 export const SIDEBAR_MAX_WIDTH = 520;
 export const DEFAULT_SIDEBAR_WIDTH = 250;
 
+/**
+ * How the app picks between the light and dark palettes. `system` defers to the
+ * operating system, which is what the desktop runtime and every browser report
+ * through prefers-color-scheme, so it is the default: the app matches the rest
+ * of the desktop until the user says otherwise.
+ */
+export const THEME_PREFERENCES = ["system", "light", "dark"] as const;
+export type ThemePreference = (typeof THEME_PREFERENCES)[number];
+export const DEFAULT_THEME: ThemePreference = "system";
+
 export interface WindowGeometry {
   width: number;
   height: number;
@@ -32,6 +42,8 @@ export interface AppConfig {
   sidebarCollapsed: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
+  /** Light/dark appearance: `system` follows the OS, or the user pinned one. */
+  theme: ThemePreference;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -40,7 +52,20 @@ export const DEFAULT_CONFIG: AppConfig = {
   window: null,
   sidebarCollapsed: false,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+  theme: DEFAULT_THEME,
 };
+
+/**
+ * Coerce a stored or requested appearance into one the page can apply. An
+ * unknown value falls back to `system` rather than to a blank palette, and the
+ * page bakes the result into `<html>` before its first paint.
+ */
+export function coerceTheme(value: unknown): ThemePreference {
+  return typeof value === "string" &&
+      (THEME_PREFERENCES as readonly string[]).includes(value)
+    ? value as ThemePreference
+    : DEFAULT_THEME;
+}
 
 /** Clamp a stored or dragged sidebar width into the range the layout allows. */
 export function clampSidebarWidth(width: number): number {
@@ -134,6 +159,7 @@ function sanitize(value: unknown): AppConfig {
     window: hasSize ? { ...readPosition(geometry), width, height } : null,
     sidebarCollapsed: record.sidebarCollapsed === true,
     sidebarWidth: clampSidebarWidth(Number(record.sidebarWidth)),
+    theme: coerceTheme(record.theme),
   };
 }
 
