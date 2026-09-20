@@ -5,7 +5,8 @@
     "build": "deno desktop --output wiki-desktop --allow-read --allow-write --allow-env src/main.ts",
     "dev:web": "deno run --allow-read --allow-write --allow-env --allow-net src/dev_server.ts",
     "build:editor": "deno bundle --platform browser --minify --quiet src/editor_entry.ts -o src/editor_bundle.js",
-    "check": "deno check --desktop src/main.ts src/dev_server.ts src/editor.ts src/editor_entry.ts",
+    "check": "deno check --desktop src/main.ts src/dev_server.ts src/editor.ts src/editor_entry.ts src/appearance_check.ts",
+    "check:appearance": "deno desktop --hmr --allow-read --allow-write --allow-env --allow-net src/appearance_check.ts",
     "test": "deno test --allow-read --allow-write --allow-env --allow-net"
   },
   "imports": {

@@ -26,6 +26,7 @@ deno task build        # compile the distributable binary (wiki-desktop.exe on W
 deno task build:editor # rebuild the committed editor bundle from src/editor.ts
 deno task check        # type-check (uses --desktop for the Deno.BrowserWindow types)
 deno task test         # unit tests
+deno task check:appearance  # drives both palettes in the real desktop webview
 
 WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env
                        # adds one opt-in test: every page in that vault has to
@@ -51,18 +52,57 @@ operation (`createVaultApi()`), so the path guards below apply to both.
 `deno check` reports
 `Property 'BrowserWindow' does not exist on type 'typeof Deno'`.
 
+### Appearance check, in the real webview
+
+`deno task check:appearance` opens the actual window, serves the app's own
+document six times — every stored preference against a dark and a light desktop
+— and reads the answer back out of the running page. It takes about ten seconds,
+needs a display, and exits non-zero on failure, which is why CI type-checks it
+and does not run it.
+
+It exists because two of the claims the palette rests on cannot be settled
+anywhere else. The unit tests read the page as a string, so they can see that
+the dark palette is declared and that no rule reads `prefers-color-scheme`, but
+not that an engine resolves either. And the browser dev server is a different
+engine from the desktop's — and nothing in it can be told to report a desktop
+appearance at all, which is the one input that decides between the palettes when
+the preference is `system`. So this check serves the page's own
+`pageForTheme(...)` output, injects an emulated desktop ahead of the page's own
+head script, stands in for the bindings so a stored choice can be watched
+reaching `setTheme`, and measures, per case:
+
+- **the launch** — the first mode the document is ever given, and whether
+  `<body>` had been parsed yet when it was. That is as close as a window gets to
+  "nothing could have painted in the wrong mode first", and it is the only check
+  here with a deadline.
+- **the palette** — the four tokens that carry it, compared against what
+  `src/page.ts` declares (read out of the stylesheet, not copied here), plus
+  `color-scheme`, the `theme-color` meta, and the colour the body actually
+  paints.
+- **the desktop flipping** under the page, which may move the mode only while
+  the preference is `system`.
+- **pinning** one through `window.wikiRunCommand`: it must reach `setTheme`
+  through the bindings, check the right item in the menu, and ignore the
+  desktop; and handing it back to `system` must follow the desktop again.
+
+One line per check, so it reads as a table or as a gate. Worth knowing when it
+fails: it is the only place the appearance is exercised by the engine that
+ships, because the desktop window loads its document over the local server — the
+pre-paint path here is the real one, not a model of it.
+
 ## Layout
 
-| File                   | Role                                                                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/main.ts`          | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.         |
-| `src/page.ts`          | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                     |
-| `src/dev_server.ts`    | Browser transport: serves the page and the same operations over loopback HTTP.                                                                   |
-| `src/vault.ts`         | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                  |
-| `src/config.ts`        | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance).         |
-| `src/editor.ts`        | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string. |
-| `src/editor_entry.ts`  | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                    |
-| `src/editor_bundle.js` | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact.                               |
+| File                      | Role                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/main.ts`             | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.         |
+| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                     |
+| `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                   |
+| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                  |
+| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance).         |
+| `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                           |
+| `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string. |
+| `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                    |
+| `src/editor_bundle.js`    | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact.                               |
 
 ## How it works
 
@@ -96,7 +136,9 @@ operation (`createVaultApi()`), so the path guards below apply to both.
   the next launch. They are rendered as radio items (`menuitemradio` +
   `aria-checked`
   - a check gutter) rather than commands, because a choice has to say which one
-    is on instead of firing and closing the menu.
+    is on instead of firing and closing the menu. What the page does with the
+    choice before the first paint is measured rather than assumed — see
+    `deno task check:appearance` below.
 - **Tabs** — the tab strip holds one buffer per open file. Each tab keeps its
   own text, cursor, scroll position, and undo history, so switching never
   re-reads from disk and never loses an edit; a dot marks unsaved work, × or a
