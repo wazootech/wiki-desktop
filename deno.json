@@ -1,8 +1,11 @@
 {
   "$schema": "https://docs.deno.com/runtime/desktop/",
   "tasks": {
-    "dev": "deno desktop --hmr src/main.ts",
-    "build": "deno desktop --output wiki-desktop src/main.ts"
+    "dev": "deno desktop --hmr --allow-read --allow-write --allow-env src/main.ts",
+    "build": "deno desktop --output wiki-desktop --allow-read --allow-write --allow-env src/main.ts",
+    "dev:web": "deno run --allow-read --allow-write --allow-env --allow-net src/dev_server.ts",
+    "check": "deno check --desktop src/main.ts src/dev_server.ts",
+    "test": "deno test --allow-read --allow-write --allow-env --allow-net"
   },
   "desktop": {
     "app": {

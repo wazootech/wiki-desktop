@@ -30,7 +30,10 @@ jobs:
         run: deno lint
 
       - name: type-check
-        run: deno check src/main.ts
+        run: deno task check
+
+      - name: test
+        run: deno task test
 
       - name: build
         run: deno task build
