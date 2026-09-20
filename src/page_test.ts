@@ -36,8 +36,8 @@ Deno.test("every element the script looks up exists in the markup", () => {
 });
 
 Deno.test("the tab strip's classes are all styled", () => {
-  // A class the renderer applies but the stylesheet never matches renders as
-  // an unstyled element, which is exactly how the tab strip would break.
+  // A class a renderer applies but the stylesheet never matches renders as an
+  // unstyled element, which is exactly how the tab strip would break.
   const classes = [
     "tab",
     "tab-state",
@@ -47,6 +47,13 @@ Deno.test("the tab strip's classes are all styled", () => {
     "is-dirty",
     "file-button",
     "is-open",
+    "menu-popup",
+    "menu-button",
+    "menu-group",
+    "menu-group-label",
+    "menu-item",
+    "menu-item-label",
+    "menu-keys",
   ];
   const unstyled = classes.filter((name) =>
     !page.includes(`.${name}`) ||
@@ -151,6 +158,151 @@ Deno.test("collapsing never strands the only way to reopen", () => {
     ) ?? [])
       .length === 2,
     "there is one toggle per layout state",
+  );
+});
+
+Deno.test("no two icon-only buttons draw the same glyph", () => {
+  // These buttons are 28px squares in one band of chrome, so a shared glyph
+  // reads as one control drawn twice — which is what the sidebar toggle and the
+  // app menu were, both ☰. The toggle draws a panel, the bar's reload is an
+  // arrow, the file list's create button is a +, and the menu keeps ☰.
+  const iconButtons = [
+    ...page.matchAll(/<button ([^>]*)>([\s\S]*?)<\/button>/g),
+  ]
+    .map(([, attrs, inner]) => ({ attrs, inner: inner.trim() }))
+    .filter(({ attrs }) => /\bicon-button\b/.test(attrs));
+
+  assert(iconButtons.length === 5, "the app has five icon-only buttons");
+  const by = (pattern: RegExp) =>
+    iconButtons.filter(({ attrs }) => pattern.test(attrs));
+  const toggles = by(/\bsidebar-toggle\b/);
+  const menus = by(/id="menuButton"/);
+  const creates = by(/id="newFileButton"/);
+  const reloads = by(/id="reloadButton"/);
+  assert(
+    toggles.length === 2 && menus.length === 1 && creates.length === 1 &&
+      reloads.length === 1,
+    "one app menu, one create button, one reload, and one toggle per state",
+  );
+  // The two toggles are never on screen together, so only a shared source keeps
+  // them identical when one is edited.
+  assert(
+    toggles[0].inner === toggles[1].inner,
+    "the two toggles draw different icons",
+  );
+  assert(toggles[0].inner.startsWith("<svg"), "the toggle draws a panel");
+  const glyphs = [
+    toggles[0].inner,
+    menus[0].inner,
+    creates[0].inner,
+    reloads[0].inner,
+  ];
+  assert(
+    new Set(glyphs).size === glyphs.length,
+    "these icon-only buttons draw the same thing, so they read as one control",
+  );
+
+  // The glyph was the button's only text, and an aria-hidden SVG contributes
+  // nothing to a name, so aria-label is now the whole of it.
+  const unnamed = iconButtons.filter(({ attrs }) =>
+    !/aria-label="[^"]+"/.test(attrs)
+  );
+  assert(
+    unnamed.length === 0,
+    `these icon-only buttons have no accessible name: ${
+      unnamed.map(({ attrs }) => attrs).join(", ")
+    }`,
+  );
+});
+
+Deno.test("the top bar labels one command and icons another", () => {
+  // The rule the bar follows: a control earns a permanent slot by being used
+  // while typing, and it earns a *word* only if it is the one you reach for
+  // mid-sentence. Save is that one. Reload is the same kind of action but the
+  // rarer of the two, so it keeps a glyph; New is not a document action at all
+  // and lives in the menu, Ctrl+N, and the + beside the file list.
+  const style = page.slice(0, page.indexOf("</style>"));
+  const header = page.slice(
+    page.indexOf('<header class="tabbar">'),
+    page.indexOf("</header>"),
+  );
+  const buttons = [...header.matchAll(/<button ([^>]*)>/g)].map(([, attrs]) =>
+    attrs
+  );
+
+  assert(!header.includes("newFileButton"), "the bar carries New again");
+  assert(header.includes('id="saveButton"'), "the bar keeps Save");
+  assert(
+    /class="button button-primary" id="saveButton"/.test(header),
+    "Save is still the primary button",
+  );
+  // A labelled button is a claim about frequency, so there is exactly one.
+  const labelled = buttons.filter((attrs) =>
+    !/icon-button|sidebar-toggle|menu-button/.test(attrs)
+  );
+  assert(
+    labelled.length === 1,
+    `the top bar shows ${labelled.length} labelled commands`,
+  );
+
+  // Reload kept its slot as a glyph: a 28px button whose whole content is the
+  // arrow, with the word surviving only where it cannot be seen — the label and
+  // the tooltip. A string of text back in that button fails here.
+  // Slice `header`, not `page`: the index is measured in this string, and using
+  // it on `page` lands somewhere in the stylesheet.
+  const reload = header.slice(
+    header.indexOf(
+      '<button class="button button-secondary icon-button" id="reloadButton"',
+    ),
+  );
+  const [reloadAttrs, reloadInner] = reload.split(">");
+  assert(
+    reloadInner !== undefined && reloadInner.startsWith("<svg"),
+    `the reload button is not a glyph: ${reloadInner?.slice(0, 60)}`,
+  );
+  // The word went into the tooltip and the accessible name, which is the only
+  // way a button whose entire content is an aria-hidden arrow has a name at all.
+  assert(
+    reloadAttrs.includes('title="Reload from disk"') &&
+      reloadAttrs.includes('aria-label="Reload from disk"') &&
+      reloadInner.includes('aria-hidden="true"'),
+    `the reload button is not named for a screen reader: ${reloadAttrs}`,
+  );
+  assert(
+    !header.includes(">Reload"),
+    "the word Reload is back in the bar as text",
+  );
+  // Being a glyph is only legible because it is also a name: the SVG is
+  // aria-hidden, so the arrow alone would be an unnamed button.
+  assert(
+    page.includes("reloadButton.disabled = tab === null;"),
+    "the reload button follows the active tab like Save",
+  );
+
+  // Removing them was only safe because both stay reachable: the command list
+  // still owns them, and it is what the menu and the keyboard render.
+  assert(
+    page.includes("id: 'new'") && page.includes("id: 'reload'"),
+    "a retired command left the command list",
+  );
+  // The create affordance moved to the file list, enablement and all.
+  assert(
+    /id="newFileButton"[^>]*disabled/.test(page),
+    "the file list's create button ships disabled while no vault is open",
+  );
+  assert(
+    page.includes("newFileButton.disabled = !open;"),
+    "the vault decides when the create button opens",
+  );
+  // It only fits beside the filter because the input yields room: fixed at
+  // width:100% the button is pushed out of the row.
+  assert(
+    /\.file-tools\s*\{[^}]*display:\s*flex/.test(style),
+    "the file list's toolbar is a flex row",
+  );
+  assert(
+    /\.filter\s*\{[^}]*flex:\s*1/.test(style),
+    "the filter shrinks to make room for the create button",
   );
 });
 
@@ -322,6 +474,73 @@ Deno.test("the collapsed layout keeps the workspace in a real track", () => {
   assert(
     /\.app\.is-collapsed\s*\{[^}]*grid-template-columns:\s*0/.test(style),
     "collapsing narrows the first track to nothing",
+  );
+});
+
+Deno.test("the command menu is built from the command list", () => {
+  // The popup ships empty, so the markup cannot drift from the list that
+  // drives the enablement, and the list is the only place a command is named.
+  assert(
+    /<div class="menu-popup" id="commandMenu"[^>]*hidden><\/div>/.test(page),
+    "the menu popup ships empty and hidden",
+  );
+  assert(
+    page.includes("commandMenu.lastElementChild.appendChild(item)"),
+    "the items come from the render walk, not a second copy in the markup",
+  );
+  // Both entry points have to land on the same guard: a menu that runs a
+  // disabled command, or an external caller that cannot tell a disabled
+  // command from an unknown one, fails here rather than on a click.
+  assert(
+    page.includes("if (!command || !command.canRun()) return false;"),
+    "running a command re-checks whether it can run",
+  );
+  assert(
+    page.includes("window.wikiRunCommand = (id) => runCommand(String(id));"),
+    "the same path is reachable from outside the page",
+  );
+  // Escape belongs to the topmost surface: the menu closes before the vault
+  // dialog and the sidebar drawer get their turn.
+  assert(
+    /if \(event\.key === 'Escape' && menuIsOpen\(\)\)/.test(page),
+    "the menu takes Escape before the surfaces under it",
+  );
+  const documentHandler = page.indexOf("document.addEventListener('keydown'");
+  assert(
+    page.indexOf("event.key === 'Escape' && menuIsOpen()") <
+      page.indexOf(
+        "event.key === 'Escape' && !overlay.hidden",
+        documentHandler,
+      ),
+    "that check comes first in the handler",
+  );
+});
+
+Deno.test("no menu entry advertises a shortcut the page does not handle", () => {
+  // The menu renders the accelerator next to each label, so a label without a
+  // matching branch in the keydown handler is a promise the app breaks the
+  // first time a user presses it. (Deno desktop's *native* menu has this bug
+  // today: it renders Ctrl+1 and fires nothing.)
+  const list = page.slice(
+    page.indexOf("const commands = ["),
+    page.indexOf("let menuIndex"),
+  );
+  const labels = [...list.matchAll(/keys: '([^']+)'/g)]
+    .map((match) => match[1])
+    .filter((label) => label.length > 0);
+  assert(labels.length >= 4, "the menu offers shortcuts at all");
+
+  const unhandled = labels.filter((label) => {
+    const letter = /^Ctrl\+([A-Z])$/.exec(label);
+    if (letter) return !page.includes(`key === '${letter[1].toLowerCase()}'`);
+    if (label === "Ctrl+Tab" || label === "Ctrl+Shift+Tab") {
+      return !page.includes("event.key === 'Tab'");
+    }
+    return true;
+  });
+  assert(
+    unhandled.length === 0,
+    `these labels have no keydown branch: ${unhandled.join(", ")}`,
   );
 });
 

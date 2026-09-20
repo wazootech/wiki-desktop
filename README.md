@@ -107,12 +107,35 @@ operation (`createVaultApi()`), so the path guards below apply to both.
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a
   whole-file rewrite. A BOM is preserved for the same reason.
-- **Sidebar** — the ☰ at the top-left collapses the column on wide windows (the
-  editor reflows into the space) and slides it in as a drawer below 640px. It is
-  one action with two affordances: the brand row's while the sidebar is showing
-  and the tab bar's once it is collapsed, so the control stays in the window's
-  top-left corner and never strands itself. The collapsed state is stored in the
-  app config, so it survives a restart.
+- **Sidebar** — the panel icon at the top-left collapses the column on wide
+  windows (the editor reflows into the space) and slides it in as a drawer below
+  640px. It is one action with two affordances: the brand row's while the
+  sidebar is showing and the tab bar's once it is collapsed, so the control
+  stays in the window's top-left corner and never strands itself. The collapsed
+  state is stored in the app config, so it survives a restart.
+- **Two icon-only buttons, two icons** — the sidebar toggle and the app menu are
+  both 28px squares in the same band of chrome, so they cannot share a glyph:
+  the toggle draws a panel (an inline SVG in `src/page.ts`, sized on the
+  element, because the glyphs for "sidebar" are not in every font the desktop,
+  browser and CI targets ship) and the menu keeps the hamburger the toggle used
+  to borrow. Both are drawn from one constant and both rely on `aria-label` for
+  their name, since an `aria-hidden` SVG contributes none.- **The top bar holds
+  the open document's actions, not the inventory** — `Save` is the one control
+  that keeps a word, because it is what you reach for mid-sentence and the
+  `Saved` / `Unsaved changes` label beside it is what it acts on. Reloading from
+  disk is the same kind of action but the rarer of the two, so it keeps a glyph:
+  a 28px stroke-2 arrow whose name lives in `aria-label` and `title`, beside the
+  `☰`, where the rarer commands live. `New file` is not a document action at
+  all and has no slot: it is in the menu (`Ctrl+N`), the empty state, and the
+  `+` beside the filter in the sidebar.
+- **Commands** — one list in `src/page.ts` holds every action (File, Tabs, View,
+  Vault) and the `☰` in the top bar renders that list instead of repeating it
+  in the markup, so a command cannot exist twice or be named in two places. The
+  buttons and the keyboard call the same functions, and
+  `window.wikiRunCommand(id)` runs one by id and reports whether it ran — which
+  is how the browser preview and the tests drive the same path, and how
+  `src/main.ts` will reach in if the native menu is ever projected. An entry's
+  accelerator label is only ever a shortcut the page itself handles.
 - **Sidebar width** — the column's right edge is a drag handle (`col-resize`),
   clamped to 180–520px and to the width that still leaves the editor room on a
   small window. The handle is a separator, so it is tabbable and resizable from
@@ -142,8 +165,15 @@ operation (`createVaultApi()`), so the path guards below apply to both.
 - `Ctrl+W`, `Ctrl+Tab`, and `Ctrl+B` work in the desktop window, but a browser
   keeps `Ctrl+W` and `Ctrl+Tab` for its own tabs, so in browser dev mode close
   and switch with the mouse and use `Ctrl+B` for the sidebar.
+- Below 640px the sidebar is a drawer whose scrim covers the window, so the tab
+  bar's own buttons — including the `☰` menu — are clickable once the drawer is
+  dismissed (clicking anywhere outside does that).
+- The native application menu is not projected; commands are the page's `☰`
+  menu only, and accelerators work because the page handles the keys.
 - Files larger than 2 MiB and hidden files/directories are skipped.
-- The vault is not watched, so external edits need the **Reload** button.
+- The vault is not watched, so external edits need the refresh button on the tab
+  bar (or **Reload from disk** in the `☰` menu); it asks before discarding a
+  buffer with unsaved changes.
 
 ## Hybrid desktop and web
 
@@ -158,6 +188,15 @@ What that already means here:
 - One set of path guards, so HTTP access is not a way around them.
 - Both transports guard unsaved work: the desktop window intercepts its own
   close event, and the page adds a `beforeunload` handler for the browser.
+- Commands live in the page for the same reason. `win.setApplicationMenu` is a
+  Deno-side call the browser cannot see, so a native menu would be unreachable
+  from the preview and unassertable in CI, while the page's menu is clickable in
+  both. Measured on Deno 2.9.6 / Windows with the default backend: the window
+  really owns a native menu and invoking an item does fire `menuclick`, but
+  accelerators are inert — the item renders `CmdOrCtrl+1` and pressing it
+  reaches the webview instead — and UI Automation exposes no `MenuBar` at all,
+  so the only way to drive one is raw Win32. Projecting it is therefore a
+  deliberate trade for a later change, not a missing line of code.
 
 What is still desktop-shaped and needs to change before a hosted web deployment
 is real: vault selection exposes server filesystem paths (`browse`/`openVault`),

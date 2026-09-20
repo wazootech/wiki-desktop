@@ -5,13 +5,47 @@ import {
 } from "./config.ts";
 
 /**
+ * The frame every icon-only button draws in `page`: a 15px, stroke-2 glyph that
+ * inherits the button's colour.
+ *
+ * They are inline SVG rather than characters because the glyphs these buttons
+ * need (a panel, a refresh arrow) are not in every font the desktop, browser and
+ * CI targets ship, where a missing character renders as a box. Sizing is on the
+ * element, not in the page's stylesheet: a bare viewBox with no width renders at
+ * 300x150, and these icons must stay independent of the button's `font-size`.
+ */
+function chromeIcon(paths: string): string {
+  return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+    paths + "</svg>";
+}
+
+/**
+ * The sidebar toggle's icon, shared by the two buttons that draw it: one action,
+ * two affordances (see `sidebarToggles` below). Written twice it could drift,
+ * and the two buttons are never on screen together to reveal the difference.
+ */
+const SIDEBAR_TOGGLE_ICON = chromeIcon(
+  '<rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" />',
+);
+
+/**
+ * The bar's one tool: reload is the only command that keeps a glyph instead of a
+ * word, because it is a document action like Save but the rarer of the two — and
+ * the arrow is unambiguous where the word in a row of labels was not.
+ */
+const RELOAD_ICON = chromeIcon(
+  '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />',
+);
+
+/**
  * The webview document. It is a plain string so the app stays a single
  * self-contained entrypoint: no bundler, and nothing to embed for
  * `deno desktop --output`. The Deno-side API it talks to is `bindings.*`,
  * typed by `WikiBindings` in src/bindings.ts.
  *
  * The sidebar's width bounds are interpolated from src/config.ts rather than
- * written here twice, so the drag handle and the stored setting agree.
+ * written here twice, so the drag handle and the stored setting agree, and its
+ * toggle's icon comes from the constant above for the same reason.
  */
 export const page = `<!DOCTYPE html>
 <html lang="en">
@@ -178,6 +212,9 @@ export const page = `<!DOCTYPE html>
     .button-primary:hover:not(:disabled) { background: var(--brand-dark); }
     .button-block { width: 100%; }
     .icon-button { padding: 0; width: 28px; flex-shrink: 0; font-size: 13px; }
+    /* The toggle's icon is an inline SVG sized on the element itself, so the
+       row's two icons are sized independently of the font. */
+    .icon-button svg { display: block; }
 
     /* Sidebar */
 
@@ -264,9 +301,16 @@ export const page = `<!DOCTYPE html>
     .vault-actions { display: flex; gap: 6px; }
     .vault-actions .button { flex: 1; min-height: 25px; font-size: 11.5px; }
 
-    .filter-row { padding: 8px 10px 5px; }
+    /*
+     * The file list's own toolbar: the filter, then the button that creates a
+     * file. Creating lives here rather than in the top bar, which holds the open
+     * document's actions, and rather than in the vault's Open/Close row, where a
+     * third labeled button collapses this sidebar's content box to 200px and
+     * measures 63px per button — every label wraps onto two lines.
+     */
+    .file-tools { display: flex; align-items: center; gap: 6px; padding: 8px 10px 5px; }
     .filter {
-      width: 100%; min-height: 28px; padding: 0 9px;
+      flex: 1; min-width: 0; min-height: 28px; padding: 0 9px;
       border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel-muted);
       font-size: 12px;
     }
@@ -343,6 +387,33 @@ export const page = `<!DOCTYPE html>
     .save-state.is-dirty::before { background: var(--warning); }
     .save-state.is-saved { color: var(--success); }
     .save-state.is-saved::before { background: var(--success); }
+
+    /*
+     * The command menu. It is page-rendered on purpose: a native application
+     * menu lives in the Deno process, where the browser preview cannot click it
+     * and a test cannot assert it. This surface exists in both targets, and
+     * window.wikiRunCommand(id) drives the same code path from outside.
+     */
+    .file-actions { position: relative; }
+    .menu-popup {
+      position: absolute; top: calc(100% + 6px); right: 0; z-index: 5;
+      min-width: 236px; padding: 5px; border: 1px solid var(--line);
+      border-radius: 10px; background: var(--panel); box-shadow: var(--shadow);
+    }
+    .menu-popup[hidden] { display: none; }
+    .menu-button[aria-expanded="true"] { border-color: var(--brand-marker); color: var(--brand-text); background: var(--brand-soft); }
+    .menu-group + .menu-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+    .menu-group-label { padding: 3px 9px 2px; color: var(--muted); font-size: 9.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+    .menu-item {
+      display: flex; align-items: center; gap: 12px; width: 100%; padding: 5px 9px;
+      border: 0; border-radius: 6px; color: var(--text-body); background: transparent;
+      font-size: 12.5px; text-align: left;
+    }
+    .menu-item:hover:not([aria-disabled="true"]) { background: var(--surface-hover); }
+    .menu-item:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: -1px; }
+    .menu-item[aria-disabled="true"] { color: var(--text-faint); cursor: not-allowed; }
+    .menu-item-label { flex: 1; }
+    .menu-keys { flex-shrink: 0; color: var(--text-faint); font-size: 10.5px; }
 
     .editor-region { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--panel-muted); }
     .placeholder { display: grid; place-items: center; height: 100%; padding: 24px; text-align: center; }
@@ -463,7 +534,7 @@ export const page = `<!DOCTYPE html>
   <main class="app" id="app">
     <aside class="sidebar">
       <div class="brand">
-        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">☰</button>
+        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">${SIDEBAR_TOGGLE_ICON}</button>
         <div class="brand-mark" aria-hidden="true">
           <svg viewBox="0.0 0.0 520.0 520.0" fill="none" xmlns="http://www.w3.org/2000/svg">
             <clipPath id="wazooMarkClip">
@@ -498,9 +569,10 @@ export const page = `<!DOCTYPE html>
         </div>
       </section>
 
-      <div class="filter-row">
+      <div class="file-tools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>+</button>
       </div>
 
       <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
@@ -516,13 +588,25 @@ export const page = `<!DOCTYPE html>
 
     <section class="workspace">
       <header class="tabbar">
-        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Show vault files (Ctrl+B)" aria-label="Show vault files" aria-expanded="false">☰</button>
+        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Show vault files (Ctrl+B)" aria-label="Show vault files" aria-expanded="false">${SIDEBAR_TOGGLE_ICON}</button>
         <div class="tabs" id="tabs" role="tablist" aria-label="Open files"></div>
         <div class="file-actions">
+          <!--
+            The bar carries the open document's actions, not the inventory of
+            every command. Save — the one action a wiki editor reaches for while
+            typing — is the only one that keeps a word; reloading from disk is
+            the same kind of action but the rarer one, so it keeps a glyph and
+            sits next to the menu, which is where the rarer commands live. New
+            stays in the menu (Ctrl+N) and the + beside the file list.
+
+            Both are also reachable from the menu; the word "Reload" exists
+            nowhere in the bar.
+          -->
           <span class="save-state" id="saveState">Ready</span>
-          <button class="button button-secondary" id="newFileButton" type="button" disabled>New</button>
-          <button class="button button-secondary" id="reloadButton" type="button" disabled>Reload</button>
           <button class="button button-primary" id="saveButton" type="button" disabled>Save</button>
+          <button class="button button-secondary icon-button" id="reloadButton" type="button" title="Reload from disk" aria-label="Reload from disk" disabled>${RELOAD_ICON}</button>
+          <button class="button button-secondary icon-button menu-button" id="menuButton" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu" aria-expanded="false" aria-controls="commandMenu">☰</button>
+          <div class="menu-popup" id="commandMenu" role="menu" aria-labelledby="menuButton" hidden></div>
         </div>
       </header>
 
@@ -637,6 +721,8 @@ export const page = `<!DOCTYPE html>
       const saveState = el('saveState');
       const saveButton = el('saveButton');
       const reloadButton = el('reloadButton');
+      const menuButton = el('menuButton');
+      const commandMenu = el('commandMenu');
       const newFileButton = el('newFileButton');
       const openVaultButton = el('openVaultButton');
       const closeVaultButton = el('closeVaultButton');
@@ -1052,6 +1138,7 @@ export const page = `<!DOCTYPE html>
         saveState.classList.toggle('is-saved', tab !== null && !dirty);
         saveButton.disabled = tab === null;
         reloadButton.disabled = tab === null;
+        refreshMenu();
       }
 
       function renderVault() {
@@ -1063,6 +1150,7 @@ export const page = `<!DOCTYPE html>
         closeVaultButton.hidden = !open;
         newFileButton.disabled = !open;
         placeholderNoVault.hidden = open;
+        refreshMenu();
       }
 
       function renderFiles() {
@@ -1408,11 +1496,175 @@ export const page = `<!DOCTYPE html>
         window.addEventListener('resize', applySidebarWidth);
       }
 
+      /*
+       * One command list, two ways in. Every entry wraps the same function the
+       * buttons and the keyboard already call, so no command has a second
+       * implementation, and the menu below is rendered from this list instead
+       * of being written out again in the markup.
+       *
+       * window.wikiRunCommand(id) drives the same path from outside the page,
+       * the way src/main.ts already reaches in for unsaved changes — which is
+       * what makes every command driveable in the browser preview, where no
+       * native menu exists to click. Returns whether it ran, so a caller can
+       * tell a disabled command from an unknown one.
+       *
+       * A keys label is only ever a shortcut the page's own keydown handler
+       * implements: advertising one nobody handles is a lie the user discovers
+       * by pressing it.
+       */
+      const commands = [
+        { id: 'new', group: 'File', label: 'New file', keys: 'Ctrl+N', canRun: () => vault.root !== null, run: createFile },
+        { id: 'open-vault', group: 'File', label: 'Open vault…', keys: 'Ctrl+O', canRun: () => true, run: openBrowser },
+        { id: 'reload', group: 'File', label: 'Reload from disk', keys: '', canRun: () => activeTab() !== null, run: reloadFile },
+        { id: 'save', group: 'File', label: 'Save', keys: 'Ctrl+S', canRun: () => activeTab() !== null, run: saveFile },
+        { id: 'close-tab', group: 'Tabs', label: 'Close tab', keys: 'Ctrl+W', canRun: () => activeTab() !== null, run: () => closeTab(activeIndex) },
+        { id: 'next-tab', group: 'Tabs', label: 'Next tab', keys: 'Ctrl+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(1) },
+        { id: 'previous-tab', group: 'Tabs', label: 'Previous tab', keys: 'Ctrl+Shift+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(-1) },
+        { id: 'toggle-sidebar', group: 'View', label: 'Toggle vault files', keys: 'Ctrl+B', canRun: () => true, run: toggleSidebar },
+        { id: 'close-vault', group: 'Vault', label: 'Close vault', keys: '', canRun: () => vault.root !== null, run: closeVault },
+      ];
+
+      let menuIndex = -1;
+
+      function menuItems() {
+        return Array.from(commandMenu.querySelectorAll('.menu-item'));
+      }
+
+      function enabledMenuItems() {
+        return menuItems().filter((item) => item.getAttribute('aria-disabled') !== 'true');
+      }
+
+      function menuIsOpen() {
+        return !commandMenu.hidden;
+      }
+
+      function focusExisting(item) {
+        menuIndex = menuItems().indexOf(item);
+        item.focus();
+      }
+
+      function focusCommand(id) {
+        const item = enabledMenuItems().find((entry) => entry.dataset.command === id);
+        if (item) focusExisting(item);
+      }
+
+      /* Re-rendered rather than patched: the list is small, and a stale
+         aria-disabled is the one thing that would make an item lie. */
+      function renderMenu() {
+        const focused = menuIndex >= 0 ? menuItems()[menuIndex]?.dataset.command : null;
+        menuIndex = -1;
+        commandMenu.textContent = '';
+        let group = null;
+        for (const command of commands) {
+          if (command.group !== group) {
+            group = command.group;
+            const section = document.createElement('div');
+            section.className = 'menu-group';
+            section.setAttribute('role', 'group');
+            section.setAttribute('aria-label', group);
+            const label = document.createElement('div');
+            label.className = 'menu-group-label';
+            label.textContent = group;
+            section.appendChild(label);
+            commandMenu.appendChild(section);
+          }
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'menu-item';
+          item.setAttribute('role', 'menuitem');
+          item.setAttribute('aria-disabled', command.canRun() ? 'false' : 'true');
+          item.dataset.command = command.id;
+          const name = document.createElement('span');
+          name.className = 'menu-item-label';
+          name.textContent = command.label;
+          item.appendChild(name);
+          if (command.keys) {
+            const keys = document.createElement('span');
+            keys.className = 'menu-keys';
+            keys.textContent = command.keys;
+            item.appendChild(keys);
+          }
+          item.addEventListener('click', () => runCommand(command.id));
+          commandMenu.lastElementChild.appendChild(item);
+        }
+        if (focused !== null && focused !== undefined) focusCommand(focused);
+      }
+
+      function stepMenuItem(step) {
+        const items = enabledMenuItems();
+        if (items.length === 0) return;
+        const current = items.indexOf(document.activeElement);
+        const next = current === -1
+          ? (step > 0 ? 0 : items.length - 1)
+          : (current + step + items.length) % items.length;
+        focusExisting(items[next]);
+      }
+
+      function edgeMenuItem(edge) {
+        const items = enabledMenuItems();
+        if (items.length === 0) return;
+        focusExisting(edge === 'last' ? items[items.length - 1] : items[0]);
+      }
+
+      function openMenu() {
+        renderMenu();
+        commandMenu.hidden = false;
+        menuButton.setAttribute('aria-expanded', 'true');
+        edgeMenuItem('first');
+      }
+
+      function closeMenu(refocus) {
+        if (!menuIsOpen()) return;
+        commandMenu.hidden = true;
+        menuIndex = -1;
+        menuButton.setAttribute('aria-expanded', 'false');
+        if (refocus !== false) menuButton.focus();
+      }
+
+      function toggleMenu() {
+        if (menuIsOpen()) closeMenu();
+        else openMenu();
+      }
+
+      /** Only while open: a closed menu is not on screen to be stale. */
+      function refreshMenu() {
+        if (menuIsOpen()) renderMenu();
+      }
+
+      function runCommand(id) {
+        const command = commands.find((entry) => entry.id === id);
+        if (!command || !command.canRun()) return false;
+        closeMenu(false);
+        command.run();
+        return true;
+      }
+
+      window.wikiRunCommand = (id) => runCommand(String(id));
+
+      function wireMenu() {
+        menuButton.addEventListener('click', toggleMenu);
+        commandMenu.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowDown') { event.preventDefault(); stepMenuItem(1); }
+          else if (event.key === 'ArrowUp') { event.preventDefault(); stepMenuItem(-1); }
+          else if (event.key === 'Home') { event.preventDefault(); edgeMenuItem('first'); }
+          else if (event.key === 'End') { event.preventDefault(); edgeMenuItem('last'); }
+          else if (event.key === 'Tab') { closeMenu(false); }
+        });
+        // A click anywhere else dismisses it, the way a menu bar behaves.
+        document.addEventListener('click', (event) => {
+          if (!menuIsOpen()) return;
+          if (commandMenu.contains(event.target)) return;
+          if (menuButton.contains(event.target)) return;
+          closeMenu(false);
+        });
+      }
+
       function wire() {
         for (const toggle of sidebarToggles) {
           toggle.addEventListener('click', toggleSidebar);
         }
         wireResizer();
+        wireMenu();
         sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
         openVaultButton.addEventListener('click', openBrowser);
         emptyOpenVaultButton.addEventListener('click', openBrowser);
@@ -1433,8 +1685,8 @@ export const page = `<!DOCTYPE html>
         });
         newFileButton.addEventListener('click', createFile);
         emptyNewFileButton.addEventListener('click', createFile);
-        reloadButton.addEventListener('click', reloadFile);
         saveButton.addEventListener('click', saveFile);
+        reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
@@ -1446,6 +1698,13 @@ export const page = `<!DOCTYPE html>
           event.returnValue = '';
         });
         document.addEventListener('keydown', (event) => {
+          // The menu is on top of everything, so it gets first refusal on
+          // Escape — otherwise closing it would also close the sidebar drawer.
+          if (event.key === 'Escape' && menuIsOpen()) {
+            event.preventDefault();
+            closeMenu();
+            return;
+          }
           if (event.key === 'Escape' && !overlay.hidden) {
             event.preventDefault();
             closeBrowser();
