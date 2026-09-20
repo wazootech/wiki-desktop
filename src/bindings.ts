@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 
 import {
+  clampSidebarWidth,
   homeDirectory,
   loadConfig,
   updateConfig,
@@ -27,6 +28,8 @@ export interface VaultState {
   recents: string[];
   /** Whether the file sidebar was collapsed when the app last ran. */
   sidebarCollapsed: boolean;
+  /** Width of the file sidebar column in CSS pixels. */
+  sidebarWidth: number;
 }
 
 /**
@@ -48,6 +51,8 @@ export interface WikiBindings {
   closeVault(): Promise<VaultState>;
   /** Remember whether the sidebar is collapsed, so it survives a restart. */
   setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
+  /** Remember the sidebar column's width, so it survives a restart. */
+  setSidebarWidth(width: number): Promise<VaultState>;
 }
 
 /** The same operations as plain functions, ready for any transport. */
@@ -86,6 +91,12 @@ export function createVaultApi(): VaultApi {
     }),
     setSidebarCollapsed: guard(async (collapsed: boolean) => {
       await updateConfig({ sidebarCollapsed: collapsed === true });
+      return await readState();
+    }),
+    setSidebarWidth: guard(async (width: number) => {
+      // Clamped here as well as in the webview: this is a trust boundary, and
+      // a stored width outside the bounds would distort every future launch.
+      await updateConfig({ sidebarWidth: clampSidebarWidth(width) });
       return await readState();
     }),
   };
@@ -143,6 +154,7 @@ async function readState(): Promise<VaultState> {
   const ui = {
     recents: config.recentVaults,
     sidebarCollapsed: config.sidebarCollapsed,
+    sidebarWidth: config.sidebarWidth,
   };
   if (!config.vaultRoot) {
     return { root: null, name: null, ...ui };

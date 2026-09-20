@@ -5,6 +5,15 @@ const CONFIG_DIR_NAME = ".wazoo-wiki";
 const CONFIG_FILE_NAME = "config.json";
 const MAX_RECENT_VAULTS = 8;
 
+/**
+ * Sidebar column bounds in CSS pixels. The webview interpolates these into the
+ * page, so the drag handle, the stored value, and the layout token cannot
+ * disagree about what is allowed.
+ */
+export const SIDEBAR_MIN_WIDTH = 180;
+export const SIDEBAR_MAX_WIDTH = 520;
+export const DEFAULT_SIDEBAR_WIDTH = 250;
+
 export interface WindowGeometry {
   width: number;
   height: number;
@@ -21,6 +30,8 @@ export interface AppConfig {
   window: WindowGeometry | null;
   /** Whether the file sidebar was collapsed, restored on the next launch. */
   sidebarCollapsed: boolean;
+  /** Width of the file sidebar column in CSS pixels. */
+  sidebarWidth: number;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -28,7 +39,17 @@ export const DEFAULT_CONFIG: AppConfig = {
   recentVaults: [],
   window: null,
   sidebarCollapsed: false,
+  sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
 };
+
+/** Clamp a stored or dragged sidebar width into the range the layout allows. */
+export function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return DEFAULT_SIDEBAR_WIDTH;
+  return Math.min(
+    SIDEBAR_MAX_WIDTH,
+    Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)),
+  );
+}
 
 /**
  * The user's home directory, or the working directory when it is unknown.
@@ -112,6 +133,7 @@ function sanitize(value: unknown): AppConfig {
     recentVaults,
     window: hasSize ? { ...readPosition(geometry), width, height } : null,
     sidebarCollapsed: record.sidebarCollapsed === true,
+    sidebarWidth: clampSidebarWidth(Number(record.sidebarWidth)),
   };
 }
 

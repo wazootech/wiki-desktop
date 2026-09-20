@@ -54,7 +54,7 @@ operation (`createVaultApi()`), so the path guards below apply to both.
 | `src/page.ts`       | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                             |
 | `src/dev_server.ts` | Browser transport: serves the page and the same operations over loopback HTTP.                                                           |
 | `src/vault.ts`      | Vault path validation and file operations. Every path from the webview passes through here.                                              |
-| `src/config.ts`     | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar).                                       |
+| `src/config.ts`     | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width).             |
 
 ## How it works
 
@@ -87,6 +87,13 @@ operation (`createVaultApi()`), so the path guards below apply to both.
   and the tab bar's once it is collapsed, so the control stays in the window's
   top-left corner and never strands itself. The collapsed state is stored in the
   app config, so it survives a restart.
+- **Sidebar width** — the column's right edge is a drag handle (`col-resize`),
+  clamped to 180–520px and to the width that still leaves the editor room on a
+  small window. The handle is a separator, so it is tabbable and resizable from
+  the keyboard (`←`/`→`, `Shift` for a jump, `Home`/`End` for the bounds), and
+  double-clicking it restores the default. The chosen width is stored in the app
+  config next to the collapsed state. The drawer layout below 640px hides the
+  handle, since there the sidebar's position _is_ the state.
 
 ## Known limitations
 

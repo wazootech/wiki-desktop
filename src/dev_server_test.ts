@@ -1,5 +1,10 @@
 import { join } from "node:path";
 
+import {
+  DEFAULT_SIDEBAR_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+} from "./config.ts";
 import { portOf, startDevServer } from "./dev_server.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -100,6 +105,34 @@ Deno.test("the dev server drives the whole vault flow over HTTP", async () => {
       (await call("getState")).body.sidebarCollapsed,
       true,
       "the sidebar state is remembered",
+    );
+
+    assertEqual(
+      (await call("getState")).body.sidebarWidth,
+      DEFAULT_SIDEBAR_WIDTH,
+      "the sidebar starts at its default width",
+    );
+    const widened = await call("setSidebarWidth", 320);
+    assertEqual(widened.status, 200, "the sidebar width can be stored");
+    assertEqual(
+      widened.body.sidebarWidth,
+      320,
+      "storing the width returns the new state",
+    );
+    assertEqual(
+      (await call("getState")).body.sidebarWidth,
+      320,
+      "the sidebar width is remembered",
+    );
+    assertEqual(
+      (await call("setSidebarWidth", 5000)).body.sidebarWidth,
+      SIDEBAR_MAX_WIDTH,
+      "an impossible width is clamped over this transport too",
+    );
+    assertEqual(
+      (await call("setSidebarWidth", 10)).body.sidebarWidth,
+      SIDEBAR_MIN_WIDTH,
+      "a sliver of a sidebar is raised to the minimum",
     );
 
     // The guards hold over this transport too: HTTP is not a bypass.

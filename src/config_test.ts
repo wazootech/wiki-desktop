@@ -1,4 +1,11 @@
-import { homeDirectory, withRecentVault } from "./config.ts";
+import {
+  clampSidebarWidth,
+  DEFAULT_SIDEBAR_WIDTH,
+  homeDirectory,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  withRecentVault,
+} from "./config.ts";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) {
@@ -30,6 +37,25 @@ Deno.test("homeDirectory uses the variable this platform actually sets", () => {
     if (previous.profile === undefined) Deno.env.delete("USERPROFILE");
     else Deno.env.set("USERPROFILE", previous.profile);
   }
+});
+
+Deno.test("clampSidebarWidth keeps a stored width inside the layout's range", () => {
+  // The stored value outlives the window that produced it, so every read path
+  // has to survive a hand-edited config: a width of 5 or 5000 would otherwise
+  // hide either the file list or the editor on the next launch.
+  assertEqual(clampSidebarWidth(300), 300, "a width in range is kept");
+  assertEqual(clampSidebarWidth(5), SIDEBAR_MIN_WIDTH, "too narrow is raised");
+  assertEqual(
+    clampSidebarWidth(5000),
+    SIDEBAR_MAX_WIDTH,
+    "too wide is lowered",
+  );
+  assertEqual(clampSidebarWidth(299.6), 300, "a dragged width is rounded");
+  assertEqual(
+    clampSidebarWidth(Number.NaN),
+    DEFAULT_SIDEBAR_WIDTH,
+    "a missing or corrupt width falls back to the default",
+  );
 });
 
 Deno.test("withRecentVault keeps the newest vault first and deduplicates", () => {

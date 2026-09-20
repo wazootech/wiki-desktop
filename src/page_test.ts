@@ -8,6 +8,11 @@
  */
 import { join } from "node:path";
 
+import {
+  DEFAULT_SIDEBAR_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+} from "./config.ts";
 import { page } from "./page.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -118,6 +123,49 @@ Deno.test("collapsing never strands the only way to reopen", () => {
   );
 });
 
+Deno.test("the sidebar's drag handle moves the grid track it sits on", () => {
+  const style = page.slice(0, page.indexOf("</style>"));
+
+  // The script sets a custom property and the shell's template has to read the
+  // same name: writing a width onto the sidebar element instead would leave the
+  // track at its old size and the handle silently inert.
+  assert(
+    /\.app\s*\{[^}]*grid-template-columns:\s*var\(--sidebar-width\)/.test(
+      style,
+    ),
+    "the shell's first track is the sidebar width token",
+  );
+  assert(
+    page.includes("setProperty('--sidebar-width'"),
+    "the drag writes that same token",
+  );
+
+  // The handle has to straddle the divider: parked inside the panel it would
+  // make the user aim one pixel away from the line that moves.
+  assert(
+    /\.resizer\s*\{[^}]*right:\s*-\d/.test(style),
+    "the handle overhangs the sidebar's edge",
+  );
+
+  // At drawer width the sidebar is an overlay whose position is its transform,
+  // so a handle on its edge would fight the slide-in it sits on.
+  const narrow = style.slice(style.indexOf("@media (max-width: 640px)"));
+  assert(
+    /\.resizer\s*\{[^}]*display:\s*none/.test(narrow),
+    "the drawer layout hides the resize handle",
+  );
+
+  // The bounds the handle reports are the ones the config enforces, because
+  // both are interpolated from the same constants. Literal numbers here would
+  // let the two drift apart.
+  assert(
+    page.includes(`aria-valuemin="${SIDEBAR_MIN_WIDTH}"`) &&
+      page.includes(`aria-valuemax="${SIDEBAR_MAX_WIDTH}"`) &&
+      page.includes(`aria-valuenow="${DEFAULT_SIDEBAR_WIDTH}"`),
+    "the handle reports the shared width bounds",
+  );
+});
+
 Deno.test("the brand row and the tab bar share one height", () => {
   // The rule under the brand row is the vault panel's border-top while the tab
   // bar draws its own border-bottom. Sized independently, the two rows drift
@@ -135,6 +183,29 @@ Deno.test("the brand row and the tab bar share one height", () => {
   assert(
     /--topbar-height:\s*\d+px/.test(style),
     "the shared height token is defined for light mode",
+  );
+  // Equal heights are only half of it. A border-bottom is drawn inside its own
+  // box and a border-top inside the neighbour's, so rows that merely touch put
+  // their rules on opposite sides of the shared edge: 1px apart, which is the
+  // stray pixel at the sidebar seam. Both columns must draw the line the same
+  // way round.
+  assert(
+    /\.brand\s*\{[^}]*border-bottom:\s*1px solid/.test(style),
+    "the brand row draws the divider under the top bar itself",
+  );
+  assert(
+    !/\.vault\s*\{[^}]*border-top/.test(style),
+    "the vault panel does not draw a second, 1px-lower copy of that divider",
+  );
+  // The same pairing at the bottom edge, where the two rows also have to agree
+  // on a height or their border-tops land on different pixels.
+  assert(
+    /\.sidebar-status\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
+    "the sidebar status row takes the shared status height",
+  );
+  assert(
+    /\.statusbar\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
+    "the workspace status bar takes the shared status height",
   );
   // At drawer width the sidebar overlays the workspace and the tab bar wraps,
   // so a fixed height there would clip it.

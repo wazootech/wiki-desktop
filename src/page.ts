@@ -1,8 +1,17 @@
+import {
+  DEFAULT_SIDEBAR_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+} from "./config.ts";
+
 /**
  * The webview document. It is a plain string so the app stays a single
  * self-contained entrypoint: no bundler, and nothing to embed for
  * `deno desktop --output`. The Deno-side API it talks to is `bindings.*`,
  * typed by `WikiBindings` in src/bindings.ts.
+ *
+ * The sidebar's width bounds are interpolated from src/config.ts rather than
+ * written here twice, so the drag handle and the stored setting agree.
  */
 export const page = `<!DOCTYPE html>
 <html lang="en">
@@ -54,10 +63,12 @@ export const page = `<!DOCTYPE html>
       --focus-ring: rgba(91, 77, 232, 0.24);
       --toast-bg: #ffffff;
       --shadow: 0 18px 45px rgba(33, 43, 72, 0.08);
-      --sidebar-width: 250px;
+      --sidebar-width: ${DEFAULT_SIDEBAR_WIDTH}px;
       /* The brand row and the tab bar share this height so the divider under
-         them is one continuous line across the window, not two steps. */
+         them is one continuous line across the window, not two steps. The
+         status rows pair up the same way at the bottom edge. */
       --topbar-height: 41px;
+      --statusbar-height: 26px;
     }
 
     @media (prefers-color-scheme: dark) {
@@ -157,13 +168,50 @@ export const page = `<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       min-height: 0;
+      /* The resize handle is positioned against this box. */
+      position: relative;
       border-right: 1px solid var(--line);
       background: var(--panel);
     }
 
-    /* Both rows are the same height, and the toggle is pinned the same distance
-       from the top in each, so collapsing the sidebar does not move it. */
-    .brand { display: flex; align-items: center; gap: 8px; height: var(--topbar-height); padding: 6px 10px; }
+    /*
+     * The drag handle straddles the divider: 4px over the panel, 3px over the
+     * editor, so the target is 7px wide without moving the line the user is
+     * aiming at. The right offset is measured from the padding edge, and the
+     * sidebar's border sits outside that edge, so the accent below is 4px in to
+     * land on the border itself — at 3px it would draw a second line 1px to the
+     * left of the divider.
+     */
+    .resizer {
+      position: absolute; top: 0; right: -3px; bottom: 0; width: 7px; z-index: 3;
+      cursor: col-resize; touch-action: none;
+    }
+    .resizer::after {
+      position: absolute; top: 0; bottom: 0; left: 4px; width: 1px;
+      background: transparent; content: "";
+    }
+    .resizer:hover::after, .resizer.is-dragging::after, .resizer:focus-visible::after {
+      background: var(--brand-marker);
+    }
+    .resizer:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: -3px; }
+    /* While dragging, the pointer can outrun the handle; keep the cursor and
+       stop the drag from selecting the editor's text on the way. */
+    body.is-resizing { cursor: col-resize; user-select: none; }
+
+    /*
+     * Both rows are the same height, and the toggle is pinned the same distance
+     * from the top in each, so collapsing the sidebar does not move it.
+     *
+     * The brand row carries the divider itself. Matching heights alone is not
+     * enough: a border-bottom sits inside its own box while a border-top sits
+     * inside the neighbour's, so two rows that merely touch draw their rules on
+     * opposite sides of the shared edge — 1px apart, which is the stray pixel
+     * this replaced. Both columns draw the line the same way instead.
+     */
+    .brand {
+      display: flex; align-items: center; gap: 8px; height: var(--topbar-height); padding: 6px 10px;
+      border-bottom: 1px solid var(--line);
+    }
     .tabbar .sidebar-toggle { display: none; }
     .app.is-collapsed .tabbar .sidebar-toggle { display: inline-flex; }
     /* The rows' text is taller than the button, so centring would put the two
@@ -185,7 +233,6 @@ export const page = `<!DOCTYPE html>
 
     .vault {
       padding: 8px 13px 10px;
-      border-top: 1px solid var(--line);
       border-bottom: 1px solid var(--line);
       background: var(--panel-muted);
     }
@@ -231,7 +278,8 @@ export const page = `<!DOCTYPE html>
     .file-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
     .sidebar-status {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      padding: 5px 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
+      height: var(--statusbar-height); padding: 0 13px;
+      border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
     }
     .transport {
       flex-shrink: 0; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px;
@@ -301,7 +349,8 @@ export const page = `<!DOCTYPE html>
     textarea::selection { color: var(--selection-text); background: var(--selection); }
 
     .statusbar {
-      display: flex; align-items: center; gap: 12px; padding: 4px 14px; min-height: 26px;
+      display: flex; align-items: center; gap: 12px;
+      height: var(--statusbar-height); padding: 0 14px;
       border-top: 1px solid var(--line); color: var(--muted); background: var(--panel); font-size: 10.5px;
     }
     .statusbar .status-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -378,9 +427,13 @@ export const page = `<!DOCTYPE html>
       .sidebar.is-open { transform: translateX(0); }
       /* The drawer hides the brand row's toggle, so the tabbar keeps one. */
       .tabbar .sidebar-toggle { display: inline-flex; }
-      /* The drawer overlays the workspace here, so the two rows no longer have
-         to line up — and a wrapping tab bar must be free to grow. */
+      /* The drawer is an overlay whose position is the state itself, so a
+         resize handle on its edge would fight the slide-in. */
+      .resizer { display: none; }
+      /* The drawer overlays the workspace here, so the rows no longer have to
+         line up — and a wrapping tab or status bar must be free to grow. */
       .brand, .tabbar { height: auto; min-height: var(--topbar-height); }
+      .sidebar-status, .statusbar { height: auto; min-height: var(--statusbar-height); }
       .tabbar { flex-wrap: wrap; }
       .save-state { display: none; }
       .statusbar { flex-wrap: wrap; }
@@ -436,6 +489,10 @@ export const page = `<!DOCTYPE html>
         <span id="fileCount">No vault open</span>
         <span class="transport" id="transportBadge" hidden>Browser dev mode</span>
       </div>
+      <div class="resizer" id="sidebarResizer" role="separator" aria-orientation="vertical"
+           aria-label="Resize the vault sidebar" aria-controls="fileList"
+           aria-valuemin="${SIDEBAR_MIN_WIDTH}" aria-valuemax="${SIDEBAR_MAX_WIDTH}" aria-valuenow="${DEFAULT_SIDEBAR_WIDTH}"
+           title="Drag to resize, double-click to reset" tabindex="0"></div>
     </aside>
 
     <section class="workspace">
@@ -583,6 +640,7 @@ export const page = `<!DOCTYPE html>
       const recents = el('recents');
       const recentRow = el('recentRow');
       const sidebar = document.querySelector('.sidebar');
+      const sidebarResizer = el('sidebarResizer');
       const sidebarScrim = el('sidebarScrim');
       // One action, two affordances: the brand row's while the sidebar is
       // showing, the tabbar's once it is collapsed, so the control stays in the
@@ -593,7 +651,13 @@ export const page = `<!DOCTYPE html>
       // same button means "slide it in" instead of "collapse the column".
       const narrowWindow = window.matchMedia('(max-width: 640px)');
 
-      let vault = { root: null, name: null, recents: [], sidebarCollapsed: false };
+      let vault = {
+        root: null,
+        name: null,
+        recents: [],
+        sidebarCollapsed: false,
+        sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
+      };
       let files = [];
       let listing = null;
       let toastTimer;
@@ -683,6 +747,48 @@ export const page = `<!DOCTYPE html>
         syncSidebarToggles();
         vault.sidebarCollapsed = collapsed;
         if (persist) call('setSidebarCollapsed', [collapsed]);
+      }
+
+      /* Sidebar width */
+
+      // The editor needs room for a readable line, so the column gives up space
+      // before the workspace does on a narrow window.
+      const WORKSPACE_FLOOR = 360;
+
+      function widestSidebarThatFits() {
+        return Math.max(
+          ${SIDEBAR_MIN_WIDTH},
+          Math.min(${SIDEBAR_MAX_WIDTH}, window.innerWidth - WORKSPACE_FLOOR),
+        );
+      }
+
+      function clampSidebarWidth(width) {
+        // A value the transport never sent must not collapse the layout, so a
+        // non-number falls back to the default rather than propagating NaN.
+        const wanted = Number.isFinite(width) ? width : ${DEFAULT_SIDEBAR_WIDTH};
+        return Math.round(
+          Math.max(${SIDEBAR_MIN_WIDTH}, Math.min(widestSidebarThatFits(), wanted)),
+        );
+      }
+
+      /**
+       * The stored width is what the user chose; the applied width is that
+       * choice clamped to what this window can afford. Keeping them apart means
+       * shrinking the window squeezes the column instead of swallowing the
+       * editor, and growing it puts the chosen width back.
+       */
+      function applySidebarWidth() {
+        const width = clampSidebarWidth(vault.sidebarWidth);
+        document.documentElement.style.setProperty('--sidebar-width', width + 'px');
+        sidebarResizer.setAttribute('aria-valuenow', String(width));
+        sidebarResizer.setAttribute('aria-valuemax', String(widestSidebarThatFits()));
+        return width;
+      }
+
+      function setSidebarWidth(width, persist) {
+        vault.sidebarWidth = clampSidebarWidth(width);
+        applySidebarWidth();
+        if (persist) call('setSidebarWidth', [vault.sidebarWidth]);
       }
 
       /* Tabs */
@@ -1037,6 +1143,7 @@ export const page = `<!DOCTYPE html>
       function applyState(state) {
         vault = state;
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
+        applySidebarWidth();
         renderVault();
         renderFiles();
         showPlaceholder();
@@ -1167,10 +1274,87 @@ export const page = `<!DOCTYPE html>
         setSidebarCollapsed(!isSidebarCollapsed(), true);
       }
 
+      /**
+       * Drag, or nudge with the keyboard, the sidebar's right edge. The handle
+       * keeps pointer capture for the whole drag, so the pointer can wander
+       * over the editor and past the window edge without the drag breaking.
+       */
+      function wireResizer() {
+        let dragging = false;
+
+        function endDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          document.body.classList.remove('is-resizing');
+          sidebarResizer.classList.remove('is-dragging');
+          if (sidebarResizer.hasPointerCapture(event.pointerId)) {
+            sidebarResizer.releasePointerCapture(event.pointerId);
+          }
+          // One write per drag, not one per pointer move.
+          call('setSidebarWidth', [vault.sidebarWidth]);
+        }
+
+        sidebarResizer.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          dragging = true;
+          sidebarResizer.focus();
+          // The drag would otherwise select the editor's text.
+          event.preventDefault();
+          document.body.classList.add('is-resizing');
+          sidebarResizer.classList.add('is-dragging');
+          try {
+            sidebarResizer.setPointerCapture(event.pointerId);
+          } catch {
+            // A synthetic pointer has no active id to capture. The drag still
+            // works while the pointer is over the handle, which is what keeps
+            // this driveable from a test or a script.
+          }
+        });
+
+        sidebarResizer.addEventListener('pointermove', (event) => {
+          if (!dragging) return;
+          const left = sidebar.getBoundingClientRect().left;
+          // Dragging the edge, not the pointer: the handle is 3px off the
+          // border, so measure from the pointer with that offset removed.
+          setSidebarWidth(event.clientX - left - 3, false);
+        });
+
+        sidebarResizer.addEventListener('pointerup', endDrag);
+        sidebarResizer.addEventListener('pointercancel', endDrag);
+
+        sidebarResizer.addEventListener('dblclick', () => {
+          setSidebarWidth(${DEFAULT_SIDEBAR_WIDTH}, true);
+        });
+
+        sidebarResizer.addEventListener('keydown', (event) => {
+          const step = event.shiftKey ? ${
+  SIDEBAR_MAX_WIDTH - SIDEBAR_MIN_WIDTH
+} : 8;
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            setSidebarWidth(
+              vault.sidebarWidth + (event.key === 'ArrowRight' ? step : -step),
+              true,
+            );
+          } else if (event.key === 'Home' || event.key === 'End') {
+            event.preventDefault();
+            setSidebarWidth(
+              event.key === 'Home' ? ${SIDEBAR_MIN_WIDTH} : widestSidebarThatFits(),
+              true,
+            );
+          }
+        });
+
+        // A resize can make the stored width impossible to honor; re-clamp it
+        // without writing that compromise back to the settings file.
+        window.addEventListener('resize', applySidebarWidth);
+      }
+
       function wire() {
         for (const toggle of sidebarToggles) {
           toggle.addEventListener('click', toggleSidebar);
         }
+        wireResizer();
         sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
         openVaultButton.addEventListener('click', openBrowser);
         emptyOpenVaultButton.addEventListener('click', openBrowser);
