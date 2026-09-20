@@ -8,13 +8,17 @@
  */
 import { createVaultApi } from "./bindings.ts";
 import { loadConfig, updateConfig } from "./config.ts";
+import { editorScriptResponse, isEditorScript } from "./editor_asset.ts";
 import { page } from "./page.ts";
 
-Deno.serve(() =>
-  new Response(page, {
+Deno.serve((request) => {
+  if (isEditorScript(new URL(request.url).pathname)) {
+    return editorScriptResponse();
+  }
+  return new Response(page, {
     headers: { "content-type": "text/html; charset=utf-8" },
-  })
-);
+  });
+});
 
 const win = new Deno.BrowserWindow({
   title: "Wazoo Wiki",

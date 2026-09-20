@@ -57,8 +57,17 @@ export const page = `<!DOCTYPE html>
       --warn-text: #9a6a12;
       --success: #17845b;
       --warning: #eb9f27;
-      --selection: #8e86ee;
-      --selection-text: #ffffff;
+      --selection-soft: rgba(91, 77, 232, 0.22);
+      /* Syntax, read by the editor bundle's highlight style. */
+      --syntax-heading: #23304f;
+      --syntax-link: #4b3fd0;
+      --syntax-code: #7a4a12;
+      --syntax-marker: #7d8799;
+      --syntax-muted: #5f6b7d;
+      --syntax-keyword: #8b2fbf;
+      --syntax-string: #17724f;
+      --syntax-number: #a8540a;
+      --syntax-type: #2f6f9f;
       --overlay: rgba(27, 36, 52, 0.38);
       --focus-ring: rgba(91, 77, 232, 0.24);
       --toast-bg: #ffffff;
@@ -99,8 +108,16 @@ export const page = `<!DOCTYPE html>
         --warn-text: #e8b566;
         --success: #35c08c;
         --warning: #e0a63c;
-        --selection: #4b428f;
-        --selection-text: #ffffff;
+        --selection-soft: rgba(139, 129, 255, 0.28);
+        --syntax-heading: #cdd6f0;
+        --syntax-link: #a99fff;
+        --syntax-code: #e8bd87;
+        --syntax-marker: #8590a6;
+        --syntax-muted: #939db1;
+        --syntax-keyword: #dfa6ff;
+        --syntax-string: #8fd9ad;
+        --syntax-number: #ffc27a;
+        --syntax-type: #8fc7ff;
         --overlay: rgba(3, 5, 10, 0.62);
         --focus-ring: rgba(139, 129, 255, 0.4);
         --toast-bg: #232733;
@@ -121,7 +138,7 @@ export const page = `<!DOCTYPE html>
       font-size: 12.5px;
     }
 
-    button, input, textarea { font: inherit; }
+    button, input { font: inherit; }
     button { cursor: pointer; }
     [hidden] { display: none !important; }
 
@@ -150,7 +167,7 @@ export const page = `<!DOCTYPE html>
       transition: background .16s ease, border-color .16s ease, transform .16s ease;
     }
     .button:active { transform: translateY(1px); }
-    .button:focus-visible, input:focus-visible, textarea:focus-visible, .file-button:focus-visible,
+    .button:focus-visible, input:focus-visible, .file-button:focus-visible,
     .dir-button:focus-visible, .tab:focus-visible, .tab-close:focus-visible {
       outline: 3px solid var(--focus-ring); outline-offset: 1px;
     }
@@ -340,13 +357,15 @@ export const page = `<!DOCTYPE html>
     kbd { padding: 1px 4px; border: 1px solid var(--kbd-line); border-radius: 4px; color: var(--text-soft); background: var(--kbd-bg); font-size: 10px; }
 
     .editor-wrap { height: 100%; background: var(--panel); }
-    textarea {
-      display: block; width: 100%; height: 100%; resize: none; padding: 14px 16px;
-      border: 0; outline: 0; color: var(--text-editor); background: var(--panel);
-      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-      font-size: 13px; line-height: 1.6; tab-size: 2;
-    }
-    textarea::selection { color: var(--selection-text); background: var(--selection); }
+    .editor-host { height: 100%; }
+    /*
+     * The editor's own structure (.cm-editor > .cm-scroller > .cm-content) is
+     * deliberately not styled here. CodeMirror injects its base theme after
+     * this stylesheet, one class more specific than a plain .cm-gutters rule,
+     * so one written here would lose — the gutter renders light grey in dark
+     * mode. The theme lives in src/editor.ts, where an extension is applied
+     * above the base theme, and reads the tokens below.
+     */
 
     .statusbar {
       display: flex; align-items: center; gap: 12px;
@@ -528,8 +547,7 @@ export const page = `<!DOCTYPE html>
         </div>
 
         <div class="editor-wrap" id="editorWrap" hidden>
-          <label class="sr-only" for="editor">File contents</label>
-          <textarea id="editor" spellcheck="false" wrap="off" aria-label="File contents"></textarea>
+          <div class="editor-host" id="editor"></div>
         </div>
       </div>
 
@@ -574,6 +592,12 @@ export const page = `<!DOCTYPE html>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <!--
+    The editor, bundled from src/editor.ts by the build:editor task and served
+    from memory by both transports. A classic script, so it runs before the
+    inline one below and the page finds the factory on the global object.
+  -->
+  <script src="/editor.js"></script>
   <script>
     (() => {
       const NL = String.fromCharCode(10);
@@ -604,7 +628,7 @@ export const page = `<!DOCTYPE html>
 
       const el = (id) => document.getElementById(id);
       const shell = el('app');
-      const editor = el('editor');
+      const editorHost = el('editor');
       const editorWrap = el('editorWrap');
       const placeholderNoVault = el('placeholderNoVault');
       const placeholderNoFile = el('placeholderNoFile');
@@ -650,6 +674,35 @@ export const page = `<!DOCTYPE html>
       // Below this width the sidebar is a drawer rather than a column, so the
       // same button means "slide it in" instead of "collapse the column".
       const narrowWindow = window.matchMedia('(max-width: 640px)');
+
+      // The editor keeps each open document's own state, so the page only has
+      // to name which one is on screen. Everything it needs is this handle:
+      // the tab strip, dirty state, and Save stay exactly as they were.
+      const editorApi = window.WikiEditor
+        ? window.WikiEditor.create({
+            container: editorHost,
+            onChange: onEditorChange,
+          })
+        : null;
+      if (editorApi === null) {
+        showToast('The editor failed to load. Reload the window to retry.');
+      }
+
+      /** The active document's text, or empty when there is no editor at all. */
+      function editorValue() {
+        return editorApi === null ? '' : editorApi.getValue();
+      }
+
+      /**
+       * Any edit or cursor move: the tab's buffer, the dirty dot, and the
+       * status line all follow from the document, so one handler covers them.
+       */
+      function onEditorChange() {
+        const tab = activeTab();
+        if (tab !== null) tab.content = editorValue();
+        markActiveTab();
+        updateStatus();
+      }
 
       let vault = {
         root: null,
@@ -793,28 +846,31 @@ export const page = `<!DOCTYPE html>
 
       /* Tabs */
 
+      /** Closing every buffer — a vault switch — drops the editor's states too. */
+      function discardAllTabs() {
+        for (const tab of tabs) editorApi?.forgetDocument(tab.path);
+        tabs = [];
+        activeIndex = -1;
+      }
+
+      // The editor holds each document's own state, including its cursor and
+      // scroll position, so stashing is only about the buffer's text.
       function stashCursor() {
         const tab = activeTab();
         if (tab === null) return;
-        tab.content = editor.value;
-        tab.cursor = editor.selectionStart;
-        tab.scroll = editor.scrollTop;
+        tab.content = editorValue();
       }
 
       function loadActiveIntoEditor() {
         const tab = activeTab();
-        if (tab === null) {
-          editor.value = '';
+        if (tab === null || editorApi === null) {
           renderTabs();
           showPlaceholder();
           return;
         }
-        editor.value = tab.content;
+        editorApi.showDocument(tab.path, tab.content);
         showEditor();
-        const cursor = Math.min(tab.cursor || 0, editor.value.length);
-        editor.setSelectionRange(cursor, cursor);
-        editor.scrollTop = tab.scroll || 0;
-        editor.focus();
+        editorApi.focus();
         renderTabs();
       }
 
@@ -904,8 +960,6 @@ export const page = `<!DOCTYPE html>
             name: baseName(payload.path),
             content: payload.content,
             saved: payload.content,
-            cursor: 0,
-            scroll: 0,
           });
           activeIndex = tabs.length - 1;
         }
@@ -934,6 +988,7 @@ export const page = `<!DOCTYPE html>
           if (!keep) return;
         }
         const wasActive = index === activeIndex;
+        editorApi?.forgetDocument(tab.path);
         tabs.splice(index, 1);
         if (tabs.length === 0) {
           activeIndex = -1;
@@ -967,13 +1022,16 @@ export const page = `<!DOCTYPE html>
 
       function updateStatus() {
         const tab = activeTab();
-        const contents = tab === null ? '' : editor.value;
+        const contents = tab === null ? '' : editorValue();
         const lines = contents ? contents.split(NL).length : 0;
         characterCount.textContent = contents.length.toLocaleString() +
           (contents.length === 1 ? ' character' : ' characters');
         lineCount.textContent = lines.toLocaleString() + (lines === 1 ? ' line' : ' lines');
         if (tab !== null) {
-          const beforeCursor = contents.slice(0, editor.selectionStart);
+          // A bundle that failed to load still has tabs; it just has no
+          // cursor to report.
+          const cursor = editorApi === null ? 0 : editorApi.getCursor();
+          const beforeCursor = contents.slice(0, cursor);
           const currentLine = beforeCursor.split(NL);
           cursorPosition.textContent = 'Ln ' + currentLine.length + ', Col ' +
             (currentLine[currentLine.length - 1].length + 1);
@@ -1100,9 +1158,15 @@ export const page = `<!DOCTYPE html>
       async function saveFile() {
         const tab = activeTab();
         if (tab === null) return;
-        const payload = await call('writeFile', [tab.path, tab.content]);
+        const content = editorValue();
+        const payload = await call('writeFile', [tab.path, content]);
         if (payload === null) return;
-        tab.saved = tab.content;
+        // What comes back is the document text, not the bytes on disk: a CRLF
+        // file is written as CRLF while the buffer stays LF. Marking the
+        // buffer clean against the file's own bytes would read as a dirty file
+        // on the next keystroke, which is the bug this line used to contain.
+        tab.saved = payload.content;
+        tab.content = payload.content;
         renderTabs();
         updateStatus();
         showToast('Saved ' + payload.path);
@@ -1119,8 +1183,6 @@ export const page = `<!DOCTYPE html>
         if (payload === null) return;
         tab.content = payload.content;
         tab.saved = payload.content;
-        tab.cursor = 0;
-        tab.scroll = 0;
         loadActiveIntoEditor();
         updateStatus();
         showToast('Reloaded ' + payload.path + ' from disk');
@@ -1162,9 +1224,7 @@ export const page = `<!DOCTYPE html>
         const state = await call('openVault', [path]);
         if (state === null) return;
         closeBrowser();
-        tabs = [];
-        activeIndex = -1;
-        editor.value = '';
+        discardAllTabs();
         applyState(state);
         renderTabs();
         updateStatus();
@@ -1177,9 +1237,7 @@ export const page = `<!DOCTYPE html>
         if (!confirmDiscardAll()) return;
         const state = await call('closeVault');
         if (state === null) return;
-        tabs = [];
-        activeIndex = -1;
-        editor.value = '';
+        discardAllTabs();
         applyState(state);
         renderTabs();
         updateStatus();
@@ -1378,23 +1436,8 @@ export const page = `<!DOCTYPE html>
         reloadButton.addEventListener('click', reloadFile);
         saveButton.addEventListener('click', saveFile);
         filterInput.addEventListener('input', renderFiles);
-        editor.addEventListener('input', () => {
-          const tab = activeTab();
-          if (tab !== null) tab.content = editor.value;
-          markActiveTab();
-          updateStatus();
-        });
-        editor.addEventListener('keyup', updateStatus);
-        editor.addEventListener('click', updateStatus);
-        editor.addEventListener('keydown', (event) => {
-          if (event.key !== 'Tab') return;
-          event.preventDefault();
-          const start = editor.selectionStart;
-          editor.setRangeText('  ', start, editor.selectionEnd, 'end');
-          const tab = activeTab();
-          if (tab !== null) tab.content = editor.value;
-          updateStatus();
-        });
+        // Edits, cursor moves, and Tab all arrive through the editor's own
+        // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks
         // first through its own close handler.
         window.addEventListener('beforeunload', (event) => {

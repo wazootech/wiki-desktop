@@ -135,6 +135,20 @@ Deno.test("the dev server drives the whole vault flow over HTTP", async () => {
       "a sliver of a sidebar is raised to the minimum",
     );
 
+    // The editor arrives over this transport as well, so the browser target
+    // and the desktop window run the same page against the same bundle.
+    const editor = await fetch(`${base}editor.js`);
+    assertEqual(editor.status, 200, "the editor bundle is served");
+    assert(
+      editor.headers.get("content-type")?.startsWith("text/javascript") ===
+        true,
+      "the editor bundle is served as JavaScript",
+    );
+    assert(
+      (await editor.text()).includes("WikiEditor"),
+      "the served editor defines the factory the page uses",
+    );
+
     // The guards hold over this transport too: HTTP is not a bypass.
     const escaped = await call("readFile", "../outside.md");
     assertEqual(escaped.status, 400, "escaping the vault is rejected");

@@ -11,6 +11,7 @@
  * cross-origin callers, and should never be exposed beyond the local machine.
  */
 import { createVaultApi, type VaultApi } from "./bindings.ts";
+import { editorScriptResponse, isEditorScript } from "./editor_asset.ts";
 import { page } from "./page.ts";
 
 const HOSTNAME = "127.0.0.1";
@@ -40,6 +41,9 @@ export function portOf(server: Deno.HttpServer): number {
 
 async function handle(request: Request, api: VaultApi): Promise<Response> {
   const url = new URL(request.url);
+  if (isEditorScript(url.pathname)) {
+    return editorScriptResponse();
+  }
   if (url.pathname === "/" || url.pathname === "/index.html") {
     return new Response(page, {
       headers: {

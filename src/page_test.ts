@@ -61,7 +61,7 @@ Deno.test("the tab strip's classes are all styled", () => {
   );
 });
 
-Deno.test("every token used resolves, and dark only overrides light", () => {
+Deno.test("every token used resolves, and dark only overrides light", async () => {
   // Light is the mode we cannot see while the OS is dark, so check it by
   // structure instead: a var() with no definition resolves to nothing and a
   // token that exists only in the dark block leaves light mode unstyled.
@@ -74,6 +74,37 @@ Deno.test("every token used resolves, and dark only overrides light", () => {
   const used = new Set(
     [...style.matchAll(/var\(\s*(--[\w-]+)/g)].map((match) => match[1]),
   );
+  // The editor's appearance is a CodeMirror theme extension, not page CSS (see
+  // src/editor.ts for why), so its token references are not in this string and
+  // a rename on either side would silently unstyle the editor.
+  const editorSource = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  const editorUsed = [
+    ...editorSource.matchAll(/var\(\s*(--[\w-]+)/g),
+  ].map((match) => match[1]);
+  assert(
+    editorUsed.length > 10,
+    "the editor's theme reads the app's tokens",
+  );
+  const dangling = editorUsed.filter((name) => !light.has(name));
+  assert(
+    dangling.length === 0,
+    `the editor reads tokens nothing defines for light mode: ${
+      dangling.join(", ")
+    }`,
+  );
+
+  // And the other direction: a token nothing consumes is dead weight that the
+  // next reader cannot tell from a live one.
+  const unused = [...light].filter((name) =>
+    !used.has(name) && !editorUsed.includes(name)
+  );
+  assert(
+    unused.length === 0,
+    `these tokens are defined but never used: ${unused.join(", ")}`,
+  );
+
   const undefined_ = [...used].filter((name) => !light.has(name));
   assert(
     undefined_.length === 0,
@@ -120,6 +151,62 @@ Deno.test("collapsing never strands the only way to reopen", () => {
     ) ?? [])
       .length === 2,
     "there is one toggle per layout state",
+  );
+});
+
+Deno.test("the page edits through the bundled editor, not a bare input", () => {
+  const markup = page.slice(0, page.indexOf("<script"));
+
+  // CodeMirror needs a host element it can own, and the handle is the only
+  // thing the page is allowed to know about it.
+  assert(
+    markup.includes('<div class="editor-host" id="editor">'),
+    "the editor is mounted into its own host element",
+  );
+  assert(
+    !/<textarea/.test(page),
+    "no textarea is left behind to shadow it",
+  );
+  assert(
+    page.includes("window.WikiEditor.create({"),
+    "the page creates the editor through the bundle's factory",
+  );
+  assert(
+    page.includes("if (editorApi === null)"),
+    "a bundle that failed to load is reported instead of throwing on a keystroke",
+  );
+  // The toast above is only honest if the rest of the page survives with no
+  // editor: the status line reports the cursor, and there is not one.
+  assert(
+    page.includes(
+      "const cursor = editorApi === null ? 0 : editorApi.getCursor();",
+    ),
+    "a window whose editor never loaded still renders a status line",
+  );
+  // Every document the page opens is a key the editor remembers, so the two
+  // sides agree on what a tab is.
+  assert(
+    page.includes("editorApi.showDocument(tab.path, tab.content)"),
+    "switching tabs shows the document for that path",
+  );
+  assert(
+    page.includes("editorApi?.forgetDocument(tab.path)"),
+    "closing a tab releases its document",
+  );
+
+  // The textarea's styling has to be gone with it, and the editor's internals
+  // must not be styled from here: CodeMirror injects its base theme after this
+  // stylesheet with more specificity, so a `.cm-gutters` rule written here
+  // loses and the gutter renders light grey in dark mode. The theme is in the
+  // bundle instead.
+  const style = page.slice(0, page.indexOf("</style>"));
+  assert(
+    !/\.cm-[\w-]*\s*\{/.test(style),
+    "the page leaves CodeMirror's own classes to the editor's theme",
+  );
+  assert(
+    !/^\s*textarea\s*\{/m.test(style),
+    "the old textarea rules are gone",
   );
 });
 

@@ -35,5 +35,13 @@ jobs:
       - name: test
         run: deno task test
 
+      # The editor is a committed bundle, so the one way it can be wrong is by
+      # drifting from src/editor.ts — which no test can see, because the bundle
+      # is what runs. Rebuilding it here makes that a build failure.
+      - name: editor bundle is current
+        run: |
+          deno task build:editor
+          git diff --exit-code -- src/editor_bundle.js
+
       - name: build
         run: deno task build

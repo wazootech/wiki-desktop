@@ -34,11 +34,20 @@ export interface VaultFile {
   isMarkdown: boolean;
 }
 
+/** The line ending a file uses on disk. The editor only ever holds LF. */
+export type NewlineStyle = "\n" | "\r\n" | "\r";
+
 export interface VaultFileContents {
   path: string;
+  /**
+   * The document text, with LF endings — what either editor can hold, and
+   * never the bytes on disk. `newline` is what the file uses instead.
+   */
   content: string;
   /** Last modification time in milliseconds since the epoch. */
   modified: number;
+  /** The ending this file uses on disk, put back when it is saved. */
+  newline: NewlineStyle;
 }
 
 export interface DirectoryEntry {
@@ -171,10 +180,12 @@ export async function readVaultFile(
   if (info.size > MAX_EDITABLE_BYTES) {
     throw new VaultError("That file is too large to open in the editor.");
   }
+  const onDisk = await Deno.readTextFile(file);
   return {
     path: normalizeVaultPath(path),
-    content: await Deno.readTextFile(file),
+    content: toEditorText(onDisk),
     modified: info.mtime?.getTime() ?? 0,
+    newline: detectNewlineStyle(onDisk),
   };
 }
 
@@ -184,8 +195,15 @@ export async function writeVaultFile(
   content: string,
 ): Promise<VaultFileContents> {
   const file = await resolveVaultFile(root, path, { mustExist: false });
-  await Deno.writeTextFile(file, content);
-  return await describeFile(root, path, content);
+  // The editor hands back LF. The file keeps the convention it already had, so
+  // a CRLF page does not come back as a whole-file diff the first time someone
+  // fixes a typo in it.
+  const newline = await newlineStyleOnDisk(file);
+  await Deno.writeTextFile(file, toFileText(content, newline));
+  // `content` is echoed, not re-read: it is the document the caller holds, and
+  // the page marks its buffer clean against it. The disk bytes differ from it
+  // by line endings, which is what `newline` records.
+  return await describeFile(root, path, content, newline);
 }
 
 export async function createVaultFile(
@@ -202,7 +220,8 @@ export async function createVaultFile(
       throw error;
     },
   );
-  return await describeFile(root, path, content);
+  // A file with no history has no convention to preserve, so it takes ours.
+  return await describeFile(root, path, content, "\n");
 }
 
 /** Browse one folder level for the in-app vault picker. */
@@ -283,10 +302,86 @@ async function describeFile(
   root: string,
   path: string,
   content: string,
+  newline: NewlineStyle,
 ): Promise<VaultFileContents> {
   const normalized = normalizeVaultPath(path);
   const info = await Deno.stat(await resolveVaultFile(root, normalized));
-  return { path: normalized, content, modified: info.mtime?.getTime() ?? 0 };
+  return {
+    path: normalized,
+    content,
+    modified: info.mtime?.getTime() ?? 0,
+    newline,
+  };
+}
+
+/**
+ * The editor's document model holds LF, and only LF: a `<textarea>` normalizes
+ * line endings when text is assigned to it, and CodeMirror's document does the
+ * same on the way in. Neither can hand back the ending a file arrived with, so
+ * the conversion lives here — on the way in, and again on the way out — rather
+ * than being an editor's problem to get wrong.
+ */
+export function toEditorText(text: string): string {
+  return text.replace(/\r\n|\r/g, "\n");
+}
+
+/** Put a file's own line endings back on the way out. */
+export function toFileText(text: string, newline: NewlineStyle): string {
+  const lines = toEditorText(text);
+  return newline === "\n" ? lines : lines.replace(/\n/g, newline);
+}
+
+/**
+ * A file's prevailing line ending, so saving only rewrites what changed.
+ * Ties go to CRLF: genuinely mixed files are normalized to their richer
+ * convention rather than silently downgraded to LF.
+ */
+export function detectNewlineStyle(text: string): NewlineStyle {
+  const counts: Record<NewlineStyle, number> = { "\r\n": 0, "\n": 0, "\r": 0 };
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (char === "\r") {
+      if (text[at + 1] === "\n") {
+        counts["\r\n"] += 1;
+        at += 1;
+      } else {
+        counts["\r"] += 1;
+      }
+    } else if (char === "\n") {
+      counts["\n"] += 1;
+    }
+  }
+  // Strictly greater, first one in this order wins a tie: a Windows file with
+  // one stray LF line is CRLF, not "mixed, so maybe LF". A file with no line
+  // breaks at all is the app's own convention.
+  let best: NewlineStyle = "\n";
+  let bestCount = 0;
+  for (const style of ["\r\n", "\r", "\n"] as NewlineStyle[]) {
+    if (counts[style] > bestCount) {
+      best = style;
+      bestCount = counts[style];
+    }
+  }
+  return best;
+}
+
+/** Enough of a file to see how it breaks lines, without reading all of it. */
+const NEWLINE_SAMPLE_BYTES = 64 * 1024;
+
+async function newlineStyleOnDisk(file: string): Promise<NewlineStyle> {
+  let handle: Deno.FsFile | undefined;
+  try {
+    handle = await Deno.open(file, { read: true });
+    const sample = new Uint8Array(NEWLINE_SAMPLE_BYTES);
+    const read = await handle.read(sample);
+    const seen = sample.subarray(0, read ?? 0);
+    return detectNewlineStyle(new TextDecoder().decode(seen));
+  } catch {
+    // A file that is not there yet has no convention, so it takes the app's.
+    return "\n";
+  } finally {
+    handle?.close();
+  }
 }
 
 /** Candidate starting points for the vault picker, existing folders only. */

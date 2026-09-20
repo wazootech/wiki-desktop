@@ -3,10 +3,12 @@ import { join } from "node:path";
 import {
   browseDirectory,
   createVaultFile,
+  detectNewlineStyle,
   isInsideRoot,
   listVaultFiles,
   normalizeVaultPath,
   readVaultFile,
+  toEditorText,
   VaultError,
   writeVaultFile,
 } from "./vault.ts";
@@ -45,6 +47,108 @@ async function withTempVault(
     await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 }
+
+/**
+ * The app's core promise: what you did not touch, it does not rewrite.
+ *
+ * A document model can only hold one line ending — a `<textarea>` normalizes
+ * on assignment and so does CodeMirror's document — so the file's own
+ * convention is preserved here, at the boundary, in both directions.
+ */
+Deno.test("reading and writing a file leaves every byte it did not change", async () => {
+  const cases = [
+    { name: "LF", newline: "\n", body: "# Title\n\nBody line.\n" },
+    { name: "CRLF", newline: "\r\n", body: "# Title\r\n\r\nBody line.\r\n" },
+    { name: "classic CR", newline: "\r", body: "# Title\r\rBody line.\r" },
+    // A BOM is the front matter's invisible neighbour: it is the first thing
+    // the YAML parser sees, and an editor that drops it rewrites page one of
+    // every file it opens. Neither editor can hold one either — the reading is
+    // done with a text decoder that keeps it as a character.
+    {
+      name: "BOM + CRLF",
+      newline: "\r\n",
+      body: "\uFEFF# Title\r\n\r\nBody line.\r\n",
+    },
+  ] as const;
+
+  await withTempVault(async (root) => {
+    for (const testCase of cases) {
+      await Deno.writeTextFile(join(root, "page.md"), testCase.body);
+
+      const read = await readVaultFile(root, "page.md");
+      assertEqual(
+        read.newline,
+        testCase.newline,
+        `${testCase.name}: the file's own line ending is reported`,
+      );
+      assertEqual(
+        read.content.includes("\r"),
+        false,
+        `${testCase.name}: the editor is handed LF only`,
+      );
+
+      // Saving without editing must reproduce the original bytes exactly.
+      const saved = await writeVaultFile(root, "page.md", read.content);
+      assertEqual(
+        await Deno.readTextFile(join(root, "page.md")),
+        testCase.body,
+        `${testCase.name}: an untouched save is byte-identical`,
+      );
+      // The page marks its buffer clean against what a save returns, so that
+      // has to stay the document text: handing back the disk bytes instead
+      // would leave a CRLF file reading as dirty the moment it was typed in.
+      assertEqual(
+        saved.content,
+        read.content,
+        `${testCase.name}: a save echoes the document, not the disk bytes`,
+      );
+      assertEqual(
+        saved.newline,
+        testCase.newline,
+        `${testCase.name}: a save reports the ending it wrote`,
+      );
+
+      // An edit changes the edited line and nothing else — in particular it
+      // does not convert the whole file's line endings.
+      const edited = read.content.replace("Body line.", "Edited body line.");
+      await writeVaultFile(root, "page.md", edited);
+      assertEqual(
+        await Deno.readTextFile(join(root, "page.md")),
+        testCase.body.replace("Body line.", "Edited body line."),
+        `${testCase.name}: an edit keeps the file's line endings`,
+      );
+    }
+  });
+});
+
+Deno.test("a new file takes the app's own line ending", async () => {
+  await withTempVault(async (root) => {
+    const created = await createVaultFile(root, "fresh.md", "one\ntwo\n");
+    assertEqual(created.newline, "\n", "a created file reports LF");
+    assertEqual(
+      await Deno.readTextFile(join(root, "fresh.md")),
+      "one\ntwo\n",
+      "a created file is written with LF",
+    );
+  });
+});
+
+Deno.test("detectNewlineStyle picks the ending a file actually uses", () => {
+  assertEqual(detectNewlineStyle("a\nb\n"), "\n", "LF");
+  assertEqual(detectNewlineStyle("a\r\nb\r\n"), "\r\n", "CRLF");
+  assertEqual(detectNewlineStyle("a\rb\r"), "\r", "classic CR");
+  assertEqual(detectNewlineStyle("single line"), "\n", "no breaks at all");
+  assertEqual(
+    detectNewlineStyle("a\r\nb\nc\nd\r\n"),
+    "\r\n",
+    "a mixed file follows its dominant ending",
+  );
+  assertEqual(
+    toEditorText("a\r\nb\rc\nd"),
+    "a\nb\nc\nd",
+    "every convention normalizes to LF for the editor",
+  );
+});
 
 Deno.test("normalizeVaultPath accepts nested vault-relative paths", () => {
   assertEqual(normalizeVaultPath("notes/today.md"), "notes/today.md", "plain");
