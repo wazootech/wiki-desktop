@@ -56,9 +56,9 @@ operation (`createVaultApi()`), so the path guards below apply to both.
 
 `deno task check:appearance` opens the actual window, serves the app's own
 document six times — every stored preference against a dark and a light desktop
-— and reads the answer back out of the running page. It takes about ten seconds,
-needs a display, and exits non-zero on failure, which is why CI type-checks it
-and does not run it.
+— opens a document in the editor, and reads the answers back out of the running
+page. It takes about ten seconds, needs a display, and exits non-zero on
+failure, which is why CI type-checks it and does not run it.
 
 It exists because two of the claims the palette rests on cannot be settled
 anywhere else. The unit tests read the page as a string, so they can see that
@@ -84,6 +84,16 @@ reaching `setTheme`, and measures, per case:
 - **pinning** one through `window.wikiRunCommand`: it must reach `setTheme`
   through the bindings, check the right item in the menu, and ignore the
   desktop; and handing it back to `system` must follow the desktop again.
+- **the editor's own skin** — a fixture document is opened by clicking it in the
+  sidebar, and after every one of those mode changes the panel, the gutter, the
+  active-line tints, and every highlighted span are compared against that mode's
+  tokens. The gutter is the reason this is here: its colour comes from a theme
+  extension in `src/editor.ts`, because CodeMirror injects its base theme after
+  the page's stylesheet and a rule written in the page loses. Whether the
+  extension wins is a fact about cascade order, which only an engine settles.
+  Finally the two modes are compared with each other, which is the one claim no
+  single case can make on its own: a skin applied once and never updated looks
+  correct in whichever mode the app happened to launch in.
 
 One line per check, so it reads as a table or as a gate. Worth knowing when it
 fails: it is the only place the appearance is exercised by the engine that
@@ -157,7 +167,8 @@ pre-paint path here is the real one, not a model of it.
   and the theme is a CodeMirror extension — CodeMirror injects its base theme
   _after_ the page's stylesheet with an extra class of specificity, so a
   page-written `.cm-gutters` rule loses and the gutter renders light grey in
-  dark mode.
+  dark mode. That the extension wins is checked in the real webview rather than
+  assumed, by `deno task check:appearance`.
 - **Line endings** — the editor's document holds LF only, and the file keeps the
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a

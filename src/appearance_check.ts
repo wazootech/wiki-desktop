@@ -21,6 +21,14 @@
  * stylesheet declares for that mode are the ones the engine resolves, flipping
  * the desktop moves the mode only while the preference is `system`, and pinning
  * one stores it through the bindings and stops following the desktop.
+ *
+ * It also opens a real document and checks the editor's skin after every one of
+ * those mode changes, because the editor is the one part of the interface whose
+ * colours are not decided by src/page.ts alone: CodeMirror injects its base
+ * theme after the page's stylesheet with an extra class of specificity, so a
+ * rule written in the page loses, and the gutter renders light grey inside a
+ * dark editor. That the theme extension wins is a claim about cascade order,
+ * which only an engine can settle.
  */
 import { THEME_PREFERENCES, type ThemePreference } from "./config.ts";
 import { editorScriptResponse, isEditorScript } from "./editor_asset.ts";
@@ -78,6 +86,45 @@ const CHECKED_TOKENS: ReadonlyArray<readonly [string, keyof Reading]> = [
   ["--text-editor", "textEditor"],
 ];
 
+/**
+ * The tokens the editor's own skin is expected to follow, by name.
+ *
+ * The editor's theme in src/editor.ts points every one of its values at a
+ * custom property, so the expected colour for a piece of the editor is always
+ * "whatever the page declares for this token in this mode" — no palette is
+ * restated here.
+ */
+const SKIN_TOKENS = [
+  "--panel",
+  "--panel-muted",
+  "--text-editor",
+  "--text-faint",
+  "--text-soft",
+  "--line",
+  "--surface-hover",
+];
+
+/**
+ * A document for the editor to paint.
+ *
+ * Deliberately one line per construct whose colour the highlight style sets, so
+ * a mode that highlights nothing — or highlights it in CodeMirror's default
+ * palette rather than the app's tokens — is visible rather than assumed.
+ */
+const FIXTURE = [
+  "# Skin fixture",
+  "",
+  "A *test* of **strong** and [a link](https://example.org).",
+  "",
+  "Inline `code` and a marker, then:",
+  "",
+  "> a quote",
+  "",
+].join("\n");
+
+/** Enough of the first line for the editor to prove it holds the fixture. */
+const FIXTURE_MARKER = "Skin fixture";
+
 /** The declarations of one `{ ... }` block, keyed by custom property name. */
 function declarations(block: string): Map<string, string> {
   const found = new Map<string, string>();
@@ -102,13 +149,29 @@ function blockFor(selector: string): Map<string, string> {
 const LIGHT = blockFor(":root {");
 const DARK = blockFor(':root[data-theme="dark"]');
 for (const tokens of [LIGHT, DARK]) {
-  for (const [name] of CHECKED_TOKENS) {
+  for (
+    const name of [...CHECKED_TOKENS.map(([name]) => name), ...SKIN_TOKENS]
+  ) {
     if (!tokens.has(name)) {
       throw new Error(
         `a palette in src/page.ts does not declare ${name}, which this check compares`,
       );
     }
   }
+}
+
+/** Every `--syntax-*` colour of one mode, as the browser would report it. */
+function syntaxPalette(mode: Mode): Set<string> {
+  const painted = new Set<string>();
+  for (const [name, value] of tokensFor(mode)) {
+    if (name.startsWith("--syntax-")) painted.add(toRgb(value));
+  }
+  if (painted.size < 5) {
+    throw new Error(
+      `src/page.ts declares only ${painted.size} syntax colours, so this check has little to paint with`,
+    );
+  }
+  return painted;
 }
 
 function tokensFor(mode: Mode): Map<string, string> {
@@ -176,23 +239,43 @@ function injectedHead(c: AppearanceCase): string {
 <script>
   window.__persisted = [];
   window.__stateServed = false;
+  // A vault with one file, so the editor can be given a real document to
+  // paint: the skin is not visible on an empty one. Nothing on disk is
+  // involved — every operation answers from here.
+  const state = {
+    root: "/vault",
+    name: "vault",
+    recents: [],
+    sidebarCollapsed: false,
+    sidebarWidth: 250,
+    theme: ${JSON.stringify(c.stored)},
+  };
   window.bindings = {
     getState: function () {
       window.__stateServed = true;
-      window.__servedTheme = ${JSON.stringify(c.stored)};
+      window.__servedTheme = state.theme;
+      return Promise.resolve(state);
+    },
+    listFiles: function () {
+      return Promise.resolve([
+        { path: "skin.md", name: "skin.md", isMarkdown: true, scope: "input" },
+      ]);
+    },
+    readFile: function (path) {
       return Promise.resolve({
-        root: null,
-        name: null,
-        recents: [],
-        sidebarCollapsed: false,
-        sidebarWidth: 250,
-        theme: window.__servedTheme,
+        path: path, content: ${JSON.stringify(FIXTURE)},
+        modified: 0, newline: "\\n",
       });
     },
     setTheme: function (theme) {
       window.__persisted.push(theme);
-      return Promise.resolve({ theme: theme });
+      state.theme = theme;
+      return Promise.resolve(state);
     },
+    // The page stores these as it goes, so they are answered rather than left
+    // to throw: an unimplemented binding shows up as a toast.
+    setSidebarCollapsed: function () { return Promise.resolve(state); },
+    setSidebarWidth: function () { return Promise.resolve(state); },
   };
 </script>
 <script>
@@ -239,6 +322,18 @@ const READ = `(() => {
   const meta = document.querySelector('meta[name="theme-color"]');
   const checked = document.querySelector('.menu-item[aria-checked="true"]');
   const label = checked ? checked.querySelector('.menu-item-label') : null;
+  const editor = document.querySelector('.cm-editor');
+  const content = document.querySelector('.cm-content');
+  const gutters = document.querySelector('.cm-gutters');
+  const activeLine = document.querySelector('.cm-activeLine');
+  const activeLineNumber = document.querySelector('.cm-activeLineGutter');
+  const painted = [];
+  for (const span of document.querySelectorAll('.cm-content .cm-line span')) {
+    painted.push({
+      text: span.textContent,
+      color: getComputedStyle(span).color,
+    });
+  }
   return {
     case: window.__case,
     errors: window.__errors.slice(0, 4),
@@ -258,6 +353,20 @@ const READ = `(() => {
     persisted: window.__persisted.slice(),
     checkedLabel: label ? label.textContent : null,
     canRunCommands: typeof window.wikiRunCommand === 'function',
+    statusPath: document.getElementById('statusPath')
+      ? document.getElementById('statusPath').textContent : null,
+    documentText: content ? content.textContent : null,
+    skin: {
+      editorBackground: editor ? getComputedStyle(editor).backgroundColor : null,
+      editorColor: editor ? getComputedStyle(editor).color : null,
+      contentColor: content ? getComputedStyle(content).color : null,
+      gutterBackground: gutters ? getComputedStyle(gutters).backgroundColor : null,
+      gutterColor: gutters ? getComputedStyle(gutters).color : null,
+      gutterBorder: gutters ? getComputedStyle(gutters).borderRightColor : null,
+      activeLineBackground: activeLine ? getComputedStyle(activeLine).backgroundColor : null,
+      activeLineNumberColor: activeLineNumber ? getComputedStyle(activeLineNumber).color : null,
+      painted: painted,
+    },
   };
 })()`;
 
@@ -280,6 +389,22 @@ interface Reading {
   persisted: string[];
   checkedLabel: string | null;
   canRunCommands: boolean;
+  statusPath: string | null;
+  documentText: string | null;
+  skin: SkinReading;
+}
+
+/** The editor's own appearance, read off its rendered DOM. */
+interface SkinReading {
+  editorBackground: string | null;
+  editorColor: string | null;
+  contentColor: string | null;
+  gutterBackground: string | null;
+  gutterColor: string | null;
+  gutterBorder: string | null;
+  activeLineBackground: string | null;
+  activeLineNumberColor: string | null;
+  painted: { text: string; color: string }[];
 }
 
 /**
@@ -345,6 +470,28 @@ async function waitForPage(c: AppearanceCase): Promise<boolean> {
   return false;
 }
 
+/**
+ * Open the fixture the way a user does — by clicking it in the sidebar — and
+ * wait until the editor is holding it.
+ *
+ * Clicking rather than calling in means the document arrives through the app's
+ * own path (readFile, a new tab, showDocument), so what is measured afterwards
+ * is the editor the app builds, not one this check assembled.
+ */
+async function openFixture(): Promise<boolean> {
+  await evaluate("document.querySelector('.file-button').click(), true");
+  const marker = JSON.stringify(FIXTURE_MARKER);
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const up = await evaluate(
+      `(document.querySelector('.cm-content') || {}).textContent` +
+        ` && document.querySelector('.cm-content').textContent.includes(${marker})`,
+    ).catch(() => false);
+    if (up === true) return true;
+    await settle(100);
+  }
+  return false;
+}
+
 interface Report {
   failures: number;
   check(label: string, ok: boolean, detail?: string): void;
@@ -366,6 +513,110 @@ function newReport(): Report {
       console.log(`       ${label}: ${value}`);
     },
   };
+}
+
+/**
+ * The editor's own skin, against the tokens of the mode it should be in.
+ *
+ * Every expectation is a token value read out of that mode's palette, so this
+ * catches the two ways the editor can be wrong: painting something the app never
+ * declared (CodeMirror's base theme winning the cascade, which is how the
+ * gutter went light grey inside a dark editor) and keeping the other mode's
+ * colours (a theme applied once and never updated).
+ */
+function checkSkin(report: Report, reading: Reading, mode: Mode): void {
+  const tokens = tokensFor(mode);
+  const want = (name: string) => toRgb(String(tokens.get(name)));
+  const skin = reading.skin;
+
+  report.check(
+    `the editor paints the ${mode} tokens`,
+    skin.editorBackground === want("--panel") &&
+      skin.editorColor === want("--text-editor"),
+    `background=${skin.editorBackground} ink=${skin.editorColor}, expected ${
+      want("--panel")
+    } and ${want("--text-editor")}`,
+  );
+  report.check(
+    "the gutter keeps the app's palette rather than CodeMirror's base theme",
+    skin.gutterBackground === want("--panel-muted") &&
+      skin.gutterColor === want("--text-faint") &&
+      skin.gutterBorder === want("--line"),
+    `background=${skin.gutterBackground} ink=${skin.gutterColor} border=${skin.gutterBorder}, expected ${
+      want("--panel-muted")
+    }, ${want("--text-faint")}, ${want("--line")}`,
+  );
+  report.check(
+    "the document text inherits the editor's ink",
+    skin.contentColor === want("--text-editor"),
+    `.cm-content ink=${skin.contentColor}, expected ${want("--text-editor")}`,
+  );
+  report.check(
+    "the active line and its number carry the active tints",
+    skin.activeLineBackground === want("--surface-hover") &&
+      skin.activeLineNumberColor === want("--text-soft"),
+    `line=${skin.activeLineBackground} number=${skin.activeLineNumberColor}, expected ${
+      want("--surface-hover")
+    } and ${want("--text-soft")}`,
+  );
+
+  const palette = syntaxPalette(mode);
+  const foreign = skin.painted.filter((span) =>
+    span.color !== want("--text-editor") && !palette.has(span.color)
+  );
+  report.check(
+    `every highlighted span uses the ${mode} syntax palette`,
+    foreign.length === 0,
+    foreign.length === 0
+      ? skin.painted.map((span) => `${JSON.stringify(span.text)}=${span.color}`)
+        .join(" ")
+      : foreign.map((span) =>
+        `${JSON.stringify(span.text)} painted ${span.color}`
+      )
+        .join("; "),
+  );
+  const lit = new Set(
+    skin.painted.map((span) => span.color).filter((color) =>
+      palette.has(color)
+    ),
+  );
+  report.check(
+    "the fixture really lights the grammar up",
+    lit.size >= 3,
+    `${lit.size} syntax colours painted: ${[...lit].join(" ")}`,
+  );
+}
+
+/** What each mode painted, so the two can be compared after every case ran. */
+const firstSkin = new Map<Mode, SkinReading>();
+
+/** The last skin this case read, so an unchanged mode costs one line. */
+let previousSkin: { mode: Mode; skin: SkinReading } | null = null;
+
+/**
+ * The skin at one point in the case.
+ *
+ * When the mode did not change, the claim is the opposite one — the palette had
+ * to stay put — so it is asserted as a comparison against the previous reading
+ * rather than by repeating checks that would pass by saying nothing.
+ */
+function checkSkinStep(report: Report, reading: Reading, mode: Mode): void {
+  if (previousSkin !== null && previousSkin.mode === mode) {
+    const held =
+      JSON.stringify(previousSkin.skin) === JSON.stringify(reading.skin);
+    report.check(
+      `the editor stays on the ${mode} palette while the mode does`,
+      held,
+      held
+        ? "identical to the reading before it"
+        : `was ${JSON.stringify(previousSkin.skin)}, now ${
+          JSON.stringify(reading.skin)
+        }`,
+    );
+    return;
+  }
+  checkSkin(report, reading, mode);
+  previousSkin = { mode, skin: reading.skin };
 }
 
 /**
@@ -403,7 +654,26 @@ async function runCase(
 
   const mode = expectedMode(c);
   const tokens = tokensFor(mode);
+  previousSkin = null;
+
+  if (!await openFixture()) {
+    report.check(
+      "the editor is holding the fixture",
+      false,
+      "clicking the sidebar's first file never put it on screen",
+    );
+    return false;
+  }
   const loaded = await read();
+  report.check(
+    "the fixture arrived through the app's own path",
+    loaded.statusPath === "skin.md" &&
+      (loaded.documentText ?? "").includes(FIXTURE_MARKER),
+    `status=${loaded.statusPath} editor holds ${
+      loaded.documentText?.length ?? 0
+    } characters`,
+  );
+  if (!firstSkin.has(mode)) firstSkin.set(mode, loaded.skin);
 
   report.check(
     "the mode is settled before the body exists",
@@ -461,6 +731,8 @@ async function runCase(
     loaded.persisted.length === 0,
     `setTheme called with ${JSON.stringify(loaded.persisted)}`,
   );
+  checkSkin(report, loaded, mode);
+  previousSkin = { mode, skin: loaded.skin };
 
   // 2. The desktop flips under the page. Only a `system` preference may follow.
   const flipped = { ...c, desktop: otherMode(c.desktop) };
@@ -474,6 +746,7 @@ async function runCase(
     afterFlip.mode === wantedOnFlip,
     `desktop=${afterFlip.desktop} mode=${afterFlip.mode}, expected ${wantedOnFlip}`,
   );
+  checkSkinStep(report, afterFlip, afterFlip.mode as Mode);
 
   // 3. Pin the opposite of what is on, through the page's own command.
   const pinned = otherMode(mode);
@@ -492,6 +765,7 @@ async function runCase(
     afterPin.persisted[afterPin.persisted.length - 1] === pinned,
     `setTheme called with ${JSON.stringify(afterPin.persisted)}`,
   );
+  checkSkinStep(report, afterPin, pinned);
   const menuAfterPin = await readWithMenuOpen();
   report.check(
     "the menu checks the chosen appearance",
@@ -508,6 +782,7 @@ async function runCase(
     afterSecondFlip.mode === pinned,
     `desktop=${afterSecondFlip.desktop} mode=${afterSecondFlip.mode}`,
   );
+  checkSkinStep(report, afterSecondFlip, pinned);
 
   // 5. Hand it back: `system` follows the desktop again, as it did on launch.
   await evaluate(`window.wikiRunCommand("theme-system")`);
@@ -518,6 +793,8 @@ async function runCase(
     afterSystem.mode === back,
     `desktop=${afterSystem.desktop} mode=${afterSystem.mode}, expected ${back}`,
   );
+  checkSkinStep(report, afterSystem, back);
+  if (!firstSkin.has(back)) firstSkin.set(back, afterSystem.skin);
   const menuAfterSystem = await readWithMenuOpen();
   report.check(
     "the menu checks `Match the system` again",
@@ -542,6 +819,23 @@ async function drive(): Promise<void> {
   for (const [index, c] of CASES.entries()) {
     if (!await runCase(report, c, index)) break;
   }
+
+  // Last, the comparison no single case can make: a skin that is applied once
+  // and never updated passes every "follows this mode's tokens" check by
+  // accident when it happens to be the mode the app launched in.
+  const light = firstSkin.get("light");
+  const dark = firstSkin.get("dark");
+  report.check(
+    "the two modes paint two different editors",
+    light !== undefined && dark !== undefined &&
+      light.editorBackground !== dark.editorBackground &&
+      light.gutterBackground !== dark.gutterBackground &&
+      light.gutterColor !== dark.gutterColor &&
+      light.contentColor !== dark.contentColor &&
+      light.activeLineBackground !== dark.activeLineBackground,
+    `light editor=${light?.editorBackground} gutter=${light?.gutterBackground}; ` +
+      `dark editor=${dark?.editorBackground} gutter=${dark?.gutterBackground}`,
+  );
 
   console.log("");
   if (report.failures === 0) {
