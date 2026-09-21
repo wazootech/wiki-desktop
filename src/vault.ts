@@ -1,6 +1,13 @@
 import { basename, dirname, join, resolve, sep } from "node:path";
 
 import { homeDirectory } from "./config.ts";
+import {
+  isExcludedVaultPath,
+  readWikiConfig,
+  scopeOf,
+  type VaultScope,
+  type WikiConfig,
+} from "./wiki_config.ts";
 
 const MARKDOWN_EXTENSIONS = [".md", ".markdown"];
 const IGNORED_DIRECTORY_NAMES = new Set([
@@ -32,6 +39,12 @@ export interface VaultFile {
   path: string;
   name: string;
   isMarkdown: boolean;
+  /**
+   * What the vault's own config calls this file: a page (`input`), a static
+   * file (`asset`), or neither (`other`, which is everything when there is no
+   * config to say otherwise).
+   */
+  scope: VaultScope;
 }
 
 /** The line ending a file uses on disk. The editor only ever holds LF. */
@@ -155,17 +168,41 @@ export async function resolveVaultFile(
   return resolved;
 }
 
-/** List every editable file in the vault, Markdown first. */
+/**
+ * List the vault's files, the wiki's own pages first.
+ *
+ * `wiki.yml` decides the shape of this: files under `wiki.input` are the pages
+ * and come first, files under `wiki.assets` are the vault's static files and
+ * come last, and anything matching `wiki.exclude` is left out. A vault with no
+ * usable config gets every file, Markdown first — exactly the order this
+ * returned before the config was read.
+ */
 export async function listVaultFiles(root: string): Promise<VaultFile[]> {
   const realRoot = await assertVaultRoot(root);
+  const config = await readWikiConfig(realRoot);
   const files: VaultFile[] = [];
-  await walk(realRoot, realRoot, 0, files);
-  return files.sort((left, right) => {
-    if (left.isMarkdown !== right.isMarkdown) {
-      return left.isMarkdown ? -1 : 1;
-    }
-    return left.path.localeCompare(right.path, undefined, { numeric: true });
-  });
+  await walk(realRoot, realRoot, 0, files, config);
+  return files.sort(compareVaultFiles);
+}
+
+/**
+ * Pages, then everything else, then the vault's static files; Markdown before
+ * other files inside each group, then by path with numbers read as numbers.
+ */
+const SCOPE_ORDER: Record<VaultScope, number> = {
+  input: 0,
+  other: 1,
+  asset: 2,
+};
+
+function compareVaultFiles(left: VaultFile, right: VaultFile): number {
+  if (left.scope !== right.scope) {
+    return SCOPE_ORDER[left.scope] - SCOPE_ORDER[right.scope];
+  }
+  if (left.isMarkdown !== right.isMarkdown) {
+    return left.isMarkdown ? -1 : 1;
+  }
+  return left.path.localeCompare(right.path, undefined, { numeric: true });
 }
 
 export async function readVaultFile(
@@ -267,6 +304,7 @@ async function walk(
   directory: string,
   depth: number,
   out: VaultFile[],
+  config: WikiConfig,
 ): Promise<void> {
   if (depth > MAX_WALK_DEPTH || out.length >= MAX_VAULT_FILES) return;
   const entries: Deno.DirEntry[] = [];
@@ -282,18 +320,25 @@ async function walk(
     if (out.length >= MAX_VAULT_FILES) return;
     if (entry.name.startsWith(".")) continue;
     const full = join(directory, entry.name);
+    // An excluded folder is never entered, so its contents cost nothing and
+    // cannot reappear one level down.
+    if (isExcludedVaultPath(toVaultPath(root, full), config.excludes)) {
+      continue;
+    }
     if (entry.isDirectory) {
       if (IGNORED_DIRECTORY_NAMES.has(entry.name)) continue;
-      await walk(root, full, depth + 1, out);
+      await walk(root, full, depth + 1, out, config);
       continue;
     }
     if (!entry.isFile) continue;
+    const path = toVaultPath(root, full);
     out.push({
-      path: toVaultPath(root, full),
+      path,
       name: entry.name,
       isMarkdown: MARKDOWN_EXTENSIONS.some((extension) =>
         entry.name.endsWith(extension)
       ),
+      scope: scopeOf(path, config),
     });
   }
 }

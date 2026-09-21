@@ -317,6 +317,16 @@ const pageTemplate = `<!DOCTYPE html>
       font-size: 12px;
     }
     .filter::placeholder { color: var(--text-faint); }
+    /*
+     * The vault's own config decides what is a page and what is a static file.
+     * The checkbox only appears in a vault that declares assets, since a vault
+     * without the config has no such distinction to show.
+     */
+    .assets-toggle {
+      display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+      color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer;
+    }
+    .assets-toggle input { margin: 0; }
 
     .file-list { flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none; }
     .file-button {
@@ -337,6 +347,8 @@ const pageTemplate = `<!DOCTYPE html>
     }
     .file-button.is-active { color: var(--brand-text); background: var(--brand-soft); font-weight: 700; }
     .file-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Listed rather than hidden, but visibly not one of the wiki's pages. */
+    .file-button.is-asset { opacity: .62; }
     .file-dir { display: block; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
     .sidebar-status {
@@ -604,6 +616,9 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="file-tools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+        <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
+          <input type="checkbox" id="showAssets" />Assets
+        </label>
         <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>+</button>
       </div>
 
@@ -763,6 +778,8 @@ const pageTemplate = `<!DOCTYPE html>
       const vaultName = el('vaultName');
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
+      const assetsToggle = el('assetsToggle');
+      const showAssetsInput = el('showAssets');
       const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
@@ -1187,29 +1204,39 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       function renderFiles() {
+        // The vault's own config says which files are the wiki's pages. Its
+        // static files are one tick away by default, because a build output
+        // folder beside 400 pages is not what a wiki looks like.
+        const hasAssets = files.some((file) => file.scope === 'asset');
+        assetsToggle.hidden = !hasAssets;
+        // An empty vault should not leave a checkbox ticking nothing.
+        if (!hasAssets) showAssetsInput.checked = false;
+        const listed = showAssetsInput.checked
+          ? files
+          : files.filter((file) => file.scope !== 'asset');
         const query = filterInput.value.trim().toLowerCase();
         const visible = query
-          ? files.filter((file) => file.path.toLowerCase().indexOf(query) !== -1)
-          : files;
+          ? listed.filter((file) => file.path.toLowerCase().indexOf(query) !== -1)
+          : listed;
         const openPaths = new Set(tabs.map((tab) => tab.path));
         const active = activeTab();
         fileList.textContent = '';
         if (vault.root === null) {
           fileCount.textContent = 'No vault open';
         } else if (visible.length === 0) {
-          fileCount.textContent = files.length === 0
+          fileCount.textContent = listed.length === 0
             ? 'No files in this vault'
             : 'No files match "' + filterInput.value.trim() + '"';
           const empty = document.createElement('li');
           empty.className = 'file-empty';
-          empty.textContent = files.length === 0
+          empty.textContent = listed.length === 0
             ? 'This folder has no files yet. Create one with New.'
             : 'Try a different filter.';
           fileList.appendChild(empty);
         } else {
           fileCount.textContent = visible.length +
             (visible.length === 1 ? ' file' : ' files') +
-            (visible.length === files.length ? '' : ' of ' + files.length);
+            (visible.length === listed.length ? '' : ' of ' + listed.length);
         }
 
         for (const file of visible) {
@@ -1219,6 +1246,7 @@ const pageTemplate = `<!DOCTYPE html>
           button.className = 'file-button';
           if (active !== null && active.path === file.path) button.classList.add('is-active');
           else if (openPaths.has(file.path)) button.classList.add('is-open');
+          if (file.scope === 'asset') button.classList.add('is-asset');
           const name = document.createElement('span');
           name.className = 'file-name';
           name.textContent = file.name;
@@ -1763,6 +1791,7 @@ const pageTemplate = `<!DOCTYPE html>
         saveButton.addEventListener('click', saveFile);
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
+        showAssetsInput.addEventListener('change', renderFiles);
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks

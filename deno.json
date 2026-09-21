@@ -5,11 +5,12 @@
     "build": "deno desktop --output wiki-desktop --allow-read --allow-write --allow-env src/main.ts",
     "dev:web": "deno run --allow-read --allow-write --allow-env --allow-net src/dev_server.ts",
     "build:editor": "deno bundle --platform browser --minify --quiet src/editor_entry.ts -o src/editor_bundle.js",
-    "check": "deno check --desktop src/main.ts src/dev_server.ts src/editor.ts src/editor_entry.ts src/appearance_check.ts",
+    "check": "deno check --desktop src/main.ts src/dev_server.ts src/editor.ts src/editor_entry.ts src/appearance_check.ts src/wiki_config.ts",
     "check:appearance": "deno desktop --hmr --allow-read --allow-write --allow-env --allow-net src/appearance_check.ts",
     "test": "deno test --allow-read --allow-write --allow-env --allow-net"
   },
   "imports": {
+    "@std/yaml": "jsr:@std/yaml@^1",
     "@codemirror/commands": "npm:@codemirror/commands@^6",
     "@codemirror/lang-markdown": "npm:@codemirror/lang-markdown@^6",
     "@codemirror/language": "npm:@codemirror/language@^6",

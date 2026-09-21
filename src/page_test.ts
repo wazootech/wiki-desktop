@@ -47,6 +47,8 @@ Deno.test("the tab strip's classes are all styled", () => {
     "is-dirty",
     "file-button",
     "is-open",
+    "is-asset",
+    "assets-toggle",
     "menu-popup",
     "menu-button",
     "menu-group",
