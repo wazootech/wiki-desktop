@@ -481,6 +481,55 @@ Deno.test("the collapsed layout keeps the workspace in a real track", () => {
   );
 });
 
+/**
+ * The page's stylesheet with its comments stripped.
+ *
+ * Both rules below are explained by a comment that names the very property
+ * being asserted on, so matching the raw text would find the prose rather
+ * than the declaration.
+ */
+function styleSheet(): string {
+  return page.slice(0, page.indexOf("</style>")).replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+}
+
+Deno.test("nothing is hidden past the edge of a narrow window", () => {
+  // The shell clips its overflow rather than scrolling it, so a min-width on
+  // the body is not a floor the layout grows into — it is a floor the window
+  // cannot shrink below, and everything past it is unreachable. At 280px the
+  // page menu sat at x=310 with no way to scroll to it.
+  const body = styleSheet().match(/\n\s*body\s*\{([^}]*)\}/);
+
+  assert(body !== null, "the page styles the body");
+  assert(
+    !/min-width/.test(body![1]),
+    "the body has no min-width, so a narrow window cannot clip its controls",
+  );
+});
+
+Deno.test("the vault picker keeps its actions inside a short window", () => {
+  // The dialog is a flex column with a max-height and overflow: hidden, so
+  // whichever row refuses to shrink is what pushes the footer out of view.
+  // Measured at 360x480 the footer overhung the dialog by 12px, taking Cancel
+  // and Use this folder with it.
+  const style = styleSheet();
+  const list = style.match(/\.dir-list\s*\{([^}]*)\}/);
+
+  assert(list !== null, "the page styles the folder list");
+  assert(
+    /min-height:\s*0/.test(list![1]),
+    "the folder list may shrink instead of pushing the dialog's actions away",
+  );
+  assert(
+    /\.dialog\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/.test(
+      style,
+    ),
+    "the dialog is the flex column those rows share",
+  );
+});
+
 Deno.test("the command menu is built from the command list", () => {
   // The popup ships empty, so the markup cannot drift from the list that
   // drives the enablement, and the list is the only place a command is named.

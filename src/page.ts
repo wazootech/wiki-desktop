@@ -165,7 +165,14 @@ const pageTemplate = `<!DOCTYPE html>
 
     body {
       margin: 0;
-      min-width: 320px;
+      /*
+       * No min-width: the shell clips its overflow, so a floor here would
+       * not scroll the overflow away — it would cut it off, and at a window
+       * narrower than the floor the right-hand controls (the page menu above
+       * all) sit past the edge with no way to reach them. The layout below is
+       * already built to shrink: the column turns into a drawer, and the text
+       * that cannot fit ellipsises.
+       */
       height: 100vh;
       overflow: hidden;
       background: var(--canvas);
@@ -485,7 +492,13 @@ const pageTemplate = `<!DOCTYPE html>
       color: var(--text-label); background: var(--panel-muted); font-size: 11.5px; font-weight: 600;
     }
     .chip:hover { border-color: var(--line-strong); background: var(--surface-raised); }
-    .dir-list { flex: 1; min-height: 120px; margin: 0; padding: 3px 10px 9px; overflow-y: auto; list-style: none; border-top: 1px solid var(--line); }
+    /*
+     * The list absorbs whatever the header and footer do not need, and is
+     * allowed to shrink to nothing: it is the only flexible row in the dialog,
+     * so a floor here is what pushes the footer past a short window's
+     * max-height and clips Cancel and Use this folder off the bottom.
+     */
+    .dir-list { flex: 1; min-height: 0; margin: 0; padding: 3px 10px 9px; overflow-y: auto; list-style: none; border-top: 1px solid var(--line); }
     .dir-button {
       display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px;
       border: 0; border-radius: 6px; color: var(--text-body); background: transparent; text-align: left; font-size: 12px;
@@ -544,6 +557,10 @@ const pageTemplate = `<!DOCTYPE html>
       .tabbar { flex-wrap: wrap; }
       .save-state { display: none; }
       .statusbar { flex-wrap: wrap; }
+      /* The picker's own margin is generous on a desktop window and a large
+         slice of a phone-width one, where it would otherwise cost the dialog
+         both width and height. */
+      .overlay { padding: 12px; }
     }
   </style>
   <script>

@@ -48,6 +48,14 @@ It is a development tool: it listens on loopback only and refuses cross-origin
 callers and non-JSON requests. Desktop and web share one implementation of every
 operation (`createVaultApi()`), so the path guards below apply to both.
 
+Both can run at once, and they can write settings at the same time — the desktop
+window persists its geometry on every resize, while the browser changes the
+appearance or the sidebar. `src/config.ts` is built for that: it re-reads the
+settings file instead of serving a snapshot, merges each patch onto what is on
+disk at the moment of the write, serialises the writes in a process, and renames
+a scratch file over the target so a reader never sees half a file. The cost is a
+file read per call, which the OS page cache makes nearly free.
+
 `deno check` needs the `--desktop` flag to see the desktop APIs; plain
 `deno check` reports
 `Property 'BrowserWindow' does not exist on type 'typeof Deno'`.
@@ -239,6 +247,15 @@ pre-paint path here is the real one, not a model of it.
 - Below 640px the sidebar is a drawer whose scrim covers the window, so the tab
   bar's own buttons — including the `☰` menu — are clickable once the drawer is
   dismissed (clicking anywhere outside does that).
+- The window has no minimum size in either direction. The shell clips its
+  overflow rather than scrolling it, so a `min-width` on the body would be a
+  floor the window cannot shrink below rather than one the layout grows into,
+  and every control past it would be unreachable; the layout instead shrinks,
+  the column becoming a drawer, and text that does not fit ellipsises. The vault
+  picker's folder list is the dialog's one flexible row, so a short window takes
+  its height from the list rather than pushing `Cancel` and `Use this folder`
+  out of the dialog. Verified down to 240x360 and across 641x600, 900x280 and
+  1200x300.
 - The native application menu is not projected; commands are the page's `☰`
   menu only, and accelerators work because the page handles the keys.
 - Files larger than 2 MiB and hidden files/directories are skipped.
