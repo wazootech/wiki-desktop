@@ -530,6 +530,26 @@ Deno.test("the vault picker keeps its actions inside a short window", () => {
   );
 });
 
+Deno.test("closing a vault clears the listing it was showing", () => {
+  // closeVault and switchVault both change which vault is open, so both have
+  // to reload the listing. renderFiles only redraws the array already in
+  // memory, which after a close is the previous vault's files — the sidebar
+  // kept listing 95 files under a header reading "No vault open".
+  assert(
+    /async function closeVault\(\)[\s\S]*?await loadFiles\(\)/.test(page),
+    "closeVault reloads the listing rather than redrawing the stale one",
+  );
+  assert(
+    /async function switchVault\([\s\S]*?await loadFiles\(\)/.test(page),
+    "and switching vaults reloads it the same way",
+  );
+  assert(
+    /async function loadFiles\(\)[\s\S]*?if \(vault\.root === null\) \{\s*files = \[\];/
+      .test(page),
+    "reloading with no vault open empties the listing",
+  );
+});
+
 Deno.test("the command menu is built from the command list", () => {
   // The popup ships empty, so the markup cannot drift from the list that
   // drives the enablement, and the list is the only place a command is named.

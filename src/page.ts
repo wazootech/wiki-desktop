@@ -1433,7 +1433,11 @@ const pageTemplate = `<!DOCTYPE html>
         applyState(state);
         renderTabs();
         updateStatus();
-        renderFiles();
+        // The listing belongs to the vault that just closed, so it goes with
+        // it. loadFiles is what clears it — renderFiles would redraw the old
+        // file list over an app that now has no vault at all. switchVault
+        // reloads the same way for the same reason.
+        await loadFiles();
       }
 
       // Vault picker
