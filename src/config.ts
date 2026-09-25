@@ -98,32 +98,98 @@ export function configPath(): string {
   return join(configDir(), CONFIG_FILE_NAME);
 }
 
-let cached: AppConfig | null = null;
-
 /**
  * Read the settings file. A missing, unreadable, or corrupt file falls back to
  * the defaults so a bad config can never prevent the app from starting.
+ *
+ * This reads on every call rather than serving a cached snapshot. The desktop
+ * window and the dev server are separate processes sharing one file, so a
+ * snapshot is precisely what makes one of them write back a setting the other
+ * changed in the meantime. The file is a few hundred bytes; the read is not
+ * worth the staleness.
  */
 export async function loadConfig(): Promise<AppConfig> {
-  if (cached) return cached;
   try {
-    const parsed = JSON.parse(await Deno.readTextFile(configPath()));
-    cached = sanitize(parsed);
+    return sanitize(JSON.parse(await Deno.readTextFile(configPath())));
   } catch {
-    cached = { ...DEFAULT_CONFIG };
+    return { ...DEFAULT_CONFIG };
   }
-  return cached;
 }
 
-/** Merge a patch into the settings file and return the stored result. */
+/**
+ * Updates waiting for their turn. Without it, two `updateConfig` calls in one
+ * process could both read the file, and whichever finished writing last would
+ * erase the other's patch.
+ */
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Merge a patch into the settings file and return the stored result.
+ *
+ * The merge happens inside the queue and reads the file first, so a patch is
+ * applied to what is on disk at that moment rather than to a snapshot taken
+ * when the caller started waiting. That is what makes a change in the desktop
+ * window and one in the browser both survive.
+ */
 export async function updateConfig(
   patch: Partial<AppConfig>,
 ): Promise<AppConfig> {
+  const stored = writeQueue.then(
+    () => writeConfig(patch),
+    () => writeConfig(patch),
+  );
+  // Keep a rejected write from poisoning the queue for everything behind it.
+  writeQueue = stored.then(() => {}, () => {});
+  return await stored;
+}
+
+async function writeConfig(patch: Partial<AppConfig>): Promise<AppConfig> {
   const next = sanitize({ ...(await loadConfig()), ...patch });
   await Deno.mkdir(configDir(), { recursive: true });
-  await Deno.writeTextFile(configPath(), JSON.stringify(next, null, 2) + "\n");
-  cached = next;
+  await writeAtomically(
+    configPath(),
+    JSON.stringify(next, null, 2) + "\n",
+  );
   return next;
+}
+
+/**
+ * Write to a scratch file and rename it over the target. A concurrent reader
+ * then sees either the whole old file or the whole new one, never half of
+ * either. The scratch file lives in the same directory, because a rename is
+ * only atomic within one filesystem, and carries the pid so two processes do
+ * not write over each other's scratch file.
+ */
+async function writeAtomically(path: string, contents: string): Promise<void> {
+  const scratch = `${path}.${Deno.pid}.tmp`;
+  try {
+    await Deno.writeTextFile(scratch, contents);
+    await renameWithRetry(scratch, path);
+  } catch (error) {
+    await Deno.remove(scratch).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Rename over the target, retrying briefly. On Windows the rename fails while
+ * another process happens to have the file open, which a read-then-write cycle
+ * makes likely rather than rare, and which is a retry rather than a lost
+ * setting.
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0;; attempt++) {
+    try {
+      await Deno.rename(from, to);
+      return;
+    } catch (error) {
+      const retryable = attempt < 5 &&
+        (error instanceof Deno.errors.NotFound ||
+          error instanceof Deno.errors.PermissionDenied);
+      if (!retryable) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
 }
 
 /** Move `root` to the front of the recent-vault list, newest first. */
