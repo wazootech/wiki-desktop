@@ -49,6 +49,17 @@ export interface AppConfig {
    * typed — the New file prompt, which has to carry the real name anyway.
    */
   showExtensions: boolean;
+  /**
+   * Whether the file list shows the folder each file sits in.
+   *
+   * That path is a second line under every row, so it roughly doubles the
+   * height of the list. In a vault that is one folder deep — the usual shape
+   * of a wiki — it is also the same word repeated down the whole column, and
+   * a reader scanning names would rather have the rows compact. Turned off,
+   * the folder is hidden here and the row's title still carries the full path
+   * for anyone who hovers it.
+   */
+  showPaths: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
   /** Light/dark appearance: `system` follows the OS, or the user pinned one. */
@@ -61,6 +72,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   window: null,
   sidebarCollapsed: false,
   showExtensions: true,
+  showPaths: true,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   theme: DEFAULT_THEME,
 };
@@ -237,6 +249,9 @@ function sanitize(value: unknown): AppConfig {
     // Only an explicit false turns it off: a config written before this
     // setting existed, or one where it is missing, keeps showing extensions.
     showExtensions: record.showExtensions !== false,
+    // The same rule as extensions, for the same reason: a config written
+    // before this setting existed keeps showing paths.
+    showPaths: record.showPaths !== false,
     sidebarWidth: clampSidebarWidth(Number(record.sidebarWidth)),
     theme: coerceTheme(record.theme),
   };
