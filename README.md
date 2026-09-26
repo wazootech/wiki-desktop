@@ -100,18 +100,18 @@ pre-paint path here is the real one, not a model of it.
 
 ## Layout
 
-| File                      | Role                                                                                                                                             |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/main.ts`             | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.         |
-| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                     |
-| `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                   |
-| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                  |
-| `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.    |
-| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance).         |
-| `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                           |
-| `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string. |
-| `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                    |
-| `src/editor_bundle.js`    | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact.                               |
+| File                      | Role                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main.ts`             | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.                                                                                                                                                                                                          |
+| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                                                                                                                                                                                                                      |
+| `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                                                                                                                                                                                                                    |
+| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                                                                                                                                                                                                                   |
+| `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.                                                                                                                                                                                                     |
+| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance).                                                                                                                                                                                                          |
+| `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
+| `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                                                  |
+| `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                                                                                                                                                                                                                     |
+| `src/editor_bundle.js`    | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact. CI rebuilds it and fails on any diff, which is the only way drift is visible: `deno task build` makes the binary, not the bundle, so a change to `src/editor.ts` can pass every other check and still serve the old behaviour. |
 
 ## How it works
 
@@ -155,6 +155,22 @@ pre-paint path here is the real one, not a model of it.
   attribute, so scrollbars, carets, and native controls match too, and the
   `theme-color` meta reads its value out of the stylesheet rather than repeating
   it.
+- **File extensions** — a checkbox in the file list's own toolbar, beside the
+  list it redraws and next to Assets, on by default. It started as an Appearance
+  menu command, which put it one level too far from the thing it controls: a
+  user looking at the file list had no reason to think the palette menu governed
+  it. The menu command remains, and the two drive one state, so either redraws
+  the other. A wiki is nearly all Markdown, so a column of `Getting_Started.md`
+  is noise once a page is open and the tab already names the file; turned off,
+  the list drops the extension and shows it only where a name is actually being
+  typed, which is the New file prompt and nowhere else. The tab strip and the
+  status bar keep it, because a tab is the document's identity rather than one
+  entry in a list of similar names. Only `.md` is dropped: a vault's own `.py`
+  and `.yml` files are few, and shortening those would make two different files
+  look alike. The toolbar wraps below 320px rather than clipping, and the two
+  checkboxes are grouped so they wrap as a pair instead of one per line. The row
+  still opens by path and carries it in its `title`, so the shorter label is
+  display only.
 - **Appearance** — `System`, `Light`, and `Dark`, under their own group in the
   menu, stored in the app config beside the sidebar width and restored on the
   next launch. They are rendered as radio items (`menuitemradio` +
@@ -168,6 +184,27 @@ pre-paint path here is the real one, not a model of it.
   re-reads from disk and never loses an edit; a dot marks unsaved work, × or a
   middle click closes, and `Save` writes the active tab only. The window's close
   handler asks the page which buffers are dirty, so the prompt names the count.
+- **Triple click selects the line** — CodeMirror recognises the gesture by
+  `event.detail`, which only the browser increments, and only while the clicks
+  land inside its own double-click threshold; a third click a moment late resets
+  the count and the gesture arrives as one more word selection. The clicks are
+  counted in the editor instead, over a window deliberately longer than that
+  threshold — Windows lets it be raised well past the 500ms default, and a
+  window that merely matched it would break on the very clicks it is meant to
+  rescue. This selects the whole _logical_ line rather than the visual one,
+  which on a wrapped paragraph is a fragment of what was aimed at, and leaves
+  the trailing newline out so deleting the selection does not join two
+  paragraphs. It runs as a `domEventObservers` handler because observers run
+  before the editor's own, and preventing the default there is what stops
+  CodeMirror adding a word selection on top.
+- **The vault's path row is shown only with no vault open** — with one open it
+  is the root, and that is the one piece of the sidebar header that is pure
+  decoration: the name already identifies the folder, and no sidebar wide enough
+  to be usable has room for the path anyway. Measured at 338px of text in a
+  308px box, so what the user actually read was an ellipsis, for 26px of a
+  permanent header. With no vault open the same row is the sentence saying what
+  `Open vault…` is for, which is the one time it earns its height, so it is
+  hidden rather than removed. The block goes from 86px to 69px.
 - **Editor** — [CodeMirror 6](https://codemirror.net/) with the Markdown
   grammar, chosen in [#6](https://github.com/wazootech/wiki-desktop/issues/6)
   against a regex overlay and against `editorcn`/Tiptap (HTML- or

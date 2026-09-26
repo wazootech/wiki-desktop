@@ -280,6 +280,115 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
   );
 });
 
+Deno.test("the vault's path row is spent only when there is no vault", () => {
+  // With a vault open that row is the root, and it is the one piece of the
+  // sidebar header that is pure decoration: the name already identifies the
+  // folder, and no usable sidebar is wide enough to show the path anyway —
+  // measured at 338px of text in a 308px box, so what the user read was an
+  // ellipsis. With no vault open the same row is the sentence saying what
+  // Open vault is for, which is the one time it earns its height.
+  assert(
+    /vaultPath\.hidden = open;/.test(page),
+    "the path row is hidden while a vault is open and shown while none is",
+  );
+  assert(
+    /vaultPath\.textContent = open \? vault\.root : 'Choose the folder that holds your wiki\.'/
+      .test(page),
+    "and it keeps the guidance an unopened vault needs",
+  );
+  // Hiding the row must not close the gap it left: the buttons still need to
+  // sit clear of the name, and an unopened vault still needs its own spacing.
+  assert(
+    /\.vault-actions \{[^}]*margin-top: 8px/.test(page),
+    "the buttons carry the spacing the path row used to provide",
+  );
+});
+
+Deno.test("the extension setting is reachable from the list it changes", () => {
+  // It was filed as a menu command first, and that put it one level too far
+  // from the thing it controls: a user looking at the file list had no reason
+  // to think Appearance governed it. Both controls drive one state, and each
+  // has to redraw the other, or the two disagree about the same setting.
+  assert(
+    /<input type="checkbox" id="showExtensions"/.test(page),
+    "the sidebar offers the setting beside the list it redraws",
+  );
+  assert(
+    /extensionsInput\.addEventListener\('change', \(\) => setShowExtensions\(extensionsInput\.checked, true\)\)/
+      .test(page),
+    "and that checkbox drives the same setter the menu command uses",
+  );
+  assert(
+    /extensionsInput\.checked = show;/.test(page),
+    "so the menu command and the checkbox cannot drift apart",
+  );
+  assert(
+    /extensionsInput\.checked = state\.showExtensions !== false;/.test(page),
+    "and the stored setting wins over the markup's default on load",
+  );
+  // Two labelled checkboxes, a filter and a button exceed a 200px sidebar, so
+  // the row wraps. Grouping keeps the pair together: left free they split
+  // across three lines, one checkbox each.
+  assert(
+    /\.file-tools-checks \{[^}]*display: flex/.test(page),
+    "the checkboxes wrap as a pair rather than one per line",
+  );
+  assert(
+    /\.file-tools \{ flex-wrap: wrap/.test(page),
+    "and the toolbar is allowed to wrap at all",
+  );
+});
+
+Deno.test("hiding an extension never changes the file it opens", () => {
+  // The list draws a shortened name, but the row is a button that opens by
+  // path: if the shortening leaked into the path, a page called README.md and
+  // one called README would become the same row.
+  assert(
+    /name\.textContent = listedName\(file\)/.test(page),
+    "the list draws the name the setting produces",
+  );
+  assert(
+    /function listedName\(file\) \{[\s\S]*?vault\.showExtensions/.test(page),
+    "and that name depends on the setting rather than always carrying it",
+  );
+  // Only Markdown loses its extension. A wiki is nearly all .md, so that is the
+  // repetition worth hiding; a vault's own .py and .yml files are few, and
+  // shortening those would make two different files look alike.
+  //
+  // This also pins why the shortening is written without a regex: the script
+  // ships inside a template literal, where a backslash is an escape, so a
+  // /\.md$ reached the browser as /.md$ and stripped the last letter of any
+  // name ending in "md".
+  assert(
+    /!file\.isMarkdown\) return file\.name/.test(page),
+    "a file that is not Markdown keeps its name whole",
+  );
+  assert(
+    /toLowerCase\(\)\.endsWith\('\.md'\)[\s\S]*?slice\(0, -3\)/.test(page),
+    "and a Markdown one drops exactly its three-character extension",
+  );
+  assert(
+    !/file\.name\.replace\(/.test(page),
+    "the shortening uses no regex, which a template literal would mangle",
+  );
+  assert(
+    /button\.title = file\.path/.test(page),
+    "and the full path is still on the row, which opens by path",
+  );
+  // The New file prompt has to carry the real name whatever this says, because
+  // it is the one place a name is being typed.
+  assert(
+    /window\.prompt\('New file, relative to the vault root:', suggested\)/.test(
+      page,
+    ),
+    "the New file prompt still takes a full name",
+  );
+  assert(
+    /const suggested = 'notes\/untitled\.md'/.test(page),
+    "including the extension it suggests",
+  );
+});
+
 Deno.test("the icons come from one curated map", async () => {
   // One map and one frame, so a shape is not drawn twice and two controls
   // cannot drift onto the same mark — the failure the same-glyph test records
@@ -733,10 +842,20 @@ Deno.test("the appearance is one choice out of three, and the menu shows it", ()
   );
 
   // A command fires and closes the menu; a choice has to stay put and say which
-  // one is on, so the renderer has to treat it as a radio item.
+  // one is on, so the renderer has to treat it as a radio item. A setting that
+  // is on or off, rather than one of several, overrides that with a checkbox —
+  // a different role, even though it draws the same mark.
   assert(
-    page.includes("role', isChoice ? 'menuitemradio' : 'menuitem'"),
-    "a choice is rendered as a command",
+    page.includes(
+      "command.role ?? (isChoice ? 'menuitemradio' : 'menuitem')",
+    ),
+    "a choice is rendered as a plain command, with no way to override the role",
+  );
+  assert(
+    /role: 'menuitemcheckbox'/.test(list) &&
+      /role: 'menuitemcheckbox'[^\n]*isActive: \(\) => vault\.showExtensions/
+        .test(list),
+    "the extension toggle declares itself a checkbox and says which way it is on",
   );
   assert(
     page.includes(

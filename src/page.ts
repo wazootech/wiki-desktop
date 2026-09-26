@@ -326,11 +326,19 @@ const pageTemplate = `<!DOCTYPE html>
     .vault-label { color: var(--muted); font-size: 9.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; flex-shrink: 0; }
     .vault-name { font-size: 12.5px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-name.is-placeholder { color: var(--muted); font-weight: 600; }
+    /*
+     * The path earns its row only when there is no vault: then it is the
+     * sentence saying what Open vault is for. With a vault open it is the
+     * root, which the name already identifies and which no sidebar wide
+     * enough to be usable has room to show — measured at 338px of text in a
+     * 308px box, so what the user actually read was an ellipsis. 26px of a
+     * permanent header is a lot for that, so it is dropped while open.
+     */
     .vault-path {
-      margin: 3px 0 8px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+      margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.4;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .vault-actions { display: flex; gap: 6px; }
+    .vault-actions { display: flex; gap: 6px; margin-top: 8px; }
     .vault-actions .button { flex: 1; min-height: 25px; font-size: 11.5px; }
 
     /*
@@ -357,6 +365,16 @@ const pageTemplate = `<!DOCTYPE html>
       color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer;
     }
     .assets-toggle input { margin: 0; }
+    /*
+     * Two labelled checkboxes plus the filter plus a button is more than a
+     * 200px sidebar's toolbar has, so it is allowed to wrap: a second line
+     * costs 17px of file list, where clipping a control costs the user the
+     * setting itself. They are grouped so they wrap together — left to wrap
+     * freely the pair splits across three ragged lines, one checkbox each.
+     */
+    .file-tools { flex-wrap: wrap; }
+    .file-tools .filter { flex-basis: 100px; }
+    .file-tools-checks { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
     .file-list { flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none; }
     .file-button {
@@ -656,9 +674,14 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="file-tools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
-        <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
-          <input type="checkbox" id="showAssets" />Assets
-        </label>
+        <div class="file-tools-checks">
+          <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
+            <input type="checkbox" id="showAssets" />Assets
+          </label>
+          <label class="assets-toggle" id="extensionsToggle" title="Write each file's extension out in full">
+            <input type="checkbox" id="showExtensions" checked />Extensions
+          </label>
+        </div>
         <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
       </div>
 
@@ -820,6 +843,7 @@ const pageTemplate = `<!DOCTYPE html>
       const filterInput = el('filter');
       const assetsToggle = el('assetsToggle');
       const showAssetsInput = el('showAssets');
+      const extensionsInput = el('showExtensions');
       const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
@@ -884,6 +908,7 @@ const pageTemplate = `<!DOCTYPE html>
         name: null,
         recents: [],
         sidebarCollapsed: false,
+        showExtensions: true,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
         theme: '${DEFAULT_THEME}',
       };
@@ -976,6 +1001,37 @@ const pageTemplate = `<!DOCTYPE html>
         syncSidebarToggles();
         vault.sidebarCollapsed = collapsed;
         if (persist) call('setSidebarCollapsed', [collapsed]);
+      }
+
+      /**
+       * Whether the list shows each file's extension. Turned off, the extension
+       * is hidden here and shown only where a name is being typed — the New
+       * file prompt, which has to carry the real name regardless. The tab strip
+       * and the status bar keep it, because a tab is the document's identity
+       * rather than one entry in a list of similar names.
+       */
+      function setShowExtensions(show, persist) {
+        vault.showExtensions = show;
+        if (persist) call('setShowExtensions', [show]);
+        extensionsInput.checked = show;
+        renderFiles();
+        refreshMenu();
+      }
+
+      /** The name as the list draws it, which may be without its extension. */
+      function listedName(file) {
+        if (vault.showExtensions || !file.isMarkdown) return file.name;
+        // Only Markdown loses its extension: every page in a wiki is one, so it
+        // is the repetition that is noise. A vault's own .py and .yml files are
+        // few, and dropping theirs would make two different files look alike.
+        //
+        // Written without a regex on purpose. This script ships inside a
+        // template literal, where a backslash is an escape sequence, so a
+        // /\.md$ reached the browser as /.md$/ — whose dot matches any
+        // character — and a page called cmd lost its last letter.
+        return file.name.toLowerCase().endsWith('.md')
+          ? file.name.slice(0, -3)
+          : file.name;
       }
 
       /* Sidebar width */
@@ -1237,6 +1293,9 @@ const pageTemplate = `<!DOCTYPE html>
         vaultName.classList.toggle('is-placeholder', !open);
         vaultPath.textContent = open ? vault.root : 'Choose the folder that holds your wiki.';
         vaultPath.title = vault.root || '';
+        // Hidden rather than removed, because the same row is the guidance
+        // that tells an unopened vault what Open vault is for.
+        vaultPath.hidden = open;
         closeVaultButton.hidden = !open;
         newFileButton.disabled = !open;
         placeholderNoVault.hidden = open;
@@ -1289,7 +1348,10 @@ const pageTemplate = `<!DOCTYPE html>
           if (file.scope === 'asset') button.classList.add('is-asset');
           const name = document.createElement('span');
           name.className = 'file-name';
-          name.textContent = file.name;
+          name.textContent = listedName(file);
+          // The row is named by what it draws, so a screen reader hears the
+          // same thing the eye does — and the title still carries the path.
+          button.title = file.path;
           button.appendChild(name);
           const separator = file.path.lastIndexOf('/');
           if (separator !== -1) {
@@ -1420,6 +1482,7 @@ const pageTemplate = `<!DOCTYPE html>
         vault = state;
         setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
+        extensionsInput.checked = state.showExtensions !== false;
         applySidebarWidth();
         renderVault();
         renderFiles();
@@ -1657,6 +1720,7 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'theme-system', group: 'Appearance', label: 'Match the system', keys: '', canRun: () => true, isActive: () => vault.theme === 'system', run: () => setTheme('system', true) },
         { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
         { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
+        { id: 'toggle-extensions', group: 'Appearance', label: 'Show file extensions', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showExtensions, run: () => setShowExtensions(!vault.showExtensions) },
         { id: 'close-vault', group: 'Vault', label: 'Close vault', keys: '', canRun: () => vault.root !== null, run: closeVault },
       ];
 
@@ -1709,8 +1773,11 @@ const pageTemplate = `<!DOCTYPE html>
           item.className = 'menu-item';
           // A command fires and closes the menu; a choice among a set stays put
           // and has to say which one is on, so it is a radio item with a mark.
+          // A setting that is on or off rather than one of several is a
+          // checkbox, which is a different role and a different promise to a
+          // screen reader even though it draws the same mark.
           const isChoice = typeof command.isActive === 'function';
-          item.setAttribute('role', isChoice ? 'menuitemradio' : 'menuitem');
+          item.setAttribute('role', command.role ?? (isChoice ? 'menuitemradio' : 'menuitem'));
           if (isChoice) {
             item.setAttribute('aria-checked', command.isActive() ? 'true' : 'false');
             const check = document.createElement('span');
@@ -1838,6 +1905,10 @@ const pageTemplate = `<!DOCTYPE html>
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
         showAssetsInput.addEventListener('change', renderFiles);
+        // The setting lives in the sidebar, next to the list it draws, as well
+        // as the Appearance menu. Both controls drive the same state, so this
+        // syncs the checkbox and refreshes the menu's own check mark.
+        extensionsInput.addEventListener('change', () => setShowExtensions(extensionsInput.checked, true));
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks
