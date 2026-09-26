@@ -1011,7 +1011,18 @@ const pageTemplate = `<!DOCTYPE html>
       // and the caller can just check for null.
       async function call(name, args) {
         try {
-          return await bridge[name].apply(null, args || []);
+          // A spread, never bridge[name].apply(null, args). The desktop runtime
+          // hands the webview a proxy whose property access IS the binding
+          // name, so reading .apply off the function it returns asks for a
+          // binding called "getState.apply" and the call is refused: every
+          // operation in the app failed, and the window sat on the empty state
+          // toasting No binding for 'browse.apply'. The browser bridge returns
+          // a plain function, so the dev server and the string tests saw
+          // nothing wrong, and src/appearance_check.ts stubs the bindings
+          // outright, so the one check that runs in the real webview could not
+          // see it either. Found by calling one binding three ways in the real
+          // desktop runtime; both a direct call and a spread work.
+          return await bridge[name](...(args || []));
         } catch (error) {
           showToast((error && error.message) || 'Something went wrong.');
           return null;

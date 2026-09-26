@@ -137,6 +137,19 @@ pre-paint path here is the real one, not a model of it.
   as `bindings.name(args)`. They run in-process (no socket IPC) and inherit the
   runtime's permissions, so the tasks start Deno with
   `--allow-read --allow-write --allow-env`.
+
+  **The page calls them with a spread, never `.apply`.** One function reaches
+  every operation: `bridge[name](...(args || []))`. The desktop runtime hands
+  the webview a proxy whose property access _is_ the binding name, so reading
+  `.apply` off the function it returns asks for a binding called
+  `getState.apply` and the call is refused — every operation in the app fails
+  and the window sits on the empty state toasting
+  `No binding for 'browse.apply'`. The browser bridge returns a plain function,
+  so the dev server and the string tests cannot see it, and
+  `src/appearance_check.ts` stubs the bindings outright, so the one check that
+  runs in the real webview could not either. It was found by calling one binding
+  three ways in the real runtime; `src/bindings_test.ts` now pins the call form
+  so it cannot come back.
 - **Path safety** — bindings are a trust boundary. `src/vault.ts` rejects
   absolute paths and `..`, resolves symlinks with `Deno.realPath`, and verifies
   the result stays inside the vault root before touching the filesystem.
