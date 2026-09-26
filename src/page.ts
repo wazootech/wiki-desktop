@@ -23,17 +23,6 @@ function chromeIcon(paths: string, size: number = 15): string {
 }
 
 /**
- * Lucide's folder, named once.
- *
- * Two controls draw it — the sidebar's open action and the close action, which
- * is this folder with a cross through it. Sharing the geometry is the point of
- * the map: a second copy of the same path is a shape that can drift onto a
- * different mark in one of the two.
- */
-const FOLDER_PATH =
-  '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />';
-
-/**
  * The app's whole icon set, from Lucide (ISC), copied here rather than imported
  * so `deno task build` stays a single self-contained artefact.
  *
@@ -62,16 +51,15 @@ const ICONS = {
   closeTab: chromeIcon('<path d="M18 6 6 18" /><path d="m6 6 12 12" />', 12),
   disclosure: chromeIcon('<path d="m9 18 6-6-6-6" />', 12),
   activeCheck: chromeIcon('<path d="M20 6 9 17l-5-5" />', 11),
-  /** The sidebar's own way in: the folder, at control size. */
-  openVault: chromeIcon(FOLDER_PATH, 15),
   /**
-   * Closing a vault is the same folder with a cross through it, rather than a
-   * plain X. A bare X in a sidebar reads as closing the window, the tab or the
-   * panel; the crossed folder says which of the three it is.
+   * The sidebar's own way in, and the only place the folder is drawn: opening
+   * a vault is the one action a user reaches for from the panel, while closing
+   * one lives in the menu beside the other vault commands. Once the empty state
+   * and the close button were gone it was the last user of this geometry, so
+   * the shared constant went with them.
    */
-  closeVault: chromeIcon(
-    FOLDER_PATH +
-      '<path d="m9.5 10.5 5 5" /><path d="m14.5 10.5-5 5" />',
+  openVault: chromeIcon(
+    '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />',
     15,
   ),
   noFile: chromeIcon(
@@ -345,14 +333,18 @@ const pageTemplate = `<!DOCTYPE html>
     .vault-name { font-size: 12.5px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-name.is-placeholder { color: var(--muted); font-weight: 600; }
     /*
-     * The vault's two actions live in its own header row, as 24px squares
-     * beside the name, and the row they used to occupy is gone.
+     * The vault's one action, in its own row beside the name rather than a row
+     * of its own under it. It was a full-width button labelled "Open vault…"
+     * sitting directly beneath a vault that was already open, which made the
+     * sidebar's first sentence about the wrong thing.
      *
-     * They were full-width buttons stacked under the name, which made the
-     * sidebar's first read "Open vault…" directly beneath a vault that was
-     * already open, gave closing a vault the bare word "Close", and cost 40px
-     * of a column that is 360px wide. The name is the heading; the actions
-     * belong to it, the way the tab bar's belong to the document.
+     * There was a second button here — a crossed folder, for closing the vault.
+     * It went the way editors have gone: VS Code's File menu has Open Folder
+     * and Close Folder as entries and neither of them as a button on the
+     * folder, and the one a user reaches for while browsing is opening a
+     * different one. Closing a vault is in the menu's Vault group under the
+     * same name it always had, next to Copy vault path, disabled when there is
+     * nothing to close.
      */
     .vault-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
     .vault-actions .icon-button { width: 24px; min-height: 24px; border-radius: 6px; color: var(--muted); }
@@ -719,7 +711,6 @@ const pageTemplate = `<!DOCTYPE html>
           <span class="vault-name is-placeholder" id="vaultName">No vault open</span>
           <div class="vault-actions">
             <button class="button button-secondary icon-button" id="openVaultButton" type="button" title="Open a vault" aria-label="Open a vault">${ICONS.openVault}</button>
-            <button class="button button-secondary icon-button" id="closeVaultButton" type="button" title="Close vault" aria-label="Close vault" hidden>${ICONS.closeVault}</button>
           </div>
         </div>
         <div class="vault-path" id="vaultPath">Choose the folder that holds your wiki.</div>
@@ -902,7 +893,6 @@ const pageTemplate = `<!DOCTYPE html>
       const commandMenu = el('commandMenu');
       const newFileButton = el('newFileButton');
       const openVaultButton = el('openVaultButton');
-      const closeVaultButton = el('closeVaultButton');
       const emptyNewFileButton = el('emptyNewFileButton');
       const vaultName = el('vaultName');
       const fileTools = el('fileTools');
@@ -1425,7 +1415,6 @@ const pageTemplate = `<!DOCTYPE html>
         // Hidden rather than removed, because the same row is the guidance
         // that tells an unopened vault what Open vault is for.
         vaultPath.hidden = open;
-        closeVaultButton.hidden = !open;
         // With a vault open the same button switches it, so its name has to
         // change with the state it acts on rather than describing neither.
         openVaultButton.title = open ? 'Open another vault' : 'Open a vault';
@@ -2194,7 +2183,6 @@ const pageTemplate = `<!DOCTYPE html>
         wireVaultMenu();
         sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
         openVaultButton.addEventListener('click', openBrowser);
-        closeVaultButton.addEventListener('click', closeVault);
         cancelBrowseButton.addEventListener('click', closeBrowser);
         useFolderButton.addEventListener('click', () => {
           if (listing) switchVault(listing.path);

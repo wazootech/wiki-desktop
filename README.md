@@ -219,14 +219,15 @@ pre-paint path here is the real one, not a model of it.
   `Open vault…` is for, which is the one time it earns its height, so it is
   hidden rather than removed. The block goes from 86px to 69px. The whole path
   is one right-click away while a vault is open, though — see the header's own
-  menu below.
-- **The vault header has its own menu, and it is one command** — right-click the
-  name for `Copy vault path`, which is the only honest way to get the full path
-  out of a sidebar that no longer shows one. It is a command in the same list as
-  everything else, marked `context: true`, so the header's item and the app
-  menu's entry are one entry with one run path rather than two copies. With no
-  vault open the menu does not open at all: a menu of one greyed-out item is a
-  worse answer than no menu.
+  menu below.- **The vault header has its own menu, and it is one command** —
+  right-click the name for `Copy vault path`, which is the only honest way to
+  get the full path out of a sidebar that no longer shows one. It is a command
+  in the same list as everything else, marked `context: true`, so the header's
+  item and the app menu's entry are one entry with one run path rather than two
+  copies. With no vault open the menu does not open at all: a menu of one
+  greyed-out item is a worse answer than no menu. `Close vault` could have
+  joined it for the same reason `Open vault…` did not — it is already in the app
+  menu, one level from the panel rather than on it.
 
   **Reveal in Explorer is deliberately not there.** `deno desktop` has no
   file-manager API — `Deno.BrowserWindow` offers `bind`, `executeJs` and menus,
@@ -235,19 +236,27 @@ pre-paint path here is the real one, not a model of it.
   Copying the path is the part a user can act on from the clipboard, so that is
   what shipped; a test asserts the binding layer launches no process, so the
   decision cannot be quietly reversed.
-- **The vault's own actions sit in its heading, as two icons** — they were
-  full-width labelled buttons stacked under the vault's name, so the sidebar's
-  first read was `Open vault…` directly beneath a vault that was already open,
-  closing a vault had the bare word `Close` to say so, and the pair cost 40px of
-  a 360px column. The name is the heading and the actions belong to it, the way
-  the tab bar's belong to the document: two 24px squares at the end of the
-  name's row, so the name keeps the width and ellipsises instead of pushing them
-  off the panel. An icon names nothing on its own, so the open button carries
-  `Open another vault` once a vault is open and `Open a vault` until then, and
-  close is that same folder with a cross through it rather than a bare X — in a
-  sidebar a bare X reads as closing the window, the tab or the panel. The file
-  list's toolbar goes with the vault rather than sitting there inert: with no
-  vault the list is empty, so the filter filtered nothing, the asset and
+- **The vault header carries one action, and the rest are menu entries** — it
+  was a row of two full-width labelled buttons stacked under the vault's name,
+  so the sidebar's first read was `Open vault…` directly beneath a vault that
+  was already open, closing a vault had the bare word `Close` to say so, and the
+  pair cost 40px of a 360px column. It is now one 24px folder at the end of the
+  name's row, so the name keeps the width and ellipsises instead of pushing it
+  off the panel, and an icon names nothing on its own, so the button carries
+  `Open another vault` once a vault is open and `Open a vault` until then.
+
+  **Closing a vault is a menu entry, not a second button.** VS Code's File menu
+  has `Open Folder…` and `Close Folder` as entries and neither of them as a
+  button on the folder; the same split reads here as opening a different vault
+  from the panel you are in, and closing the current one from the menu's `Vault`
+  group, where it sits under the name it always had next to `Copy vault path`
+  and is disabled when there is nothing to close. One command, one place to
+  reach it from. It took the crossed-folder glyph with it, which left the folder
+  as the last user of that geometry and the shared `FOLDER_PATH` constant as the
+  last user of a constant.
+
+  The file list's toolbar goes with the vault rather than sitting there inert:
+  with no vault the list is empty, so the filter filtered nothing, the asset and
   extension checkboxes had no list to redraw, and the create button was
   disabled.
 - **Editor** — [CodeMirror 6](https://codemirror.net/) with the Markdown
