@@ -23,6 +23,7 @@ import {
 import { EditorState, type Extension } from "@codemirror/state";
 import { tags as t } from "@lezer/highlight";
 
+import { fenceLanguage } from "./fence_languages.ts";
 import {
   asksToFollowLink,
   describeLinkTarget,
@@ -109,8 +110,8 @@ const markdownHighlightStyle = HighlightStyle.define([
     tag: [t.comment, t.quote, t.contentSeparator],
     color: "var(--syntax-muted)",
   },
-  // Nested grammars would need these; the markdown grammar alone does not
-  // colour fence contents, which is the deliberate cost of the smaller bundle.
+  // The fence grammars below produce these; the markdown grammar alone does
+  // not, which is why they sat unused until the subset landed.
   { tag: t.keyword, color: "var(--syntax-keyword)" },
   { tag: [t.string, t.special(t.string)], color: "var(--syntax-string)" },
   { tag: [t.number, t.bool], color: "var(--syntax-number)" },
@@ -208,7 +209,7 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     bracketMatching(),
     highlightActiveLine(),
     syntaxHighlighting(markdownHighlightStyle),
-    markdown(),
+    markdown({ codeLanguages: fenceLanguage }),
     appTheme,
     // The accessible name and the spellchecker used to live on the textarea.
     EditorView.contentAttributes.of({
