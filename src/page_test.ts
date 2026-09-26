@@ -424,6 +424,106 @@ Deno.test("the folder dialog is the only way in, and it is the app's home", () =
   );
 });
 
+Deno.test("the vault header's menu is the command list, not a second copy", async () => {
+  // The sidebar's path row is gone while a vault is open, so the whole path
+  // has to come out some other way; the header's own menu is it. The menu is
+  // filled from the command list rather than written out again, so an action
+  // can never exist in one place and not the other, and the header's item and
+  // the app menu's entry are the same command with one run path.
+  assert(
+    /<div class="menu-popup vault-menu" id="vaultMenu"[^>]*hidden><\/div>/.test(
+      page,
+    ),
+    "the header's menu ships empty and hidden, like the app menu",
+  );
+  assert(
+    /for \(const command of commands\.filter\(\(entry\) => entry\.context\)\)/
+      .test(
+        page,
+      ),
+    "its items are the commands marked for it",
+  );
+  assert(
+    /item\.addEventListener\('click', \(\) => \{\s*hideVaultMenu\(\);\s*runCommand\(command\.id\);/
+      .test(page),
+    "and they run the way the app menu's do",
+  );
+  // Fixed positioning is measured against the window, and the sidebar is a
+  // transformed element in the drawer layout, so a menu inside it would be
+  // placed relative to a panel that may be off screen.
+  assert(
+    page.indexOf('id="vaultMenu"') > page.indexOf("</aside>"),
+    "the menu lives outside the sidebar, whose transform would capture it",
+  );
+  // It is the same popup class, anchored at right: 0 for the button it grew
+  // out of. Left and right both set with width: auto stretches the box to the
+  // window instead of hugging its item, which is a 735px menu with one line in
+  // it. Measured, not guessed.
+  const rule = page.match(/\.vault-menu\s*\{([^}]*)\}/);
+  assert(
+    rule !== null && /right:\s*auto/.test(rule[1]),
+    "the menu clears the side of the anchor it is not using",
+  );
+  // The path comes out through the webview's own clipboard, in the row's
+  // action and not in a binding: a binding would mean the app launching a
+  // process, and the app is built without --allow-run on purpose.
+  assert(
+    /id: 'copy-vault-path'[^}]*canRun: \(\) => vault\.root !== null, context: true, run: copyVaultPath/
+      .test(
+        page,
+      ),
+    "copying the path is one of those commands, and it says it needs a vault",
+  );
+  assert(
+    /await copyText\(path\);\s*showToast\('Copied the vault path'\);/.test(
+      page,
+    ),
+    "and it says when it worked",
+  );
+  assert(
+    /showToast\('Could not copy the path\.'\)/.test(page),
+    "and when it did not, rather than failing quietly",
+  );
+  const bindings = await Deno.readTextFile(
+    join(import.meta.dirname!, "bindings.ts"),
+  );
+  assert(
+    !/Deno\.Command|reveal|openExternal/i.test(bindings),
+    "the binding layer launches no process to do it",
+  );
+  // With no vault open the menu has nothing to act on, and a menu of one
+  // greyed-out item is a worse answer than no menu.
+  assert(
+    /if \(vault\.root === null\) return;\s*openVaultMenu\(event\.clientX/.test(
+      page,
+    ),
+    "the header's menu does not open when there is no vault",
+  );
+  // A right-click near the edge of the window must not open a menu that runs
+  // off it, with its only item unreachable.
+  assert(
+    /Math\.min\(x, window\.innerWidth - box\.width - edge\)/.test(page) &&
+      /Math\.min\(y, window\.innerHeight - box\.height - edge\)/.test(page),
+    "and it is pulled back inside the window",
+  );
+  // Escape closes it from the one document handler the other surfaces share,
+  // and opening it closes the app menu, so there is never a question of which
+  // of two popups Escape means.
+  assert(
+    /function openVaultMenu\([\s\S]*?closeMenu\(false\);/.test(page),
+    "opening the header's menu closes the app menu, so only one is ever up",
+  );
+  const keydown = page.slice(
+    page.indexOf("document.addEventListener('keydown'"),
+  );
+  assert(
+    /event\.key === 'Escape' && vaultMenuIsOpen\(\)/.test(keydown) &&
+      keydown.indexOf("vaultMenuIsOpen()") <
+        keydown.indexOf("event.key === 'Escape' && menuIsOpen()"),
+    "Escape closes the header's menu first, in the handler the surfaces share",
+  );
+});
+
 Deno.test("the vault's actions are named for the state they act on", () => {
   // They were labelled buttons, so the words came with them. As two icons the
   // name has to come from somewhere, and what it has to say changes: with a

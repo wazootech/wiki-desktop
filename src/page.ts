@@ -521,6 +521,18 @@ const pageTemplate = `<!DOCTYPE html>
        labels of a group of choices line up. */
     .menu-check { display: grid; place-items: center; flex-shrink: 0; width: 11px; height: 11px; color: var(--brand-text); }
     .menu-keys { flex-shrink: 0; color: var(--text-faint); font-size: 10.5px; }
+    /*
+     * The same popup at the pointer rather than under a button. Fixed, because
+     * the menu is placed in window coordinates and the sidebar is a
+     * transformed element in the drawer layout, which would otherwise become
+     * its containing block. The left and top are written by the script, which
+     * also pulls it back inside the window.
+     *
+     * right: auto is not decoration. The base rule anchors the menu at
+     * right: 0, and a fixed box with both left and right set and width: auto
+     * stretches to fill the window rather than hugging its one item.
+     */
+    .vault-menu { position: fixed; top: 0; left: 0; right: auto; min-width: 188px; }
 
     .editor-region { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--panel-muted); }
     .placeholder { display: grid; place-items: center; height: 100%; padding: 24px; text-align: center; }
@@ -826,6 +838,20 @@ const pageTemplate = `<!DOCTYPE html>
     </div>
   </div>
 
+  <!--
+    The vault header's own menu, for the things you can do to the vault rather
+    than to the page. It ships empty and is filled from the command list, like
+    the app menu, so an action is written down once: the item here and the
+    entry in the app menu are the same command, and only the run path can
+    change.
+
+    It lives outside the sidebar because the drawer is a transformed element,
+    and a transformed ancestor becomes the containing block for anything
+    position: fixed inside it -- which would put this menu at window
+    coordinates relative to a panel that may be off screen.
+  -->
+  <div class="menu-popup vault-menu" id="vaultMenu" role="menu" aria-label="Vault actions" hidden></div>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <!--
@@ -907,6 +933,8 @@ const pageTemplate = `<!DOCTYPE html>
       const recentRow = el('recentRow');
       const sidebar = document.querySelector('.sidebar');
       const sidebarResizer = el('sidebarResizer');
+      const vaultHead = el('vaultHead');
+      const vaultMenu = el('vaultMenu');
       const sidebarScrim = el('sidebarScrim');
       // One action, two affordances: the brand row's while the sidebar is
       // showing, the tabbar's once it is collapsed, so the control stays in the
@@ -1739,6 +1767,47 @@ const pageTemplate = `<!DOCTYPE html>
         }
       }
 
+      /**
+       * The vault's path, for a user who has been told it is somewhere they
+       * cannot see: the sidebar's path row is gone while a vault is open, so
+       * this is the one honest way to get the whole thing out of the app.
+       */
+      async function copyVaultPath() {
+        const path = vault.root;
+        if (path === null) return;
+        try {
+          await copyText(path);
+          showToast('Copied the vault path');
+        } catch {
+          // No binding can fix this: the clipboard belongs to the webview, and
+          // a refusal is the truthful answer rather than a silent nothing.
+          showToast('Could not copy the path.');
+        }
+      }
+
+      async function copyText(text) {
+        // A menu click is a gesture in a secure context, which is all the
+        // clipboard API asks for. WebKitGTK wants the user's permission first
+        // -- a dialog inside a dialog -- so a webview that refuses or is not
+        // asked falls through to selecting the text and copying that.
+        try {
+          if (navigator.clipboard) {
+            await navigator.clipboard.writeText(text);
+            return;
+          }
+        } catch {
+          // The fallback below is the case this catch is for.
+        }
+        const scratch = document.createElement('textarea');
+        scratch.value = text;
+        scratch.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(scratch);
+        scratch.select();
+        const copied = document.execCommand('copy');
+        scratch.remove();
+        if (!copied) throw new Error('The clipboard refused the copy.');
+      }
+
       function openBrowser() {
         setSidebarOpen(false);
         // The dialog names the state it is in, because the two are not the
@@ -1877,6 +1946,11 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
         { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
         { id: 'toggle-extensions', group: 'Appearance', label: 'Show file extensions', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showExtensions, run: () => setShowExtensions(!vault.showExtensions) },
+        // context: this one is also an item in the vault header's own menu,
+        // which is filled from the same list. Two surfaces, one command, so
+        // the header's menu cannot hold an action the app menu has never heard
+        // of -- or a second copy of one that has changed.
+        { id: 'copy-vault-path', group: 'Vault', label: 'Copy vault path', keys: '', canRun: () => vault.root !== null, context: true, run: copyVaultPath },
         { id: 'close-vault', group: 'Vault', label: 'Close vault', keys: '', canRun: () => vault.root !== null, run: closeVault },
       ];
 
@@ -1962,6 +2036,79 @@ const pageTemplate = `<!DOCTYPE html>
         if (focused !== null && focused !== undefined) focusCommand(focused);
       }
 
+      /* The vault header's own menu, at the pointer */
+
+      function vaultMenuIsOpen() {
+        return !vaultMenu.hidden;
+      }
+
+      /* The same item as the app menu, built the same way and run the same way:
+         the only difference is which list it walks and where it is placed. */
+      function renderVaultMenu() {
+        vaultMenu.textContent = '';
+        for (const command of commands.filter((entry) => entry.context)) {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'menu-item';
+          item.setAttribute('role', 'menuitem');
+          item.setAttribute('aria-disabled', command.canRun() ? 'false' : 'true');
+          item.dataset.command = command.id;
+          const name = document.createElement('span');
+          name.className = 'menu-item-label';
+          name.textContent = command.label;
+          item.appendChild(name);
+          item.addEventListener('click', () => {
+            hideVaultMenu();
+            runCommand(command.id);
+          });
+          vaultMenu.appendChild(item);
+        }
+      }
+
+      function openVaultMenu(x, y) {
+        // One popup at a time. The app menu is opened with a click and this one
+        // with a right-click, so a user can ask for the second without the
+        // first closing -- and Escape would then have two surfaces to choose
+        // between, with the app menu's check written first.
+        closeMenu(false);
+        renderVaultMenu();
+        vaultMenu.hidden = false;
+        // Placed after it is shown, because its size is what has to fit: a
+        // right-click near the window's edge would otherwise open a menu that
+        // runs off it, with its only item unreachable.
+        const box = vaultMenu.getBoundingClientRect();
+        const edge = 6;
+        vaultMenu.style.left =
+          Math.max(edge, Math.min(x, window.innerWidth - box.width - edge)) + 'px';
+        vaultMenu.style.top =
+          Math.max(edge, Math.min(y, window.innerHeight - box.height - edge)) + 'px';
+        const first = vaultMenu.querySelector('.menu-item[aria-disabled="false"]') ??
+          vaultMenu.querySelector('.menu-item');
+        if (first) first.focus();
+      }
+
+      function hideVaultMenu() {
+        vaultMenu.hidden = true;
+      }
+
+      function wireVaultMenu() {
+        vaultHead.addEventListener('contextmenu', (event) => {
+          // The app's menu replaces the webview's, which offers a page of
+          // spell-check and view-source over a folder name.
+          event.preventDefault();
+          // With no vault open there is nothing for this menu to act on, so it
+          // does not open: a menu of one greyed-out item is a worse answer than
+          // no menu.
+          if (vault.root === null) return;
+          openVaultMenu(event.clientX, event.clientY);
+        });
+        document.addEventListener('click', (event) => {
+          if (!vaultMenuIsOpen()) return;
+          if (vaultMenu.contains(event.target)) return;
+          hideVaultMenu();
+        });
+      }
+
       function stepMenuItem(step) {
         const items = enabledMenuItems();
         if (items.length === 0) return;
@@ -2044,6 +2191,7 @@ const pageTemplate = `<!DOCTYPE html>
         narrowWindow.addEventListener('change', syncSidebarToggles);
         wireResizer();
         wireMenu();
+        wireVaultMenu();
         sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
         openVaultButton.addEventListener('click', openBrowser);
         closeVaultButton.addEventListener('click', closeVault);
@@ -2081,6 +2229,14 @@ const pageTemplate = `<!DOCTYPE html>
           event.returnValue = '';
         });
         document.addEventListener('keydown', (event) => {
+          // The header's menu and the app menu are the two surfaces on top of
+          // the page, and only one of them is ever open: opening either closes
+          // the other, so Escape has a single answer whichever is up.
+          if (event.key === 'Escape' && vaultMenuIsOpen()) {
+            event.preventDefault();
+            hideVaultMenu();
+            return;
+          }
           // The menu is on top of everything, so it gets first refusal on
           // Escape — otherwise closing it would also close the sidebar drawer.
           if (event.key === 'Escape' && menuIsOpen()) {

@@ -197,6 +197,19 @@ pre-paint path here is the real one, not a model of it.
   paragraphs. It runs as a `domEventObservers` handler because observers run
   before the editor's own, and preventing the default there is what stops
   CodeMirror adding a word selection on top.
+- **The folder dialog is the app's way in, and its home screen** — there is no
+  "no vault" panel. It used to be one: a folder glyph, a sentence, and a button
+  whose only job was to open the folder dialog, so the app had two surfaces for
+  one action and the first click bought nothing. The dialog now opens itself
+  when there is no vault, and the sidebar's button opens that same dialog when
+  there is one, so closing a vault and opening another are the same gesture.
+  With nothing open it is the app, so it says `Open a vault` rather than
+  `Open another vault`, says in the intro that no vault is being closed, and
+  offers no way out of itself — `Cancel` is hidden and `Escape` does nothing,
+  because there is nothing to go back to. Choosing a folder takes it down
+  through the one path allowed to, which is the bug the guard caused when it did
+  not: the guard reads the state as it is, and a user with no vault is exactly
+  how a vault gets opened.
 - **The vault's path row is shown only with no vault open** — with one open it
   is the root, and that is the one piece of the sidebar header that is pure
   decoration: the name already identifies the folder, and no sidebar wide enough
@@ -204,7 +217,24 @@ pre-paint path here is the real one, not a model of it.
   308px box, so what the user actually read was an ellipsis, for 26px of a
   permanent header. With no vault open the same row is the sentence saying what
   `Open vault…` is for, which is the one time it earns its height, so it is
-  hidden rather than removed. The block goes from 86px to 69px.
+  hidden rather than removed. The block goes from 86px to 69px. The whole path
+  is one right-click away while a vault is open, though — see the header's own
+  menu below.
+- **The vault header has its own menu, and it is one command** — right-click the
+  name for `Copy vault path`, which is the only honest way to get the full path
+  out of a sidebar that no longer shows one. It is a command in the same list as
+  everything else, marked `context: true`, so the header's item and the app
+  menu's entry are one entry with one run path rather than two copies. With no
+  vault open the menu does not open at all: a menu of one greyed-out item is a
+  worse answer than no menu.
+
+  **Reveal in Explorer is deliberately not there.** `deno desktop` has no
+  file-manager API — `Deno.BrowserWindow` offers `bind`, `executeJs` and menus,
+  and nothing else — so it would mean a `Deno.Command` and `--allow-run` on the
+  desktop tasks, for a permission the app is otherwise built without on purpose.
+  Copying the path is the part a user can act on from the clipboard, so that is
+  what shipped; a test asserts the binding layer launches no process, so the
+  decision cannot be quietly reversed.
 - **The vault's own actions sit in its heading, as two icons** — they were
   full-width labelled buttons stacked under the vault's name, so the sidebar's
   first read was `Open vault…` directly beneath a vault that was already open,
