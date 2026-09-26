@@ -7,37 +7,60 @@ import {
 } from "./config.ts";
 
 /**
- * The frame every icon-only button draws in `page`: a 15px, stroke-2 glyph that
- * inherits the button's colour.
+ * The frame every icon in `page` draws in: a stroke-2 glyph that inherits its
+ * container's colour.
  *
- * They are inline SVG rather than characters because the glyphs these buttons
- * need (a panel, a refresh arrow) are not in every font the desktop, browser and
- * CI targets ship, where a missing character renders as a box. Sizing is on the
- * element, not in the page's stylesheet: a bare viewBox with no width renders at
- * 300x150, and these icons must stay independent of the button's `font-size`.
+ * They are inline SVG rather than characters because the glyphs these controls
+ * need are not in every font the desktop, browser and CI targets ship, where a
+ * missing character renders as a box. Sizing is on the element, not in the
+ * page's stylesheet: a bare viewBox with no width renders at 300x150, and these
+ * icons must stay independent of the button's `font-size`.
  */
-function chromeIcon(paths: string): string {
-  return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+function chromeIcon(paths: string, size: number = 15): string {
+  return '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size +
+    '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
     paths + "</svg>";
 }
 
 /**
- * The sidebar toggle's icon, shared by the two buttons that draw it: one action,
- * two affordances (see `sidebarToggles` below). Written twice it could drift,
- * and the two buttons are never on screen together to reveal the difference.
+ * The app's whole icon set, from Lucide (ISC), copied here rather than imported
+ * so `deno task build` stays a single self-contained artefact.
+ *
+ * One map, one geometry, so a shape cannot be drawn twice and two controls
+ * cannot drift onto the same mark — the two icon-only buttons that were both a
+ * ☰ are the reason this exists. `currentColor` is what lets a glyph follow the
+ * palette; the folder emoji this replaced was a colour emoji and so ignored
+ * `color` entirely.
+ *
+ * Keys name the control, not the shape, so the map documents itself.
  */
-const SIDEBAR_TOGGLE_ICON = chromeIcon(
-  '<rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" />',
-);
-
-/**
- * The bar's one tool: reload is the only command that keeps a glyph instead of a
- * word, because it is a document action like Save but the rarer of the two — and
- * the arrow is unambiguous where the word in a row of labels was not.
- */
-const RELOAD_ICON = chromeIcon(
-  '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />',
-);
+const ICONS = {
+  /** Shared by the two toggles: one action, two affordances (see `sidebarToggles`). */
+  sidebarToggle: chromeIcon(
+    '<rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" />',
+  ),
+  /** The bar's one tool: an arrow, where a word beside Save was ambiguous. */
+  reload: chromeIcon(
+    '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />',
+  ),
+  menu: chromeIcon(
+    '<path d="M4 5h16" /><path d="M4 12h16" /><path d="M4 19h16" />',
+  ),
+  newFile: chromeIcon('<path d="M5 12h14" /><path d="M12 5v14" />'),
+  /** Sized for the 18px tab-close box rather than the 28px button default. */
+  closeTab: chromeIcon('<path d="M18 6 6 18" /><path d="m6 6 12 12" />', 12),
+  disclosure: chromeIcon('<path d="m9 18 6-6-6-6" />', 12),
+  activeCheck: chromeIcon('<path d="M20 6 9 17l-5-5" />', 11),
+  /** Sized for the 42px placeholder tile, which used a 19px font. */
+  noVault: chromeIcon(
+    '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />',
+    20,
+  ),
+  noFile: chromeIcon(
+    '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />',
+    20,
+  ),
+} as const;
 
 /**
  * The webview document. It is a plain string so the app stays a single
@@ -436,7 +459,7 @@ const pageTemplate = `<!DOCTYPE html>
     .menu-item-label { flex: 1; }
     /* A radio item keeps its gutter whether or not it is the active one, so the
        labels of a group of choices line up. */
-    .menu-check { flex-shrink: 0; width: 11px; color: var(--brand-text); font-size: 11px; }
+    .menu-check { display: grid; place-items: center; flex-shrink: 0; width: 11px; height: 11px; color: var(--brand-text); }
     .menu-keys { flex-shrink: 0; color: var(--text-faint); font-size: 10.5px; }
 
     .editor-region { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--panel-muted); }
@@ -504,7 +527,7 @@ const pageTemplate = `<!DOCTYPE html>
       border: 0; border-radius: 6px; color: var(--text-body); background: transparent; text-align: left; font-size: 12px;
     }
     .dir-button:hover { background: var(--surface-hover); }
-    .dir-glyph { color: var(--muted); }
+    .dir-glyph { display: grid; place-items: center; width: 12px; height: 12px; flex-shrink: 0; color: var(--muted); }
     .dialog-footer { padding: 10px 18px 13px; border-top: 1px solid var(--line); background: var(--panel-muted); }
     .browser-hint { margin-bottom: 9px; color: var(--muted); font-size: 11px; }
     .browser-hint.is-vault { color: var(--success); font-weight: 650; }
@@ -595,7 +618,7 @@ const pageTemplate = `<!DOCTYPE html>
   <main class="app" id="app">
     <aside class="sidebar">
       <div class="brand">
-        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">${SIDEBAR_TOGGLE_ICON}</button>
+        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">${ICONS.sidebarToggle}</button>
         <div class="brand-mark" aria-hidden="true">
           <svg viewBox="0.0 0.0 520.0 520.0" fill="none" xmlns="http://www.w3.org/2000/svg">
             <clipPath id="wazooMarkClip">
@@ -636,7 +659,7 @@ const pageTemplate = `<!DOCTYPE html>
         <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
           <input type="checkbox" id="showAssets" />Assets
         </label>
-        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>+</button>
+        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
       </div>
 
       <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
@@ -652,7 +675,7 @@ const pageTemplate = `<!DOCTYPE html>
 
     <section class="workspace">
       <header class="tabbar">
-        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Show vault files (Ctrl+B)" aria-label="Show vault files" aria-expanded="false">${SIDEBAR_TOGGLE_ICON}</button>
+        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Show vault files (Ctrl+B)" aria-label="Show vault files" aria-expanded="false">${ICONS.sidebarToggle}</button>
         <div class="tabs" id="tabs" role="tablist" aria-label="Open files"></div>
         <div class="file-actions">
           <!--
@@ -668,8 +691,8 @@ const pageTemplate = `<!DOCTYPE html>
           -->
           <span class="save-state" id="saveState">Ready</span>
           <button class="button button-primary" id="saveButton" type="button" disabled>Save</button>
-          <button class="button button-secondary icon-button" id="reloadButton" type="button" title="Reload from disk" aria-label="Reload from disk" disabled>${RELOAD_ICON}</button>
-          <button class="button button-secondary icon-button menu-button" id="menuButton" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu" aria-expanded="false" aria-controls="commandMenu">☰</button>
+          <button class="button button-secondary icon-button" id="reloadButton" type="button" title="Reload from disk" aria-label="Reload from disk" disabled>${ICONS.reload}</button>
+          <button class="button button-secondary icon-button menu-button" id="menuButton" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu" aria-expanded="false" aria-controls="commandMenu">${ICONS.menu}</button>
           <div class="menu-popup" id="commandMenu" role="menu" aria-labelledby="menuButton" hidden></div>
         </div>
       </header>
@@ -677,7 +700,7 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="editor-region">
         <div class="placeholder" id="placeholderNoVault">
           <div class="placeholder-inner">
-            <div class="placeholder-icon" aria-hidden="true">📁</div>
+            <div class="placeholder-icon" aria-hidden="true">${ICONS.noVault}</div>
             <h1>Open a folder to begin</h1>
             <p>Pick the folder that holds your wiki. The app reads and writes Markdown files there, directly on disk.</p>
             <button class="button button-primary" id="emptyOpenVaultButton" type="button">Choose a vault</button>
@@ -686,7 +709,7 @@ const pageTemplate = `<!DOCTYPE html>
 
         <div class="placeholder" id="placeholderNoFile" hidden>
           <div class="placeholder-inner">
-            <div class="placeholder-icon" aria-hidden="true">✎</div>
+            <div class="placeholder-icon" aria-hidden="true">${ICONS.noFile}</div>
             <h1>Select a file</h1>
             <p id="placeholderNoFileText">Pick a file from the sidebar to open it in a tab.</p>
             <button class="button button-primary" id="emptyNewFileButton" type="button">New file</button>
@@ -1050,7 +1073,7 @@ const pageTemplate = `<!DOCTYPE html>
           const close = document.createElement('button');
           close.type = 'button';
           close.className = 'tab-close';
-          close.textContent = '×';
+          close.innerHTML = '${ICONS.closeTab}';
           close.title = 'Close ' + tab.name + ' (Ctrl+W)';
           close.setAttribute('aria-label', 'Close ' + tab.name);
           close.addEventListener('click', (event) => {
@@ -1484,7 +1507,7 @@ const pageTemplate = `<!DOCTYPE html>
           const glyph = document.createElement('span');
           glyph.className = 'dir-glyph';
           glyph.setAttribute('aria-hidden', 'true');
-          glyph.textContent = '▸';
+          glyph.innerHTML = '${ICONS.disclosure}';
           const label = document.createElement('span');
           label.textContent = entry.name;
           button.appendChild(glyph);
@@ -1693,7 +1716,9 @@ const pageTemplate = `<!DOCTYPE html>
             const check = document.createElement('span');
             check.className = 'menu-check';
             check.setAttribute('aria-hidden', 'true');
-            check.textContent = command.isActive() ? '✓' : '';
+            // Presence of the mark is the cue, not its colour, so the active
+            // state survives for anyone who cannot see the tint.
+            check.innerHTML = command.isActive() ? '${ICONS.activeCheck}' : '';
             item.appendChild(check);
           }
           item.setAttribute('aria-disabled', command.canRun() ? 'false' : 'true');

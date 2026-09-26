@@ -156,8 +156,8 @@ pre-paint path here is the real one, not a model of it.
   `theme-color` meta reads its value out of the stylesheet rather than repeating
   it.
 - **Appearance** — `System`, `Light`, and `Dark`, under their own group in the
-  `☰` menu, stored in the app config beside the sidebar width and restored on
-  the next launch. They are rendered as radio items (`menuitemradio` +
+  menu, stored in the app config beside the sidebar width and restored on the
+  next launch. They are rendered as radio items (`menuitemradio` +
   `aria-checked`
   - a check gutter) rather than commands, because a choice has to say which one
     is on instead of firing and closing the menu. What the page does with the
@@ -192,25 +192,33 @@ pre-paint path here is the real one, not a model of it.
   sidebar is showing and the tab bar's once it is collapsed, so the control
   stays in the window's top-left corner and never strands itself. The collapsed
   state is stored in the app config, so it survives a restart.
-- **Two icon-only buttons, two icons** — the sidebar toggle and the app menu are
-  both 28px squares in the same band of chrome, so they cannot share a glyph:
-  the toggle draws a panel (an inline SVG in `src/page.ts`, sized on the
-  element, because the glyphs for "sidebar" are not in every font the desktop,
-  browser and CI targets ship) and the menu keeps the hamburger the toggle used
-  to borrow. Both are drawn from one constant and both rely on `aria-label` for
-  their name, since an `aria-hidden` SVG contributes none.
+- **One curated icon set** — every icon in the app is an inline SVG from one map
+  in `src/page.ts` (`ICONS`), copied from [Lucide](https://lucide.dev) rather
+  than imported so `deno task build` stays a single self-contained artefact.
+  They are not characters: a glyph like a panel or a hamburger is not in every
+  font the desktop, browser and CI targets ship, where a missing character
+  renders as a box, and the one colour emoji that had crept in ignored `color`
+  entirely and so could not follow the palette at all. One map means a shape is
+  not drawn twice and two controls cannot drift onto the same mark — the sidebar
+  toggle and the app menu are both 28px squares in the same band, and were once
+  both a `☰`. Each is sized on the element (a bare `viewBox` with no width
+  renders at 300x150), inherits `currentColor` from its container, and is
+  `aria-hidden`, so every such control carries its name in `aria-label`.
+  Typography is deliberately left alone: an ellipsis in a label, a middot
+  between shortcut hints and an em dash in prose are part of a sentence, not a
+  control.
 - **The top bar holds the open document's actions, not the inventory** — `Save`
   is the one control that keeps a word, because it is what you reach for
   mid-sentence and the `Saved` / `Unsaved changes` label beside it is what it
   acts on. Reloading from disk is the same kind of action but the rarer of the
   two, so it keeps a glyph: a 28px stroke-2 arrow whose name lives in
-  `aria-label` and `title`, beside the `☰`, where the rarer commands live.
+  `aria-label` and `title`, beside the menu, where the rarer commands live.
   `New file` is not a document action at all and has no slot: it is in the menu
   (`Ctrl+N`), the empty state, and the `+` beside the filter in the sidebar.
 - **Commands** — one list in `src/page.ts` holds every action (File, Tabs, View,
-  Vault) and the `☰` in the top bar renders that list instead of repeating it
-  in the markup, so a command cannot exist twice or be named in two places. The
-  buttons and the keyboard call the same functions, and
+  Vault) and the menu button in the top bar renders that list instead of
+  repeating it in the markup, so a command cannot exist twice or be named in two
+  places. The buttons and the keyboard call the same functions, and
   `window.wikiRunCommand(id)` runs one by id and reports whether it ran — which
   is how the browser preview and the tests drive the same path, and how
   `src/main.ts` will reach in if the native menu is ever projected. An entry's
@@ -245,8 +253,8 @@ pre-paint path here is the real one, not a model of it.
   keeps `Ctrl+W` and `Ctrl+Tab` for its own tabs, so in browser dev mode close
   and switch with the mouse and use `Ctrl+B` for the sidebar.
 - Below 640px the sidebar is a drawer whose scrim covers the window, so the tab
-  bar's own buttons — including the `☰` menu — are clickable once the drawer is
-  dismissed (clicking anywhere outside does that).
+  bar's own buttons — including the menu button — are clickable once the drawer
+  is dismissed (clicking anywhere outside does that).
 - The window has no minimum size in either direction. The shell clips its
   overflow rather than scrolling it, so a `min-width` on the body would be a
   floor the window cannot shrink below rather than one the layout grows into,
@@ -256,8 +264,8 @@ pre-paint path here is the real one, not a model of it.
   its height from the list rather than pushing `Cancel` and `Use this folder`
   out of the dialog. Verified down to 240x360 and across 641x600, 900x280 and
   1200x300.
-- The native application menu is not projected; commands are the page's `☰`
-  menu only, and accelerators work because the page handles the keys.
+- The native application menu is not projected; commands are the page's own menu
+  button only, and accelerators work because the page handles the keys.
 - Files larger than 2 MiB and hidden files/directories are skipped.
 - A fixed ignore set (`.git`, `.wiki`, `.cache`, `node_modules`, anything
   dot-prefixed) sits ahead of `wiki.exclude`, and the walk stops at 12 levels or
@@ -266,8 +274,8 @@ pre-paint path here is the real one, not a model of it.
 - The `Assets` checkbox is per session rather than stored per vault, so it
   starts unchecked the way a vault's own config intends.
 - The vault is not watched, so external edits need the refresh button on the tab
-  bar (or **Reload from disk** in the `☰` menu); it asks before discarding a
-  buffer with unsaved changes.
+  bar (or **Reload from disk** in the menu); it asks before discarding a buffer
+  with unsaved changes.
 
 ## Hybrid desktop and web
 
