@@ -259,8 +259,10 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
   // A curated set, so a glyph cannot creep back in as a character. Seven were
   // characters: the menu and the create button were icon-buttons in the markup,
   // the tab close, folder disclosure and active check are assigned in the
-  // script, and the two placeholders are divs. The folder was a colour emoji,
-  // which ignores `color` and so could not follow the palette at all.
+  // script, and the placeholder is a div. The folder was a colour emoji,
+  // which ignores `color` and so could not follow the palette at all. There was
+  // a second placeholder on the no-vault panel; the panel is gone, and with it
+  // the only remaining use of the folder at placeholder size.
   //
   // Typography is deliberately untouched: an ellipsis in a label, a middot
   // between hints and an em dash in prose are part of a sentence, not a control.
@@ -313,8 +315,8 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
     ...page.matchAll(/class="placeholder-icon" aria-hidden="true"><svg/g),
   ];
   assert(
-    placeholders.length === 2,
-    `both placeholders draw an icon rather than a character: found ${placeholders.length}`,
+    placeholders.length === 1,
+    `the one placeholder left draws an icon rather than a character: found ${placeholders.length}`,
   );
 });
 
@@ -338,10 +340,9 @@ Deno.test("the vault's path row is spent only when there is no vault", () => {
   // that is not to pad the buttons but to stop them being a row of their own:
   // the actions now share the name's row, so the header is one line with an
   // optional sentence under it.
-  const head = page.slice(
-    page.indexOf('<div class="vault-head">'),
-    page.indexOf("</section>", page.indexOf('<div class="vault-head">')),
-  );
+  const headAt = page.search(/<div class="vault-head"[^>]*>/);
+  assert(headAt > 0, "the vault header is one row in the markup");
+  const head = page.slice(headAt, page.indexOf("</section>", headAt));
   assert(
     /id="openVaultButton"/.test(head) && /id="closeVaultButton"/.test(head),
     "the vault's actions share the row that holds its name",
@@ -351,6 +352,75 @@ Deno.test("the vault's path row is spent only when there is no vault", () => {
   assert(
     /\.vault-actions \{[^}]*margin-left: auto/.test(page),
     "the actions sit at the far end of the name's row",
+  );
+});
+
+Deno.test("the folder dialog is the only way in, and it is the app's home", () => {
+  // It used to have a panel of its own: an empty state with a folder icon, a
+  // sentence, and a button whose only job was to open the dialog. So the app
+  // had two surfaces for one action and the first click bought nothing, and
+  // closing a vault put you back on a panel you then had to click through to
+  // leave again. One dialog now opens itself when there is no vault, and the
+  // sidebar's button opens that same dialog when there is one.
+  assert(
+    !/placeholderNoVault|emptyOpenVaultButton|Open a folder to begin|Choose a vault/
+      .test(page),
+    "there is no second surface for opening a vault",
+  );
+  assert(
+    /async function init\(\)[\s\S]*?if \(vault\.root === null\) openBrowser\(\);/
+      .test(
+        page,
+      ),
+    "the app opens the dialog itself when it starts with no vault",
+  );
+  // After the listing is reloaded, not before: the dialog browses from the
+  // state the app is in, so it must be opened once that state is the new one.
+  const closeAt = page.indexOf("async function closeVault()");
+  const closeBody = page.slice(
+    closeAt,
+    page.indexOf("async function", closeAt + 10),
+  );
+  const listingAt = closeBody.indexOf("await loadFiles();");
+  assert(
+    listingAt > 0 &&
+      closeBody.indexOf("openBrowser();", listingAt) > listingAt,
+    "and closing a vault returns to it rather than to a panel with a button",
+  );
+  // With nothing open the dialog is the app, so it names that rather than the
+  // switch, and it does not offer a way out of itself: Cancel, Escape and the
+  // scrim all lead to a window with no vault and no way to work in it.
+  assert(
+    /browserTitle\.textContent = vault\.root === null[\s\S]{0,80}'Open a vault'/
+      .test(
+        page,
+      ),
+    "the dialog says which of the two questions it is asking",
+  );
+  assert(
+    /cancelBrowseButton\.hidden = vault\.root === null;/.test(page),
+    "Cancel is hidden when there is nothing to return to",
+  );
+  assert(
+    /function closeBrowser\(\) \{[\s\S]*?if \(vault\.root === null\) return;/
+      .test(
+        page,
+      ),
+    "and Escape cannot dismiss it into an app with no vault",
+  );
+  // The guard reads the state as it is, and choosing a folder is how a user
+  // with no vault gets one — so that path has to take the dialog down without
+  // asking the guard, or the app opens its vault and leaves the dialog over it.
+  assert(
+    /async function switchVault\([\s\S]*?hideBrowser\(\);/.test(page),
+    "opening a vault from the dialog puts the dialog away",
+  );
+  assert(
+    /function closeBrowser\(\)[\s\S]*?if \(vault\.root === null\) return;\s*hideBrowser\(\);/
+      .test(
+        page,
+      ),
+    "and the guarded path delegates to the same hide",
   );
 });
 
@@ -562,6 +632,14 @@ Deno.test("the icons come from one curated map", async () => {
   assert(
     new Set(keys).size === keys.length,
     "no icon is defined twice under two names",
+  );
+  // And the other half of the same failure: an icon nothing draws is a name in
+  // the map claiming a shape is part of the app when it is not. The no-vault
+  // placeholder went when the empty state did and left its folder behind.
+  const undrawn = keys.filter((key) => !source.includes(`ICONS.${key}`));
+  assert(
+    undrawn.length === 0,
+    `these icons are in the map but nothing draws them: ${undrawn.join(", ")}`,
   );
   // currentColor is the point of the migration: it is what lets a glyph follow
   // a palette, which is exactly what the colour emoji could not do.

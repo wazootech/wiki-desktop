@@ -25,10 +25,10 @@ function chromeIcon(paths: string, size: number = 15): string {
 /**
  * Lucide's folder, named once.
  *
- * Three controls draw it — the empty state's placeholder, the sidebar's open
- * action and the close action, which is this folder with a cross through it.
- * Sharing the geometry is the point of the map: a second copy of the same
- * path is a shape that can drift onto a different mark in one of the three.
+ * Two controls draw it — the sidebar's open action and the close action, which
+ * is this folder with a cross through it. Sharing the geometry is the point of
+ * the map: a second copy of the same path is a shape that can drift onto a
+ * different mark in one of the two.
  */
 const FOLDER_PATH =
   '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />';
@@ -62,9 +62,7 @@ const ICONS = {
   closeTab: chromeIcon('<path d="M18 6 6 18" /><path d="m6 6 12 12" />', 12),
   disclosure: chromeIcon('<path d="m9 18 6-6-6-6" />', 12),
   activeCheck: chromeIcon('<path d="M20 6 9 17l-5-5" />', 11),
-  /** Sized for the 42px placeholder tile, which used a 19px font. */
-  noVault: chromeIcon(FOLDER_PATH, 20),
-  /** The sidebar's own way in: the same folder, at control size. */
+  /** The sidebar's own way in: the folder, at control size. */
   openVault: chromeIcon(FOLDER_PATH, 15),
   /**
    * Closing a vault is the same folder with a cross through it, rather than a
@@ -704,7 +702,7 @@ const pageTemplate = `<!DOCTYPE html>
       </div>
 
       <section class="vault" aria-label="Vault">
-        <div class="vault-head">
+        <div class="vault-head" id="vaultHead">
           <span class="vault-label">Vault</span>
           <span class="vault-name is-placeholder" id="vaultName">No vault open</span>
           <div class="vault-actions">
@@ -765,14 +763,14 @@ const pageTemplate = `<!DOCTYPE html>
       </header>
 
       <div class="editor-region">
-        <div class="placeholder" id="placeholderNoVault">
-          <div class="placeholder-inner">
-            <div class="placeholder-icon" aria-hidden="true">${ICONS.noVault}</div>
-            <h1>Open a folder to begin</h1>
-            <p>Pick the folder that holds your wiki. The app reads and writes Markdown files there, directly on disk.</p>
-            <button class="button button-primary" id="emptyOpenVaultButton" type="button">Choose a vault</button>
-          </div>
-        </div>
+        <!--
+          There is no "no vault" panel here. It used to sit here with a button
+          whose only job was to open the folder dialog, so the app had two
+          surfaces for one action and the first click bought nothing. The
+          dialog is the app's way in instead: it opens by itself when there is
+          no vault, and it is the same dialog the sidebar's button opens when
+          there is one.
+        -->
 
         <div class="placeholder" id="placeholderNoFile" hidden>
           <div class="placeholder-inner">
@@ -803,8 +801,8 @@ const pageTemplate = `<!DOCTYPE html>
   <div class="overlay" id="browserOverlay" hidden>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="browserTitle">
       <div class="dialog-header">
-        <h2 id="browserTitle">Open vault</h2>
-        <p>Browse to the folder you want to work in, then choose it. deno desktop has no native folder picker yet, so this dialog stands in for one — paste a path if you would rather navigate that way.</p>
+        <h2 id="browserTitle">Open a vault</h2>
+        <p id="browserIntro">Browse to the folder you want to work in, then choose it. deno desktop has no native folder picker yet, so this dialog stands in for one — paste a path if you would rather navigate that way.</p>
       </div>
       <div class="path-row">
         <button class="button button-secondary" id="upButton" type="button">Up</button>
@@ -868,7 +866,6 @@ const pageTemplate = `<!DOCTYPE html>
       const shell = el('app');
       const editorHost = el('editor');
       const editorWrap = el('editorWrap');
-      const placeholderNoVault = el('placeholderNoVault');
       const placeholderNoFile = el('placeholderNoFile');
       const placeholderNoFileText = el('placeholderNoFileText');
       const tabsEl = el('tabs');
@@ -880,7 +877,6 @@ const pageTemplate = `<!DOCTYPE html>
       const newFileButton = el('newFileButton');
       const openVaultButton = el('openVaultButton');
       const closeVaultButton = el('closeVaultButton');
-      const emptyOpenVaultButton = el('emptyOpenVaultButton');
       const emptyNewFileButton = el('emptyNewFileButton');
       const vaultName = el('vaultName');
       const fileTools = el('fileTools');
@@ -897,6 +893,8 @@ const pageTemplate = `<!DOCTYPE html>
       const cursorPosition = el('cursorPosition');
       const toast = el('toast');
       const overlay = el('browserOverlay');
+      const browserTitle = el('browserTitle');
+      const browserIntro = el('browserIntro');
       const browserPath = el('browserPath');
       const upButton = el('upButton');
       const goButton = el('goButton');
@@ -1408,7 +1406,6 @@ const pageTemplate = `<!DOCTYPE html>
         // from it has nothing to act on and goes with it.
         fileTools.hidden = !open;
         newFileButton.disabled = !open;
-        placeholderNoVault.hidden = open;
         refreshMenu();
       }
 
@@ -1504,7 +1501,6 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       function showEditor() {
-        placeholderNoVault.hidden = true;
         placeholderNoFile.hidden = true;
         editorWrap.hidden = false;
       }
@@ -1512,9 +1508,10 @@ const pageTemplate = `<!DOCTYPE html>
       function showPlaceholder() {
         const hasTab = activeTab() !== null;
         // The editor is hidden while the placeholder stands in for it, and
-        // shown again the moment a tab exists.
+        // shown again the moment a tab exists. With no vault open there is
+        // nothing to stand in for it either: the folder dialog is up, and it
+        // is the app until a vault is chosen.
         editorWrap.hidden = !hasTab;
-        placeholderNoVault.hidden = vault.root !== null;
         placeholderNoFile.hidden = vault.root === null || hasTab;
         emptyNewFileButton.hidden = vault.root === null;
       }
@@ -1620,13 +1617,18 @@ const pageTemplate = `<!DOCTYPE html>
         if (vault.root !== null) await loadFiles();
         showPlaceholder();
         renderTabs();
+        // With no vault the dialog is the app, so it opens itself rather than
+        // waiting behind a panel whose only button opens it.
+        if (vault.root === null) openBrowser();
       }
 
       async function switchVault(path) {
         if (!confirmDiscardAll()) return;
         const state = await call('openVault', [path]);
         if (state === null) return;
-        closeBrowser();
+        // The unconditional hide: the guard in closeBrowser reads the state as
+        // it was, and choosing a folder is how a user with no vault gets one.
+        hideBrowser();
         discardAllTabs();
         applyState(state);
         renderTabs();
@@ -1649,13 +1651,32 @@ const pageTemplate = `<!DOCTYPE html>
         // file list over an app that now has no vault at all. switchVault
         // reloads the same way for the same reason.
         await loadFiles();
+        // Closing returns to the dialog the app opened on, rather than to a
+        // panel with a button that opens it: one surface for one action, and
+        // the recents are the first thing in it.
+        openBrowser();
       }
 
       // Vault picker
 
-      function closeBrowser() {
+      /**
+       * The dialog off the screen, for the paths that have a reason to put it
+       * there: a vault was opened, or the user cancelled a switch.
+       */
+      function hideBrowser() {
         overlay.hidden = true;
         listing = null;
+      }
+
+      function closeBrowser() {
+        // With no vault open this dialog is the app, so there is nothing to
+        // go back to and dismissing it would leave a window with no way to
+        // work in it. Cancel is hidden for the same reason, which makes this
+        // guard the last line rather than the only one — opening a vault from
+        // here goes through hideBrowser, because that is the one action that
+        // takes the user past it.
+        if (vault.root === null) return;
+        hideBrowser();
       }
 
       async function browseTo(path) {
@@ -1720,6 +1741,16 @@ const pageTemplate = `<!DOCTYPE html>
 
       function openBrowser() {
         setSidebarOpen(false);
+        // The dialog names the state it is in, because the two are not the
+        // same question: the first one is the way in, the second one is a
+        // switch, and the second one is going to close a vault and its tabs.
+        browserTitle.textContent = vault.root === null
+          ? 'Open a vault'
+          : 'Open another vault';
+        browserIntro.textContent = vault.root === null
+          ? 'Pick the folder that holds your wiki. deno desktop has no native folder picker yet, so this dialog stands in for one — paste a path if you would rather navigate that way.'
+          : 'Pick a different folder to work in. This closes the vault you have open, along with its tabs, and opens this one in their place.';
+        cancelBrowseButton.hidden = vault.root === null;
         overlay.hidden = false;
         browseTo(vault.root);
       }
@@ -2015,7 +2046,6 @@ const pageTemplate = `<!DOCTYPE html>
         wireMenu();
         sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
         openVaultButton.addEventListener('click', openBrowser);
-        emptyOpenVaultButton.addEventListener('click', openBrowser);
         closeVaultButton.addEventListener('click', closeVault);
         cancelBrowseButton.addEventListener('click', closeBrowser);
         useFolderButton.addEventListener('click', () => {
