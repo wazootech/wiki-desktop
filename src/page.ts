@@ -411,7 +411,16 @@ const pageTemplate = `<!DOCTYPE html>
     .file-tools .filter { flex-basis: 100px; }
     .file-tools-checks { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
-    .file-list { flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none; }
+    /*
+     * The list scrolls constantly and the column is dark, so the platform's
+     * default scrollbar — a light grey bar, sized for a light page — sat in the
+     * middle of it. The tab strip already asks for a thin one; this is the same
+     * request for the one control a reader is always scrolling.
+     */
+    .file-list {
+      flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none;
+      scrollbar-width: thin;
+    }
     .file-button {
       position: relative;
       display: block; width: 100%; padding: 4px 8px; border: 0; border-radius: 6px;

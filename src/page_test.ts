@@ -375,6 +375,20 @@ Deno.test("the vault's actions are named for the state they act on", () => {
   );
 });
 
+Deno.test("both scrolling rows ask for a thin scrollbar", () => {
+  // The app is dark and the platform's default scrollbar is sized and coloured
+  // for a light page, so it sat in the middle of the file list as a light grey
+  // bar in the one column a reader is always scrolling. The tab strip already
+  // asked for a thin one; this makes the pair agree rather than leaving the
+  // next scrolling row to rediscover it.
+  for (const row of ["file-list", "tabs"]) {
+    assert(
+      new RegExp(`\\.${row} \\{[^}]*scrollbar-width: thin`).test(page),
+      `the ${row} asks for a thin scrollbar`,
+    );
+  }
+});
+
 Deno.test("the extension setting is reachable from the list it changes", () => {
   // It was filed as a menu command first, and that put it one level too far
   // from the thing it controls: a user looking at the file list had no reason
