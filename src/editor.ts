@@ -119,9 +119,38 @@ const appTheme = EditorView.theme({
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--brand)" },
   // Selection is painted behind the text, so it cannot recolour it: it is a
   // translucent layer instead, which reads correctly in both schemes.
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "var(--selection-soft)",
-  },
+  //
+  // `!important` is load-bearing rather than defensive. CodeMirror's own theme
+  // reaches the same element with a longer, more specific chain and paints it
+  // a fixed light lavender while the editor is focused, so without this the
+  // focused selection is the editor's colour rather than the app's.
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-selectionLayer .cm-selectionBackground":
+    {
+      backgroundColor: "var(--selection-soft) !important",
+    },
+  // Lift the selection above the content, which is what makes it visible on
+  // the line the caret is on. CodeMirror renders this layer at z-index -2 so
+  // the text sits on top of it, and the active line's background — solid, and
+  // a child of the content — therefore paints over the selection and the two
+  // cancel each other out on exactly that line. Staying above the content is
+  // what every other editor does, and the overlay is translucent, so the
+  // foreground and background are tinted together and keep their contrast.
+  // The caret (150) and the gutter (200) are higher still and unaffected.
+  // `!important` for the same reason as the colour above: CodeMirror's own
+  // base theme sets this z-index, and it wins on specificity.
+  ".cm-selectionLayer": { zIndex: "1 !important" },
+  // A real text selection is painted by the browser over the highlighted
+  // spans, and CodeMirror overrides that too — transparent normally, and the
+  // platform `highlight` colour while the content is focused, which is a light
+  // block under the dark palette's light text. Transparent is fine: the layer
+  // above is what should show. The `highlight` case is not, and it is the one
+  // a user hits by dragging inside the editor, so it has to be out-specified
+  // rather than merely matched: CodeMirror's rule carries the same weight, and
+  // it is written later, so only the extra `.cm-focused` wins the tie.
+  ".cm-content ::selection, .cm-line ::selection, &.cm-focused .cm-content :focus::selection, &.cm-focused .cm-line:focus::selection":
+    {
+      backgroundColor: "var(--selection-soft) !important",
+    },
 });
 
 export function createEditor(options: WikiEditorOptions): WikiEditorHandle {

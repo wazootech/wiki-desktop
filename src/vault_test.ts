@@ -245,6 +245,67 @@ Deno.test("listVaultFiles sorts Markdown first and skips ignored folders", async
   });
 });
 
+Deno.test("the listing follows the vault's config instead of walking alike", async () => {
+  await withTempVault(async (root) => {
+    await Deno.writeTextFile(
+      join(root, "wiki.yml"),
+      "wiki:\n  input:\n    - wiki\n  assets:\n    - assets\n  exclude:\n    - drafts/**\n",
+    );
+    for (const folder of ["wiki", "assets/_images", "drafts"]) {
+      await Deno.mkdir(join(root, folder), { recursive: true });
+    }
+    await Deno.writeTextFile(join(root, "wiki", "CSS.md"), "# CSS\n");
+    await Deno.writeTextFile(join(root, "wiki", "notes.txt"), "n");
+    await Deno.writeTextFile(join(root, "assets", "style.css"), "c");
+    await Deno.writeTextFile(join(root, "assets", "_images", "logo.png"), "p");
+    await Deno.writeTextFile(join(root, "drafts", "wip.md"), "w");
+    await Deno.writeTextFile(join(root, "README.md"), "r");
+
+    const files = await listVaultFiles(root);
+    assertEqual(
+      files.map((file) => file.path).join(", "),
+      "wiki/CSS.md, wiki/notes.txt, README.md, wiki.yml, " +
+        "assets/_images/logo.png, assets/style.css",
+      "the wiki's pages, then the vault's other files, then its static files",
+    );
+    assertEqual(
+      files.map((file) => file.scope).join(", "),
+      "input, input, other, other, asset, asset",
+      "each file carries what the vault calls it",
+    );
+    assert(
+      !files.some((file) => file.path.startsWith("drafts/")),
+      "an excluded folder is not listed",
+    );
+    assert(
+      files.some((file) => file.path === "wiki.yml"),
+      "the config is a file in the vault like any other",
+    );
+  });
+});
+
+Deno.test("a vault whose config cannot be read lists everything, as before", async () => {
+  await withTempVault(async (root) => {
+    await Deno.writeTextFile(join(root, "wiki.yml"), "wiki: [unclosed\n");
+    await Deno.mkdir(join(root, "wiki"));
+    await Deno.mkdir(join(root, "assets"));
+    await Deno.writeTextFile(join(root, "wiki", "CSS.md"), "# CSS\n");
+    await Deno.writeTextFile(join(root, "assets", "style.css"), "c");
+
+    const files = await listVaultFiles(root);
+    assertEqual(
+      files.map((file) => file.path).join(", "),
+      "wiki/CSS.md, assets/style.css, wiki.yml",
+      "Markdown first, then by path: no config means no reordering either",
+    );
+    assertEqual(
+      files.map((file) => file.scope).join(", "),
+      "other, other, other",
+      "and no file is called a page",
+    );
+  });
+});
+
 Deno.test("browseDirectory lists folders and spots a wiki", async () => {
   await withTempVault(async (root) => {
     const parent = join(root, "..");

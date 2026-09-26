@@ -128,6 +128,29 @@ Deno.test("the editor themes itself through an extension the cascade respects", 
   );
 });
 
+Deno.test("the selection is not hidden by the line the caret is on", async () => {
+  // CodeMirror renders the selection at z-index -2 so the text sits on top of
+  // it, and the active line's background is a solid colour inside the content —
+  // so the two overlap and the selection disappears on exactly the line being
+  // edited, which is where a selection is most often being dragged. Lifting
+  // the layer is the fix, and the caret (150) and gutter (200) are higher
+  // already so neither is affected. Both declarations need `!important`,
+  // because the base theme wins on specificity — that is what silently undid
+  // the first attempt at this fix.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  assert(
+    /\.cm-selectionLayer"?\s*:\s*\{\s*zIndex:\s*"1 !important"/.test(source),
+    "the selection layer is lifted above the content, overriding the base theme",
+  );
+  assert(
+    /\.cm-selectionBackground[^"]*"[\s\S]{0,40}?backgroundColor:\s*"var\(--selection-soft\) !important"/
+      .test(source),
+    "and the lifted layer is still painted the app's selection token",
+  );
+});
+
 Deno.test("the editor keeps a document's text exactly as typed", () => {
   // The other direction: edits are the user's bytes, not a re-serialization.
   const state = EditorState.create({

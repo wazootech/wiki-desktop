@@ -48,6 +48,14 @@ It is a development tool: it listens on loopback only and refuses cross-origin
 callers and non-JSON requests. Desktop and web share one implementation of every
 operation (`createVaultApi()`), so the path guards below apply to both.
 
+Both can run at once, and they can write settings at the same time — the desktop
+window persists its geometry on every resize, while the browser changes the
+appearance or the sidebar. `src/config.ts` is built for that: it re-reads the
+settings file instead of serving a snapshot, merges each patch onto what is on
+disk at the moment of the write, serialises the writes in a process, and renames
+a scratch file over the target so a reader never sees half a file. The cost is a
+file read per call, which the OS page cache makes nearly free.
+
 `deno check` needs the `--desktop` flag to see the desktop APIs; plain
 `deno check` reports
 `Property 'BrowserWindow' does not exist on type 'typeof Deno'`.
@@ -98,6 +106,7 @@ pre-paint path here is the real one, not a model of it.
 | `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                     |
 | `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                   |
 | `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                  |
+| `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.    |
 | `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance).         |
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                           |
 | `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string. |
@@ -109,6 +118,21 @@ pre-paint path here is the real one, not a model of it.
 - **Vault** — a folder the user picks. Its absolute path is stored in the app
   config, so the app reopens where you left off. Nothing is written except files
   you explicitly save.
+- **The vault's own config says what a page is** — `wiki.yml` (or `wiki.yaml`,
+  `wiki.json`) is read before the walk and gives every listed file a scope:
+  `input` under `wiki.input` (the wiki's pages), `asset` under `wiki.assets`
+  (static files), `other` for everything else the vault holds — its config,
+  READMEs, scripts. Assets are listed last and dimmed, behind an `Assets`
+  checkbox that appears only in a vault that declares them, because the app has
+  no other file browser: `exclude` is the only thing that removes a file, and a
+  checkbox is what keeps a two-tier listing honest. Globs (`**` across segments,
+  `*` within one) apply to files and folders, and an excluded folder is never
+  entered, so its contents cost nothing and cannot reappear a level down.
+  `other` files stay listed rather than hidden, because `input` is about
+  indexing rather than permission and the vault's own root `README.md` has to
+  stay openable. A missing, unparseable, or non-mapping config produces exactly
+  the listing there was before — a broken config must not be able to hide a
+  vault's files.
 - **Bindings** — `win.bind(name, handler)` exposes Deno functions to the webview
   as `bindings.name(args)`. They run in-process (no socket IPC) and inherit the
   runtime's permissions, so the tasks start Deno with
@@ -223,9 +247,24 @@ pre-paint path here is the real one, not a model of it.
 - Below 640px the sidebar is a drawer whose scrim covers the window, so the tab
   bar's own buttons — including the `☰` menu — are clickable once the drawer is
   dismissed (clicking anywhere outside does that).
+- The window has no minimum size in either direction. The shell clips its
+  overflow rather than scrolling it, so a `min-width` on the body would be a
+  floor the window cannot shrink below rather than one the layout grows into,
+  and every control past it would be unreachable; the layout instead shrinks,
+  the column becoming a drawer, and text that does not fit ellipsises. The vault
+  picker's folder list is the dialog's one flexible row, so a short window takes
+  its height from the list rather than pushing `Cancel` and `Use this folder`
+  out of the dialog. Verified down to 240x360 and across 641x600, 900x280 and
+  1200x300.
 - The native application menu is not projected; commands are the page's `☰`
   menu only, and accelerators work because the page handles the keys.
 - Files larger than 2 MiB and hidden files/directories are skipped.
+- A fixed ignore set (`.git`, `.wiki`, `.cache`, `node_modules`, anything
+  dot-prefixed) sits ahead of `wiki.exclude`, and the walk stops at 12 levels or
+  5,000 files. Build leftovers a vault does not exclude — Python's `__pycache__`
+  and `.pyc`, for instance — therefore show up among its files, as `other`.
+- The `Assets` checkbox is per session rather than stored per vault, so it
+  starts unchecked the way a vault's own config intends.
 - The vault is not watched, so external edits need the refresh button on the tab
   bar (or **Reload from disk** in the `☰` menu); it asks before discarding a
   buffer with unsaved changes.

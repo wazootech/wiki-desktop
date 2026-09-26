@@ -165,7 +165,14 @@ const pageTemplate = `<!DOCTYPE html>
 
     body {
       margin: 0;
-      min-width: 320px;
+      /*
+       * No min-width: the shell clips its overflow, so a floor here would
+       * not scroll the overflow away — it would cut it off, and at a window
+       * narrower than the floor the right-hand controls (the page menu above
+       * all) sit past the edge with no way to reach them. The layout below is
+       * already built to shrink: the column turns into a drawer, and the text
+       * that cannot fit ellipsises.
+       */
       height: 100vh;
       overflow: hidden;
       background: var(--canvas);
@@ -317,6 +324,16 @@ const pageTemplate = `<!DOCTYPE html>
       font-size: 12px;
     }
     .filter::placeholder { color: var(--text-faint); }
+    /*
+     * The vault's own config decides what is a page and what is a static file.
+     * The checkbox only appears in a vault that declares assets, since a vault
+     * without the config has no such distinction to show.
+     */
+    .assets-toggle {
+      display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+      color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer;
+    }
+    .assets-toggle input { margin: 0; }
 
     .file-list { flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none; }
     .file-button {
@@ -337,6 +354,8 @@ const pageTemplate = `<!DOCTYPE html>
     }
     .file-button.is-active { color: var(--brand-text); background: var(--brand-soft); font-weight: 700; }
     .file-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Listed rather than hidden, but visibly not one of the wiki's pages. */
+    .file-button.is-asset { opacity: .62; }
     .file-dir { display: block; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
     .sidebar-status {
@@ -473,7 +492,13 @@ const pageTemplate = `<!DOCTYPE html>
       color: var(--text-label); background: var(--panel-muted); font-size: 11.5px; font-weight: 600;
     }
     .chip:hover { border-color: var(--line-strong); background: var(--surface-raised); }
-    .dir-list { flex: 1; min-height: 120px; margin: 0; padding: 3px 10px 9px; overflow-y: auto; list-style: none; border-top: 1px solid var(--line); }
+    /*
+     * The list absorbs whatever the header and footer do not need, and is
+     * allowed to shrink to nothing: it is the only flexible row in the dialog,
+     * so a floor here is what pushes the footer past a short window's
+     * max-height and clips Cancel and Use this folder off the bottom.
+     */
+    .dir-list { flex: 1; min-height: 0; margin: 0; padding: 3px 10px 9px; overflow-y: auto; list-style: none; border-top: 1px solid var(--line); }
     .dir-button {
       display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px;
       border: 0; border-radius: 6px; color: var(--text-body); background: transparent; text-align: left; font-size: 12px;
@@ -532,6 +557,10 @@ const pageTemplate = `<!DOCTYPE html>
       .tabbar { flex-wrap: wrap; }
       .save-state { display: none; }
       .statusbar { flex-wrap: wrap; }
+      /* The picker's own margin is generous on a desktop window and a large
+         slice of a phone-width one, where it would otherwise cost the dialog
+         both width and height. */
+      .overlay { padding: 12px; }
     }
   </style>
   <script>
@@ -604,6 +633,9 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="file-tools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+        <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
+          <input type="checkbox" id="showAssets" />Assets
+        </label>
         <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>+</button>
       </div>
 
@@ -763,6 +795,8 @@ const pageTemplate = `<!DOCTYPE html>
       const vaultName = el('vaultName');
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
+      const assetsToggle = el('assetsToggle');
+      const showAssetsInput = el('showAssets');
       const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
@@ -1187,29 +1221,39 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       function renderFiles() {
+        // The vault's own config says which files are the wiki's pages. Its
+        // static files are one tick away by default, because a build output
+        // folder beside 400 pages is not what a wiki looks like.
+        const hasAssets = files.some((file) => file.scope === 'asset');
+        assetsToggle.hidden = !hasAssets;
+        // An empty vault should not leave a checkbox ticking nothing.
+        if (!hasAssets) showAssetsInput.checked = false;
+        const listed = showAssetsInput.checked
+          ? files
+          : files.filter((file) => file.scope !== 'asset');
         const query = filterInput.value.trim().toLowerCase();
         const visible = query
-          ? files.filter((file) => file.path.toLowerCase().indexOf(query) !== -1)
-          : files;
+          ? listed.filter((file) => file.path.toLowerCase().indexOf(query) !== -1)
+          : listed;
         const openPaths = new Set(tabs.map((tab) => tab.path));
         const active = activeTab();
         fileList.textContent = '';
         if (vault.root === null) {
           fileCount.textContent = 'No vault open';
         } else if (visible.length === 0) {
-          fileCount.textContent = files.length === 0
+          fileCount.textContent = listed.length === 0
             ? 'No files in this vault'
             : 'No files match "' + filterInput.value.trim() + '"';
           const empty = document.createElement('li');
           empty.className = 'file-empty';
-          empty.textContent = files.length === 0
+          empty.textContent = listed.length === 0
             ? 'This folder has no files yet. Create one with New.'
             : 'Try a different filter.';
           fileList.appendChild(empty);
         } else {
           fileCount.textContent = visible.length +
             (visible.length === 1 ? ' file' : ' files') +
-            (visible.length === files.length ? '' : ' of ' + files.length);
+            (visible.length === listed.length ? '' : ' of ' + listed.length);
         }
 
         for (const file of visible) {
@@ -1219,6 +1263,7 @@ const pageTemplate = `<!DOCTYPE html>
           button.className = 'file-button';
           if (active !== null && active.path === file.path) button.classList.add('is-active');
           else if (openPaths.has(file.path)) button.classList.add('is-open');
+          if (file.scope === 'asset') button.classList.add('is-asset');
           const name = document.createElement('span');
           name.className = 'file-name';
           name.textContent = file.name;
@@ -1388,7 +1433,11 @@ const pageTemplate = `<!DOCTYPE html>
         applyState(state);
         renderTabs();
         updateStatus();
-        renderFiles();
+        // The listing belongs to the vault that just closed, so it goes with
+        // it. loadFiles is what clears it — renderFiles would redraw the old
+        // file list over an app that now has no vault at all. switchVault
+        // reloads the same way for the same reason.
+        await loadFiles();
       }
 
       // Vault picker
@@ -1763,6 +1812,7 @@ const pageTemplate = `<!DOCTYPE html>
         saveButton.addEventListener('click', saveFile);
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
+        showAssetsInput.addEventListener('change', renderFiles);
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks
