@@ -107,7 +107,7 @@ pre-paint path here is the real one, not a model of it.
 | `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                                                                                                                                                                                                                    |
 | `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                                                                                                                                                                                                                   |
 | `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.                                                                                                                                                                                                     |
-| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance).                                                                                                                                                                                                          |
+| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance, and the file list's three switches as one table).                                                                                                    |
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
 | `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                                                  |
 | `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                                                                                                                                                                                                                     |
@@ -169,31 +169,51 @@ pre-paint path here is the real one, not a model of it.
   attribute, so scrollbars, carets, and native controls match too, and the
   `theme-color` meta reads its value out of the stylesheet rather than repeating
   it.
-- **File extensions** — a checkbox in the file list's own toolbar, beside the
-  list it redraws and next to Assets, on by default. It started as an Appearance
-  menu command, which put it one level too far from the thing it controls: a
-  user looking at the file list had no reason to think the palette menu governed
-  it. The menu command remains, and the two drive one state, so either redraws
-  the other. A wiki is nearly all Markdown, so a column of `Getting_Started.md`
-  is noise once a page is open and the tab already names the file; turned off,
-  the list drops the extension and shows it only where a name is actually being
-  typed, which is the New file prompt and nowhere else. The tab strip and the
-  status bar keep it, because a tab is the document's identity rather than one
-  entry in a list of similar names. Only `.md` is dropped: a vault's own `.py`
-  and `.yml` files are few, and shortening those would make two different files
-  look alike. The toolbar wraps below 320px rather than clipping, and the two
-  checkboxes are grouped so they wrap as a pair instead of one per line. The row
+- **The file list's three switches** — `Assets`, `Extensions` and `Paths`, three
+  checkboxes in the file list's own toolbar, beside the list they redraw. They
+  are one setting in kind and are now one setting in code: a table in
+  `src/page.ts` declares each one's label, tooltip, menu wording and stored key,
+  and that table draws the markup, the change listeners, the items in the
+  Appearance menu, and the operation that persists it. What each one _changes_
+  is still written out separately, because a shortened name, a missing second
+  line and a filtered list are three different edits. Every switch is stored in
+  the app config and restored on the next launch, which is the point: Assets
+  used to be per-session while its two neighbours persisted, and the reason was
+  that it was the one switch nothing else was written in terms of. One rule
+  reads them back — a stored boolean is believed, anything else falls back to
+  that switch's own default — so both polarities are covered without two
+  versions of the rule, and a config written before a switch existed keeps the
+  layout it had. Each item is a `menuitemcheckbox` with `aria-checked`, because
+  a state has to say which way it is on rather than fire and close the menu.
+- **File extensions**, on by default. It started as an Appearance menu command,
+  which put it one level too far from the thing it controls: a user looking at
+  the file list had no reason to think the palette menu governed it. A wiki is
+  nearly all Markdown, so a column of `Getting_Started.md` is noise once a page
+  is open and the tab already names the file; turned off, the list drops the
+  extension and shows it only where a name is actually being typed, which is the
+  New file prompt and nowhere else. The tab strip and the status bar keep it,
+  because a tab is the document's identity rather than one entry in a list of
+  similar names. Only `.md` is dropped: a vault's own `.py` and `.yml` files are
+  few, and shortening those would make two different files look alike. The row
   still opens by path and carries it in its `title`, so the shorter label is
   display only.
-- **Folder paths** — a third checkbox in the same toolbar, on by default, for
-  the folder each file sits in. That line is why the file list is as tall as it
-  is: it is a second line under every row, and in a vault one folder deep — the
-  usual shape of a wiki — it is the same word repeated down the whole column.
-  Turned off, a row is one line, and the height of a row in `wiki/docs` drops
-  from 37px to 24px. The span is left out of the row rather than hidden with
-  CSS, because a `display: none` node is out of sight but still in the tab order
-  and still read aloud. The row's `title` keeps the full path, so a reader who
-  wants it hovers or focuses the row.
+- **Folder paths**, on by default. That line is why the file list is as tall as
+  it is: it is a second line under every row, and in a vault one folder deep —
+  the usual shape of a wiki — it is the same word repeated down the whole
+  column. Turned off, a row is one line, and the height of a row in `wiki/docs`
+  drops from 37px to 24px. The span is left out of the row rather than hidden
+  with CSS, because a `display: none` node is out of sight but still in the tab
+  order and still read aloud. The row's `title` keeps the full path, so a reader
+  who wants it hovers or focuses the row.
+- **Assets**, off by default, and hidden entirely in a vault that declares no
+  static files. The vault's own `wiki.yml` decides what is a page and what is an
+  asset, so a build output folder beside four hundred pages is not what a wiki
+  looks like. It is stored anyway, because a user who ticked it once meant it.
+  The list reads the stored state rather than the checkbox, which is what makes
+  the preference survive a vault that has nothing to offer: the checkbox is a
+  mirror of the state, never the source of it. The toolbar wraps below 320px
+  rather than clipping, and the checkboxes are grouped so they wrap together
+  instead of one per line.
 - **Appearance** — `System`, `Light`, and `Dark`, under their own group in the
   menu, stored in the app config beside the sidebar width and restored on the
   next launch. They are rendered as radio items (`menuitemradio` +
@@ -442,8 +462,6 @@ pre-paint path here is the real one, not a model of it.
   dot-prefixed) sits ahead of `wiki.exclude`, and the walk stops at 12 levels or
   5,000 files. Build leftovers a vault does not exclude — Python's `__pycache__`
   and `.pyc`, for instance — therefore show up among its files, as `other`.
-- The `Assets` checkbox is per session rather than stored per vault, so it
-  starts unchecked the way a vault's own config intends.
 - The vault is not watched, so external edits need the refresh button on the tab
   bar (or **Reload from disk** in the menu); it asks before discarding a buffer
   with unsaved changes.
