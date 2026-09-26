@@ -50,6 +50,15 @@ Deno.test("an info string with no grammar yields none, and nothing throws", () =
       "sparql",
       "turtle",
       "\t",
+      // The one name that reaches past the record: an object literal inherits
+      // `constructor` from Object.prototype, and it is already lower-case, so
+      // it is the single string in the alphabet a plain lookup resolves to
+      // something. The others -- toString, valueOf, hasOwnProperty -- are
+      // camelCase and cannot survive the case-insensitive read, which is why
+      // this is one test case rather than a family of them.
+      "constructor",
+      "Object",
+      "CONSTRUCTOR",
     ]
   ) {
     assertEqual(

@@ -93,7 +93,19 @@ export function fenceLanguage(info: string): Language | null {
     case "pwsh":
       return FENCE_LANGUAGES.powershell;
     default:
-      return FENCE_LANGUAGES[name] ?? null;
+      // hasOwn, not a plain index into the record. An object literal inherits
+      // `constructor` from Object.prototype, and `FENCE_LANGUAGES.constructor`
+      // is the `Object` function -- so a fence tagged ```constructor handed
+      // CodeMirror a function where it expects a grammar. The lowercasing above
+      // hides every other inherited name, because the rest are camelCase, so
+      // that one string is the whole exposure; `?? null` cannot catch it,
+      // because a function is neither null nor undefined. Measured rather than
+      // assumed: CodeMirror's Markdown parser ignores the value and the
+      // document parses, so the cost today is a wrong return from a function
+      // whose contract is "a grammar, or null".
+      return Object.hasOwn(FENCE_LANGUAGES, name)
+        ? FENCE_LANGUAGES[name]
+        : null;
   }
 }
 
