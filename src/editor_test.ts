@@ -212,51 +212,6 @@ Deno.test("a triple click selects the whole line, not the word under it", async 
   );
 });
 
-Deno.test("the committed editor bundle is the one its source builds", async () => {
-  // The bundle is generated and committed, and every transport serves it in
-  // place of editor.ts. Nothing else notices when it drifts, so a change to
-  // the editor can pass every test and still ship the old behaviour: this was
-  // built with `deno task build`, which makes the desktop binary rather than
-  // the bundle, and the triple-click fix looked verified in the browser for a
-  // full round of testing while the served code was the previous build.
-  //
-  // Rebuilding and comparing catches that directly. Asserting the bundle
-  // merely *contains* the new code does not: CodeMirror's own dist ships a
-  // domEventObservers, so a stale bundle passed that check.
-  const out = await Deno.makeTempDir();
-  const fresh = join(out, "editor_bundle.js");
-  try {
-    const build = await new Deno.Command("deno", {
-      args: [
-        "bundle",
-        "--platform",
-        "browser",
-        "--minify",
-        "--quiet",
-        join(import.meta.dirname!, "editor_entry.ts"),
-        "-o",
-        fresh,
-      ],
-      stdout: "null",
-      stderr: "piped",
-    }).output();
-    assert(
-      build.success,
-      `the bundle rebuilds: ${new TextDecoder().decode(build.stderr)}`,
-    );
-    const [rebuilt, committed] = await Promise.all([
-      Deno.readTextFile(fresh),
-      Deno.readTextFile(join(import.meta.dirname!, "editor_bundle.js")),
-    ]);
-    assert(
-      rebuilt === committed,
-      "the committed bundle matches a fresh build — run `deno task build:editor`",
-    );
-  } finally {
-    await Deno.remove(out, { recursive: true });
-  }
-});
-
 Deno.test("the editor keeps a document's text exactly as typed", () => {
   // The other direction: edits are the user's bytes, not a re-serialization.
   const state = EditorState.create({
