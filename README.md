@@ -219,6 +219,24 @@ pre-paint path here is the real one, not a model of it.
   _after_ the page's stylesheet with an extra class of specificity, so a
   page-written `.cm-gutters` rule loses and the gutter renders light grey in
   dark mode.
+- **Following a link** — `Ctrl`/`Cmd`+click opens a Markdown link, and holding
+  the modifier shows where it goes before you commit to it: the vault-relative
+  path for a page, the URL for an external link, and plainly that there is
+  nowhere to go when there is nowhere to go. An invisible modifier on a coloured
+  word is not a feature anyone finds on their own, so the tooltip is the feature
+  and the click is the easy half. The href is read from the syntax tree rather
+  than from the text, so a click anywhere in the link finds it — label, brackets
+  or target — and a URL containing a `)` resolves the way the parser says it
+  does instead of the way a regular expression guesses. `src/markdown_links.ts`
+  holds that read and the arithmetic that turns an href into a target, apart
+  from the page so both can be tested with no DOM; the editor resolves against
+  the document that is showing and the page decides what to do, because the page
+  is a classic script with no import to hand and is the part that knows the
+  vault. A target outside the vault opens the folder browser at the folder it
+  named. External links go to `window.open`: the app runs without `--allow-run`,
+  and handing a URL to the OS would mean granting a permission to every task so
+  it could shell out per platform. In the desktop webview that opens a window
+  rather than the system browser.
 - **Line endings** — the editor's document holds LF only, and the file keeps the
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a
