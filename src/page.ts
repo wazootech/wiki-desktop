@@ -1453,8 +1453,13 @@ const pageTemplate = `<!DOCTYPE html>
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'file-button';
-          if (active !== null && active.path === file.path) button.classList.add('is-active');
-          else if (openPaths.has(file.path)) button.classList.add('is-open');
+          if (active !== null && active.path === file.path) {
+            button.classList.add('is-active');
+            // Which page the editor is showing was brand-coloured and bold and
+            // nothing else, so a reader using a screen reader could not tell
+            // where they were in a list of a hundred similar names.
+            button.setAttribute('aria-current', 'true');
+          } else if (openPaths.has(file.path)) button.classList.add('is-open');
           if (file.scope === 'asset') button.classList.add('is-asset');
           const name = document.createElement('span');
           name.className = 'file-name';
@@ -1475,7 +1480,17 @@ const pageTemplate = `<!DOCTYPE html>
             dir.textContent = 'Markdown';
             button.appendChild(dir);
           }
-          button.title = file.path;
+          // An asset is dimmed, which is a distinction the eye can see and a
+          // screen reader cannot: the row said only its name, so a build output
+          // file and a page of the wiki announced identically. Said once, in
+          // the row's own words, rather than in an aria-label that would
+          // replace the visible name and break voice control.
+          if (file.scope === 'asset') {
+            const kind = document.createElement('span');
+            kind.className = 'sr-only';
+            kind.textContent = 'static file';
+            button.appendChild(kind);
+          }
           button.addEventListener('click', () => openFile(file.path));
           item.appendChild(button);
           fileList.appendChild(item);

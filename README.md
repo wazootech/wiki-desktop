@@ -269,6 +269,13 @@ pre-paint path here is the real one, not a model of it.
   the buttons shipped with the wording each layout starts in, so after the first
   collapse the brand toggle's tooltip still said "Hide vault files" while the
   control beside it said "Show".
+- **A file row says what it is, not only what colour it is** — the row for the
+  document on screen carries `aria-current`, and an asset row — one the vault's
+  config lists as static rather than as a page — carries a visually hidden
+  "static file". Both were drawn states and nothing else: brand colour and a
+  rail for the open ones, a dimmed row for the assets, which a screen reader
+  cannot see. The note goes in the row rather than in an `aria-label` that would
+  replace the visible name and break voice control.
 - **One curated icon set** — every icon in the app is an inline SVG from one map
   in `src/page.ts` (`ICONS`), copied from [Lucide](https://lucide.dev) rather
   than imported so `deno task build` stays a single self-contained artefact.

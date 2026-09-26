@@ -413,6 +413,50 @@ Deno.test("both scrolling rows ask for a thin scrollbar", () => {
   }
 });
 
+Deno.test("a file row says which page is showing, and which rows are assets", () => {
+  // The active row was brand-coloured and bold, and the open ones carried a
+  // rail: both states a screen reader cannot see. In a list where a hundred
+  // rows differ only by folder, "which page am I in" has to be said rather than
+  // tinted.
+  assert(
+    /button\.setAttribute\('aria-current', 'true'\)/.test(page),
+    "the row for the open document is marked as the current one",
+  );
+  // Marked in the active branch, not the open one: a row with a buffer behind
+  // it is not the document on screen, and marking those too would make
+  // "current" mean "open" in the one list where the two differ.
+  const rows = page.slice(page.indexOf("for (const file of visible)"));
+  const activeBranch = rows.slice(
+    rows.indexOf("if (active !== null && active.path === file.path)"),
+    rows.indexOf("} else if (openPaths.has(file.path))"),
+  );
+  assert(
+    /button\.setAttribute\('aria-current', 'true'\)/.test(activeBranch),
+    "and it is the active row that is marked, not every row that is open",
+  );
+  // An asset was dimmed, which is the only thing that said it was not a page of
+  // the wiki. Said once more in the row's own words rather than in an
+  // aria-label: replacing the visible name is what breaks voice control, and
+  // the row already names itself correctly.
+  assert(
+    /kind\.className = 'sr-only';\s*kind\.textContent = 'static file'/.test(
+      page,
+    ),
+    "an asset row says it is a static file, in the row rather than over it",
+  );
+  assert(
+    /if \(file\.scope === 'asset'\) \{\s*const kind = document\.createElement\('span'\)/
+      .test(
+        page,
+      ),
+    "and only assets are marked as one",
+  );
+  assert(
+    !/button\.aria-label|button\.setAttribute\('aria-label'/.test(rows),
+    "no file row overrides its visible name with an aria-label",
+  );
+});
+
 Deno.test("the extension setting is reachable from the list it changes", () => {
   // It was filed as a menu command first, and that put it one level too far
   // from the thing it controls: a user looking at the file list had no reason
