@@ -10,6 +10,7 @@
     "test": "deno test --allow-read --allow-write --allow-env --allow-net"
   },
   "imports": {
+    "@lezer/common": "npm:@lezer/common@^1.5.3",
     "@std/yaml": "jsr:@std/yaml@^1",
     "@codemirror/commands": "npm:@codemirror/commands@^6",
     "@codemirror/lang-markdown": "npm:@codemirror/lang-markdown@^6",
