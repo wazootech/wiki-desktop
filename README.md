@@ -197,6 +197,14 @@ pre-paint path here is the real one, not a model of it.
   paragraphs. It runs as a `domEventObservers` handler because observers run
   before the editor's own, and preventing the default there is what stops
   CodeMirror adding a word selection on top.
+- **The vault's path row is shown only with no vault open** — with one open it
+  is the root, and that is the one piece of the sidebar header that is pure
+  decoration: the name already identifies the folder, and no sidebar wide enough
+  to be usable has room for the path anyway. Measured at 338px of text in a
+  308px box, so what the user actually read was an ellipsis, for 26px of a
+  permanent header. With no vault open the same row is the sentence saying what
+  `Open vault…` is for, which is the one time it earns its height, so it is
+  hidden rather than removed. The block goes from 86px to 69px.
 - **Editor** — [CodeMirror 6](https://codemirror.net/) with the Markdown
   grammar, chosen in [#6](https://github.com/wazootech/wiki-desktop/issues/6)
   against a regex overlay and against `editorcn`/Tiptap (HTML- or

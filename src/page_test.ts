@@ -280,6 +280,30 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
   );
 });
 
+Deno.test("the vault's path row is spent only when there is no vault", () => {
+  // With a vault open that row is the root, and it is the one piece of the
+  // sidebar header that is pure decoration: the name already identifies the
+  // folder, and no usable sidebar is wide enough to show the path anyway —
+  // measured at 338px of text in a 308px box, so what the user read was an
+  // ellipsis. With no vault open the same row is the sentence saying what
+  // Open vault is for, which is the one time it earns its height.
+  assert(
+    /vaultPath\.hidden = open;/.test(page),
+    "the path row is hidden while a vault is open and shown while none is",
+  );
+  assert(
+    /vaultPath\.textContent = open \? vault\.root : 'Choose the folder that holds your wiki\.'/
+      .test(page),
+    "and it keeps the guidance an unopened vault needs",
+  );
+  // Hiding the row must not close the gap it left: the buttons still need to
+  // sit clear of the name, and an unopened vault still needs its own spacing.
+  assert(
+    /\.vault-actions \{[^}]*margin-top: 8px/.test(page),
+    "the buttons carry the spacing the path row used to provide",
+  );
+});
+
 Deno.test("the extension setting is reachable from the list it changes", () => {
   // It was filed as a menu command first, and that put it one level too far
   // from the thing it controls: a user looking at the file list had no reason

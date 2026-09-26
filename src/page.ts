@@ -326,11 +326,19 @@ const pageTemplate = `<!DOCTYPE html>
     .vault-label { color: var(--muted); font-size: 9.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; flex-shrink: 0; }
     .vault-name { font-size: 12.5px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-name.is-placeholder { color: var(--muted); font-weight: 600; }
+    /*
+     * The path earns its row only when there is no vault: then it is the
+     * sentence saying what Open vault is for. With a vault open it is the
+     * root, which the name already identifies and which no sidebar wide
+     * enough to be usable has room to show — measured at 338px of text in a
+     * 308px box, so what the user actually read was an ellipsis. 26px of a
+     * permanent header is a lot for that, so it is dropped while open.
+     */
     .vault-path {
-      margin: 3px 0 8px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+      margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.4;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .vault-actions { display: flex; gap: 6px; }
+    .vault-actions { display: flex; gap: 6px; margin-top: 8px; }
     .vault-actions .button { flex: 1; min-height: 25px; font-size: 11.5px; }
 
     /*
@@ -1285,6 +1293,9 @@ const pageTemplate = `<!DOCTYPE html>
         vaultName.classList.toggle('is-placeholder', !open);
         vaultPath.textContent = open ? vault.root : 'Choose the folder that holds your wiki.';
         vaultPath.title = vault.root || '';
+        // Hidden rather than removed, because the same row is the guidance
+        // that tells an unopened vault what Open vault is for.
+        vaultPath.hidden = open;
         closeVaultButton.hidden = !open;
         newFileButton.disabled = !open;
         placeholderNoVault.hidden = open;
