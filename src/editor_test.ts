@@ -151,6 +151,112 @@ Deno.test("the selection is not hidden by the line the caret is on", async () =>
   );
 });
 
+Deno.test("a triple click selects the whole line, not the word under it", async () => {
+  // CodeMirror does handle a triple click, but it recognises one by
+  // event.detail, which only the browser increments, and only while the
+  // clicks land inside its own double-click threshold. A third click a
+  // moment late resets the count, so the gesture arrives as one more word
+  // selection — which is what this replaces.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+
+  // The count has to be ours. Reading event.detail would reproduce the bug.
+  assert(
+    /mousedown\(event, view\) \{[\s\S]{0,400}?now - lastClickAt < TRIPLE_CLICK_MS/
+      .test(source),
+    "the clicks are counted here, by time and place, rather than read from the browser's own count",
+  );
+  assert(
+    !/mousedown\(event, view\) \{[\s\S]{0,200}?event\.detail/.test(source),
+    "nothing in the handler depends on event.detail, which is what let the gesture fail",
+  );
+
+  // An observer runs before the editor's own event handlers, and preventing
+  // the default there stops CodeMirror adding a word selection on top. As a
+  // plain handler it would arrive second, and the two would fight.
+  assert(
+    /EditorView\.domEventObservers\(\{/.test(source),
+    "the handler is an observer, so it runs before CodeMirror's own",
+  );
+  assert(
+    /if \(clicks < 3\) return;[\s\S]{0,400}?event\.preventDefault\(\)/.test(
+      source,
+    ),
+    "and it prevents the default so CodeMirror never starts its own selection",
+  );
+
+  // The window has to outlast the browser's threshold, or the gesture breaks
+  // again for exactly the clicks it is meant to rescue. Windows raises that
+  // threshold in its mouse settings, well past the 500ms default.
+  const window = Number(
+    /const TRIPLE_CLICK_MS = (\d+);/.test(source) &&
+      source.match(/const TRIPLE_CLICK_MS = (\d+);/)![1],
+  );
+  assert(
+    window > 500,
+    `the triple-click window (${window}ms) is longer than the 500ms double-click default it has to survive`,
+  );
+
+  // The whole logical line, and not the visual one CodeMirror would pick: on a
+  // wrapped paragraph the visual line is a fragment of what was aimed at. The
+  // trailing newline is left out so deleting the selection keeps the next
+  // paragraph separate.
+  assert(
+    /const line = view\.state\.doc\.lineAt\(pos\)/.test(source),
+    "the selection is the whole line the position falls in",
+  );
+  assert(
+    /selection: \{ anchor: line\.from, head: line\.to \}/.test(source),
+    "spanning the line's text alone, so a delete does not join two paragraphs",
+  );
+});
+
+Deno.test("the committed editor bundle is the one its source builds", async () => {
+  // The bundle is generated and committed, and every transport serves it in
+  // place of editor.ts. Nothing else notices when it drifts, so a change to
+  // the editor can pass every test and still ship the old behaviour: this was
+  // built with `deno task build`, which makes the desktop binary rather than
+  // the bundle, and the triple-click fix looked verified in the browser for a
+  // full round of testing while the served code was the previous build.
+  //
+  // Rebuilding and comparing catches that directly. Asserting the bundle
+  // merely *contains* the new code does not: CodeMirror's own dist ships a
+  // domEventObservers, so a stale bundle passed that check.
+  const out = await Deno.makeTempDir();
+  const fresh = join(out, "editor_bundle.js");
+  try {
+    const build = await new Deno.Command("deno", {
+      args: [
+        "bundle",
+        "--platform",
+        "browser",
+        "--minify",
+        "--quiet",
+        join(import.meta.dirname!, "editor_entry.ts"),
+        "-o",
+        fresh,
+      ],
+      stdout: "null",
+      stderr: "piped",
+    }).output();
+    assert(
+      build.success,
+      `the bundle rebuilds: ${new TextDecoder().decode(build.stderr)}`,
+    );
+    const [rebuilt, committed] = await Promise.all([
+      Deno.readTextFile(fresh),
+      Deno.readTextFile(join(import.meta.dirname!, "editor_bundle.js")),
+    ]);
+    assert(
+      rebuilt === committed,
+      "the committed bundle matches a fresh build — run `deno task build:editor`",
+    );
+  } finally {
+    await Deno.remove(out, { recursive: true });
+  }
+});
+
 Deno.test("the editor keeps a document's text exactly as typed", () => {
   // The other direction: edits are the user's bytes, not a re-serialization.
   const state = EditorState.create({

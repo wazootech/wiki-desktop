@@ -55,6 +55,23 @@ export interface WikiEditorOptions {
 const SOFT_TAB = "  ";
 
 /**
+ * How close together three clicks must be to read as a triple click.
+ *
+ * This has to be *longer* than the browser's own double-click threshold, not
+ * equal to it. The whole reason for counting here is that the browser resets
+ * its count when a click lands outside that threshold, so a window that
+ * matched it would break on exactly the gestures it is meant to rescue — and
+ * Windows lets that threshold be raised well past the 500ms default. The
+ * cost of the longer window is that a double click on a word followed by a
+ * deliberate third click on the same word reads as a triple; that is rarer
+ * than the case being fixed, and one more click puts the caret back.
+ */
+const TRIPLE_CLICK_MS = 700;
+
+/** How far a click may drift and still join the gesture before it. */
+const TRIPLE_CLICK_SLOP = 5;
+
+/**
  * Syntax colours, as CSS custom properties rather than literals.
  *
  * The editor ships a highlight style tuned for a white background, and those
@@ -155,6 +172,10 @@ const appTheme = EditorView.theme({
 
 export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
   const states = new Map<string, EditorState>();
+  let clicks = 0;
+  let lastClickAt = 0;
+  let lastClickX = 0;
+  let lastClickY = 0;
   const scrollTops = new Map<string, number>();
   let key = "";
 
@@ -180,6 +201,48 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
       ...historyKeymap,
       { key: "Tab", run: insertSoftTab },
     ]),
+    /*
+     * CodeMirror tells a double click from a triple by event.detail, which
+     * only the browser increments, and only while consecutive clicks land
+     * inside its own double-click threshold. A third click that arrives a
+     * moment late resets the count, so the gesture reaches the editor as one
+     * more word selection — which is what this replaces.
+     *
+     * Counting the clicks here makes the gesture ours. Even when the browser
+     * does report the triple, CodeMirror selects the *visual* line, so on a
+     * wrapped paragraph the author gets a fragment of the line they aimed at;
+     * this selects the whole logical one, and leaves the trailing newline out
+     * so deleting the selection does not join the paragraph to the next.
+     *
+     * It runs as an observer because observers run before the editor's own
+     * event handlers, and preventing the default here stops CodeMirror from
+     * adding its word selection on top of the line this just chose.
+     */
+    EditorView.domEventObservers({
+      mousedown(event, view) {
+        if (event.button !== 0) return;
+        const now = Date.now();
+        const together = now - lastClickAt < TRIPLE_CLICK_MS &&
+          Math.abs(event.clientX - lastClickX) < TRIPLE_CLICK_SLOP &&
+          Math.abs(event.clientY - lastClickY) < TRIPLE_CLICK_SLOP;
+        clicks = together ? clicks + 1 : 1;
+        lastClickAt = now;
+        lastClickX = event.clientX;
+        lastClickY = event.clientY;
+        if (clicks < 3) return;
+        // Reset now rather than on the next click, so a fourth click starts a
+        // new gesture instead of counting as a fourth of the first.
+        clicks = 0;
+        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }) ??
+          view.state.selection.main.head;
+        const line = view.state.doc.lineAt(pos);
+        event.preventDefault();
+        view.dispatch({
+          selection: { anchor: line.from, head: line.to },
+          userEvent: "select.pointer",
+        });
+      },
+    }),
     // Two jobs in one listener. The page owns dirty state, so it hears about
     // every document and selection change rather than polling the view. And
     // the per-document cache has to track the *live* state, not the state the
