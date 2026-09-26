@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 
+import { linkHrefAt, resolveLinkTarget } from "./markdown_links.ts";
 import { toEditorText } from "./vault.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -248,4 +249,71 @@ Deno.test("the editor keeps a document's text exactly as typed", () => {
   }).state.doc.toString();
   assertEqual(edited, "# Title\nBody   \n\n", "typed text is kept verbatim");
   assert(edited.endsWith("\n\n"), "trailing whitespace is not trimmed");
+});
+
+Deno.test("a modified click follows the link under it, and says where it goes", async () => {
+  // The behaviour that can be checked directly is the click: the href comes
+  // out of the tree, so a click anywhere in the link finds it, and one that
+  // misses falls through to the caret untouched.
+  const state = EditorState.create({
+    doc: "See [the RDF page](RDF.md) and [a site](https://wazootech.org).\n",
+    extensions: [markdown()],
+  });
+  const first = state.doc.toString().indexOf("the RDF page");
+  assertEqual(
+    linkHrefAt(state, first + 2),
+    "RDF.md",
+    "a click on the label finds the link's target",
+  );
+  assertEqual(
+    linkHrefAt(state, state.doc.toString().indexOf("(RDF.md)") + 2),
+    "RDF.md",
+    "and so does a click on the target itself",
+  );
+  assertEqual(
+    linkHrefAt(state, 0),
+    null,
+    "a click on plain text is not a click on a link",
+  );
+
+  // What the click resolves to is arithmetic over the linking file's folder,
+  // which is why it can be asserted without a view.
+  const relative = resolveLinkTarget("RDF.md", "wiki/Declarative_Knowledge.md");
+  assert(
+    relative.kind === "vault",
+    "a relative target stays inside the vault",
+  );
+  assertEqual(
+    relative.path,
+    "wiki/RDF.md",
+    "resolved against the linking file's own folder",
+  );
+
+  // The tooltip is the discoverability, so its absence is a defect rather than
+  // a missing extra. Asserted against the source because a hover needs a
+  // view; asserting the string keeps the reason attached to the requirement.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  assert(
+    /hoverTooltip\(/.test(source),
+    "holding the modifier shows where the link points — an invisible modifier is a feature nobody finds",
+  );
+  assert(
+    /setArmed\(view, asksToFollowLink\(event\)\)/.test(source),
+    "and the tooltip is armed by the same modifier the click uses, so they cannot disagree",
+  );
+  assert(
+    /if \(!armed\) return null;/.test(source),
+    "the tooltip stays away until the modifier is down, so ordinary reading is undisturbed",
+  );
+  // CodeMirror only re-evaluates a hover when the pointer moves to a different
+  // position, so a key released under a stationary pointer leaves the box up.
+  // That was measured in the app before it was written down here.
+  assert(
+    /if \(!next\) view\.dispatch\(\{ effects: closeHoverTooltips \}\)/.test(
+      source,
+    ),
+    "releasing the modifier closes the tooltip, rather than leaving it over the text",
+  );
 });

@@ -23,14 +23,22 @@ import {
 import { EditorState, type Extension } from "@codemirror/state";
 import { tags as t } from "@lezer/highlight";
 
-import { asksToFollowLink, linkHrefAt } from "./markdown_links.ts";
 import {
+  asksToFollowLink,
+  describeLinkTarget,
+  linkHrefAt,
+  type LinkTarget,
+  resolveLinkTarget,
+} from "./markdown_links.ts";
+import {
+  closeHoverTooltips,
   drawSelection,
   dropCursor,
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
+  hoverTooltip,
   keymap,
   lineNumbers,
 } from "@codemirror/view";
@@ -52,11 +60,12 @@ export interface WikiEditorOptions {
   /** Any edit or cursor move — the page treats both as a status refresh. */
   onChange: () => void;
   /**
-   * Ctrl/Cmd+click landed on a link. The editor reports the href as written
-   * and the page decides what it means, because the page is what knows the
-   * vault, the open file and the folder browser.
+   * Ctrl/Cmd+click landed on a link, already resolved against the document
+   * that is showing — the editor knows which one that is, and the page is a
+   * classic script with no way to import the resolver. The page decides what
+   * to do with the target, because it knows the vault and the folder browser.
    */
-  onFollowLink?: (href: string) => void;
+  onFollowLink?: (target: LinkTarget) => void;
 }
 
 /** Two spaces, matching what the plain-textarea editor did on Tab. */
@@ -186,6 +195,8 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
   let lastClickY = 0;
   const scrollTops = new Map<string, number>();
   let key = "";
+  /** Whether the follow-link modifier is held, read by the hover tooltip. */
+  let armed = false;
 
   const extensions: Extension[] = [
     lineNumbers(),
@@ -243,9 +254,10 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
           const href = pos === null ? null : linkHrefAt(view.state, pos);
           if (href !== null) {
             event.preventDefault();
-            // The page owns the vault, so it owns the decision about what a
-            // href means; the editor only knows what the link says.
-            options.onFollowLink?.(href);
+            // Resolved here rather than in the page: the editor knows which
+            // document is showing, and the page is a classic script with no
+            // import to hand.
+            options.onFollowLink?.(resolveLinkTarget(href, key));
             return;
           }
         }
@@ -271,6 +283,50 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
         });
       },
     }),
+    /*
+     * The tooltip that makes the modifier discoverable at all. An invisible
+     * modifier on a coloured word is not a feature anyone finds on their own,
+     * so holding the key shows where the link actually points — resolved, and
+     * saying plainly when there is nowhere to go.
+     *
+     * It shows only while the modifier is down, tracked by a listener rather
+     * than read in the callback: hoverTooltip is handed a position, not the
+     * event, so the key state has to already be somewhere it can see.
+     *
+     * Releasing the key has to close it explicitly. CodeMirror re-evaluates a
+     * hover when the pointer moves to a *different* position, so a key let go
+     * under a stationary pointer leaves the box up — tested, not assumed, and
+     * the reason `setArmed` dispatches rather than only assigning.
+     */
+    EditorView.domEventObservers({
+      mousemove(event, view) {
+        setArmed(view, asksToFollowLink(event));
+      },
+      // Pointer still, key released: nothing else would notice. A keyup of
+      // anything but the modifier leaves `asksToFollowLink` true, so this
+      // costs nothing during ordinary typing.
+      keyup(event, view) {
+        setArmed(view, asksToFollowLink(event));
+      },
+      mouseleave(_event, view) {
+        setArmed(view, false);
+      },
+    }),
+    hoverTooltip((view, pos) => {
+      if (!armed) return null;
+      const href = linkHrefAt(view.state, pos);
+      if (href === null) return null;
+      const text = describeLinkTarget(resolveLinkTarget(href, key));
+      return {
+        pos,
+        above: true,
+        create: () => {
+          const dom = document.createElement("div");
+          dom.textContent = text;
+          return { dom };
+        },
+      };
+    }),
     // Two jobs in one listener. The page owns dirty state, so it hears about
     // every document and selection change rather than polling the view. And
     // the per-document cache has to track the *live* state, not the state the
@@ -287,6 +343,12 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
   function insertSoftTab(view: EditorView): boolean {
     view.dispatch(view.state.replaceSelection(SOFT_TAB));
     return true;
+  }
+
+  function setArmed(view: EditorView, next: boolean): void {
+    if (armed === next) return;
+    armed = next;
+    if (!next) view.dispatch({ effects: closeHoverTooltips });
   }
 
   const view = new EditorView({
