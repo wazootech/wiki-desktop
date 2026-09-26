@@ -1024,17 +1024,22 @@ const pageTemplate = `<!DOCTYPE html>
        * narrow ones. Deriving the wording here keeps the labels honest — the
        * drawer also closes on every file open, which must not make the brand
        * toggle claim the sidebar is hidden.
+       *
+       * The tooltip is written here too, not only in the markup, because that
+       * is the one of the two a mouse user reads: the buttons shipped with the
+       * wording each layout starts in, so after the first collapse the brand
+       * toggle's tooltip still said "Hide vault files" while the control beside
+       * it said "Show".
        */
       function syncSidebarToggles() {
         const showing = narrowWindow.matches
           ? isSidebarOpen()
           : !isSidebarCollapsed();
+        const label = showing ? 'Hide vault files' : 'Show vault files';
         for (const toggle of sidebarToggles) {
           toggle.setAttribute('aria-expanded', String(showing));
-          toggle.setAttribute(
-            'aria-label',
-            showing ? 'Hide vault files' : 'Show vault files',
-          );
+          toggle.setAttribute('aria-label', label);
+          toggle.title = label + ' (Ctrl+B)';
         }
       }
 
@@ -1984,6 +1989,13 @@ const pageTemplate = `<!DOCTYPE html>
         for (const toggle of sidebarToggles) {
           toggle.addEventListener('click', toggleSidebar);
         }
+        // The two layouts keep different states for the same control — a
+        // collapsed column on a wide window, a closed drawer on a narrow one —
+        // so crossing the breakpoint has to re-derive the labels. Without this
+        // a window dragged from narrow to wide leaves both toggles describing
+        // the drawer that just left: "Show vault files" beside a sidebar that
+        // is on screen.
+        narrowWindow.addEventListener('change', syncSidebarToggles);
         wireResizer();
         wireMenu();
         sidebarScrim.addEventListener('click', () => setSidebarOpen(false));

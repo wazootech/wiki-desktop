@@ -161,6 +161,30 @@ Deno.test("collapsing never strands the only way to reopen", () => {
       .length === 2,
     "there is one toggle per layout state",
   );
+  // The tooltip is the one of the two labels a mouse user reads, and the two
+  // toggles shipped with opposite wording — each right for the layout it
+  // appears in, and wrong the moment the state moved. So the wording is
+  // derived with the rest, and the shortcut rides along.
+  assert(
+    /toggle\.title = label \+ ' \(Ctrl\+B\)';/.test(page),
+    "the toggle's tooltip is rewritten with the state, not left in the markup",
+  );
+  assert(
+    /syncSidebarToggles\(\)[\s\S]*?toggle\.setAttribute\('aria-label', label\)/
+      .test(
+        page,
+      ),
+    "and the tooltip cannot be derived from anything but the accessible name",
+  );
+  // The two layouts keep different states for the same control, so a window
+  // dragged across the breakpoint has to re-derive the labels; otherwise both
+  // toggles go on describing the layout that just left.
+  assert(
+    /narrowWindow\.addEventListener\('change', syncSidebarToggles\);/.test(
+      page,
+    ),
+    "crossing the breakpoint re-derives what both toggles say",
+  );
 });
 
 Deno.test("no two icon-only buttons draw the same glyph", () => {

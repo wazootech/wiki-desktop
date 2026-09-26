@@ -261,7 +261,14 @@ pre-paint path here is the real one, not a model of it.
   640px. It is one action with two affordances: the brand row's while the
   sidebar is showing and the tab bar's once it is collapsed, so the control
   stays in the window's top-left corner and never strands itself. The collapsed
-  state is stored in the app config, so it survives a restart.
+  state is stored in the app config, so it survives a restart. The two layouts
+  keep different states for that one control — a collapsed column against a
+  closed drawer — so the wording is derived from whichever layout is on screen,
+  and re-derived when a window crosses 640px. It is derived for the `title` as
+  well as the `aria-label`, because the tooltip is the one a mouse user reads:
+  the buttons shipped with the wording each layout starts in, so after the first
+  collapse the brand toggle's tooltip still said "Hide vault files" while the
+  control beside it said "Show".
 - **One curated icon set** — every icon in the app is an inline SVG from one map
   in `src/page.ts` (`ICONS`), copied from [Lucide](https://lucide.dev) rather
   than imported so `deno task build` stays a single self-contained artefact.
