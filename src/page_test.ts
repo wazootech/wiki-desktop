@@ -217,6 +217,102 @@ Deno.test("no two icon-only buttons draw the same glyph", () => {
   );
 });
 
+Deno.test("no icon-drawing control is drawn as a character", () => {
+  // A curated set, so a glyph cannot creep back in as a character. Seven were
+  // characters: the menu and the create button were icon-buttons in the markup,
+  // the tab close, folder disclosure and active check are assigned in the
+  // script, and the two placeholders are divs. The folder was a colour emoji,
+  // which ignores `color` and so could not follow the palette at all.
+  //
+  // Typography is deliberately untouched: an ellipsis in a label, a middot
+  // between hints and an em dash in prose are part of a sentence, not a control.
+  const iconButtons = [
+    ...page.matchAll(/<button ([^>]*)>([\s\S]*?)<\/button>/g),
+  ]
+    .map(([, attrs, inner]) => ({ attrs, inner: inner.trim() }))
+    .filter(({ attrs }) => /\bicon-button\b/.test(attrs));
+  assert(iconButtons.length > 0, "the app has icon-only buttons to check");
+  for (const { attrs, inner } of iconButtons) {
+    const characters = [...inner].filter((c) => (c.codePointAt(0) ?? 0) > 127);
+    assert(
+      characters.length === 0,
+      `an icon-only button draws the character${
+        characters.length > 1 ? "s" : ""
+      } ${JSON.stringify(characters)}: ${attrs}`,
+    );
+  }
+
+  // The three the markup sweep cannot see, because the script builds them. By
+  // the time the page ships the template is already interpolated, so what is
+  // assigned is the icon's markup rather than the name it was written under.
+  for (
+    const [what, assignment] of [
+      ["a tab's close button", /close\.innerHTML = '<svg/],
+      ["a folder's disclosure", /glyph\.innerHTML = '<svg/],
+      [
+        "the active command's tick",
+        /check\.innerHTML = command\.isActive\(\) \? '<svg/,
+      ],
+    ] as const
+  ) {
+    assert(
+      assignment.test(page),
+      `${what} draws an icon rather than a character`,
+    );
+  }
+  // Rather than list the glyphs that were there — an inventory goes stale the
+  // moment one is added, and an emoji is a surrogate pair that a character
+  // class splits into two stray halves — the invariant is that no control
+  // assigns a non-ASCII character as its text at all.
+  const assigned = [...page.matchAll(/textContent\s*=\s*'([^']*)'/g)]
+    .map(([, value]) => value)
+    .filter((value) => [...value].some((c) => (c.codePointAt(0) ?? 0) > 127));
+  assert(
+    assigned.length === 0,
+    `a control assigns an icon as text: ${JSON.stringify(assigned)}`,
+  );
+  const placeholders = [
+    ...page.matchAll(/class="placeholder-icon" aria-hidden="true"><svg/g),
+  ];
+  assert(
+    placeholders.length === 2,
+    `both placeholders draw an icon rather than a character: found ${placeholders.length}`,
+  );
+});
+
+Deno.test("the icons come from one curated map", async () => {
+  // One map and one frame, so a shape is not drawn twice and two controls
+  // cannot drift onto the same mark — the failure the same-glyph test records
+  // when the toggle and the menu were both a ☰.
+  //
+  // This reads src/page.ts rather than `page`, because the map is the thing
+  // that builds the page: by the time the document exists it is interpolation
+  // output, and a name that has gone unused would be invisible from here.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "page.ts"),
+  );
+  const keys = [...source.matchAll(/^\s{2}(\w+): chromeIcon\(/gm)]
+    .map(([, key]) => key);
+  assert(
+    keys.length >= 9,
+    `every icon is named in the map: ${keys.join(", ")}`,
+  );
+  assert(
+    new Set(keys).size === keys.length,
+    "no icon is defined twice under two names",
+  );
+  // currentColor is the point of the migration: it is what lets a glyph follow
+  // a palette, which is exactly what the colour emoji could not do.
+  assert(
+    /stroke="currentColor"/.test(source),
+    "the frame inherits its container's colour",
+  );
+  assert(
+    /aria-hidden="true"/.test(source),
+    "and contributes nothing to an accessible name",
+  );
+});
+
 Deno.test("the top bar labels one command and icons another", () => {
   // The rule the bar follows: a control earns a permanent slot by being used
   // while typing, and it earns a *word* only if it is the one you reach for
