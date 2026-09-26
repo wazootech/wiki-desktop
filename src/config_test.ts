@@ -176,6 +176,38 @@ Deno.test("overlapping updates in one process do not lose each other", async () 
   });
 });
 
+Deno.test("extensions stay on unless something turns them off", async () => {
+  // A config written before this setting existed has no key for it, and the
+  // stored default is the behaviour the app shipped with: a list of names with
+  // extensions. Only an explicit false hides them, so an upgrade does not
+  // silently change what the list looks like.
+  await withScratchHome(async (home) => {
+    assertEqual(
+      (await loadConfig()).showExtensions,
+      true,
+      "a fresh config shows extensions",
+    );
+    await writeConfigFile(home, { sidebarWidth: 400 });
+    assertEqual(
+      (await loadConfig()).showExtensions,
+      true,
+      "a config that never heard of the setting still shows them",
+    );
+    await writeConfigFile(home, { showExtensions: false });
+    assertEqual(
+      (await loadConfig()).showExtensions,
+      false,
+      "an explicit false is honoured",
+    );
+    await writeConfigFile(home, { showExtensions: "no" });
+    assertEqual(
+      (await loadConfig()).showExtensions,
+      true,
+      "and so is anything that is not false",
+    );
+  });
+});
+
 Deno.test("a stored write leaves no scratch file behind", async () => {
   await withScratchHome(async () => {
     await updateConfig({ sidebarWidth: 300 });

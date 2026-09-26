@@ -40,6 +40,15 @@ export interface AppConfig {
   window: WindowGeometry | null;
   /** Whether the file sidebar was collapsed, restored on the next launch. */
   sidebarCollapsed: boolean;
+  /**
+   * Whether the file list shows each file's extension.
+   *
+   * A wiki is nearly all Markdown, so a column of `Getting_Started.md` reads as
+   * noise once a page is open and the tab already names the file. Turned off,
+   * the extension is hidden in the list and shown only where a name is being
+   * typed — the New file prompt, which has to carry the real name anyway.
+   */
+  showExtensions: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
   /** Light/dark appearance: `system` follows the OS, or the user pinned one. */
@@ -51,6 +60,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   recentVaults: [],
   window: null,
   sidebarCollapsed: false,
+  showExtensions: true,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   theme: DEFAULT_THEME,
 };
@@ -224,6 +234,9 @@ function sanitize(value: unknown): AppConfig {
     recentVaults,
     window: hasSize ? { ...readPosition(geometry), width, height } : null,
     sidebarCollapsed: record.sidebarCollapsed === true,
+    // Only an explicit false turns it off: a config written before this
+    // setting existed, or one where it is missing, keeps showing extensions.
+    showExtensions: record.showExtensions !== false,
     sidebarWidth: clampSidebarWidth(Number(record.sidebarWidth)),
     theme: coerceTheme(record.theme),
   };

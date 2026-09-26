@@ -280,6 +280,56 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
   );
 });
 
+Deno.test("hiding an extension never changes the file it opens", () => {
+  // The list draws a shortened name, but the row is a button that opens by
+  // path: if the shortening leaked into the path, a page called README.md and
+  // one called README would become the same row.
+  assert(
+    /name\.textContent = listedName\(file\)/.test(page),
+    "the list draws the name the setting produces",
+  );
+  assert(
+    /function listedName\(file\) \{[\s\S]*?vault\.showExtensions/.test(page),
+    "and that name depends on the setting rather than always carrying it",
+  );
+  // Only Markdown loses its extension. A wiki is nearly all .md, so that is the
+  // repetition worth hiding; a vault's own .py and .yml files are few, and
+  // shortening those would make two different files look alike.
+  //
+  // This also pins why the shortening is written without a regex: the script
+  // ships inside a template literal, where a backslash is an escape, so a
+  // /\.md$ reached the browser as /.md$ and stripped the last letter of any
+  // name ending in "md".
+  assert(
+    /!file\.isMarkdown\) return file\.name/.test(page),
+    "a file that is not Markdown keeps its name whole",
+  );
+  assert(
+    /toLowerCase\(\)\.endsWith\('\.md'\)[\s\S]*?slice\(0, -3\)/.test(page),
+    "and a Markdown one drops exactly its three-character extension",
+  );
+  assert(
+    !/file\.name\.replace\(/.test(page),
+    "the shortening uses no regex, which a template literal would mangle",
+  );
+  assert(
+    /button\.title = file\.path/.test(page),
+    "and the full path is still on the row, which opens by path",
+  );
+  // The New file prompt has to carry the real name whatever this says, because
+  // it is the one place a name is being typed.
+  assert(
+    /window\.prompt\('New file, relative to the vault root:', suggested\)/.test(
+      page,
+    ),
+    "the New file prompt still takes a full name",
+  );
+  assert(
+    /const suggested = 'notes\/untitled\.md'/.test(page),
+    "including the extension it suggests",
+  );
+});
+
 Deno.test("the icons come from one curated map", async () => {
   // One map and one frame, so a shape is not drawn twice and two controls
   // cannot drift onto the same mark — the failure the same-glyph test records
@@ -733,10 +783,20 @@ Deno.test("the appearance is one choice out of three, and the menu shows it", ()
   );
 
   // A command fires and closes the menu; a choice has to stay put and say which
-  // one is on, so the renderer has to treat it as a radio item.
+  // one is on, so the renderer has to treat it as a radio item. A setting that
+  // is on or off, rather than one of several, overrides that with a checkbox —
+  // a different role, even though it draws the same mark.
   assert(
-    page.includes("role', isChoice ? 'menuitemradio' : 'menuitem'"),
-    "a choice is rendered as a command",
+    page.includes(
+      "command.role ?? (isChoice ? 'menuitemradio' : 'menuitem')",
+    ),
+    "a choice is rendered as a plain command, with no way to override the role",
+  );
+  assert(
+    /role: 'menuitemcheckbox'/.test(list) &&
+      /role: 'menuitemcheckbox'[^\n]*isActive: \(\) => vault\.showExtensions/
+        .test(list),
+    "the extension toggle declares itself a checkbox and says which way it is on",
   );
   assert(
     page.includes(

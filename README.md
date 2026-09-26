@@ -154,7 +154,16 @@ pre-paint path here is the real one, not a model of it.
   never sees the wrong palette flash on launch. `color-scheme` follows the
   attribute, so scrollbars, carets, and native controls match too, and the
   `theme-color` meta reads its value out of the stylesheet rather than repeating
-  it.
+  it.- **File extensions** — a checkbox in the same group, on by default. A wiki
+  is nearly all Markdown, so a column of `Getting_Started.md` is noise once a
+  page is open and the tab already names the file; turned off, the list drops
+  the extension and shows it only where a name is actually being typed, which is
+  the New file prompt and nowhere else. The tab strip and the status bar keep
+  it, because a tab is the document's identity rather than one entry in a list
+  of similar names. Only `.md` is dropped: a vault's own `.py` and `.yml` files
+  are few, and shortening those would make two different files look alike. The
+  row still opens by path and carries it in its `title`, so the shorter label is
+  display only.
 - **Appearance** — `System`, `Light`, and `Dark`, under their own group in the
   menu, stored in the app config beside the sidebar width and restored on the
   next launch. They are rendered as radio items (`menuitemradio` +

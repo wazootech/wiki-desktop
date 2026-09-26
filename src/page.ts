@@ -884,6 +884,7 @@ const pageTemplate = `<!DOCTYPE html>
         name: null,
         recents: [],
         sidebarCollapsed: false,
+        showExtensions: true,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
         theme: '${DEFAULT_THEME}',
       };
@@ -976,6 +977,36 @@ const pageTemplate = `<!DOCTYPE html>
         syncSidebarToggles();
         vault.sidebarCollapsed = collapsed;
         if (persist) call('setSidebarCollapsed', [collapsed]);
+      }
+
+      /**
+       * Whether the list shows each file's extension. Turned off, the extension
+       * is hidden here and shown only where a name is being typed — the New
+       * file prompt, which has to carry the real name regardless. The tab strip
+       * and the status bar keep it, because a tab is the document's identity
+       * rather than one entry in a list of similar names.
+       */
+      function setShowExtensions(show, persist) {
+        vault.showExtensions = show;
+        if (persist) call('setShowExtensions', [show]);
+        renderFiles();
+        refreshMenu();
+      }
+
+      /** The name as the list draws it, which may be without its extension. */
+      function listedName(file) {
+        if (vault.showExtensions || !file.isMarkdown) return file.name;
+        // Only Markdown loses its extension: every page in a wiki is one, so it
+        // is the repetition that is noise. A vault's own .py and .yml files are
+        // few, and dropping theirs would make two different files look alike.
+        //
+        // Written without a regex on purpose. This script ships inside a
+        // template literal, where a backslash is an escape sequence, so a
+        // /\.md$ reached the browser as /.md$/ — whose dot matches any
+        // character — and a page called cmd lost its last letter.
+        return file.name.toLowerCase().endsWith('.md')
+          ? file.name.slice(0, -3)
+          : file.name;
       }
 
       /* Sidebar width */
@@ -1289,7 +1320,10 @@ const pageTemplate = `<!DOCTYPE html>
           if (file.scope === 'asset') button.classList.add('is-asset');
           const name = document.createElement('span');
           name.className = 'file-name';
-          name.textContent = file.name;
+          name.textContent = listedName(file);
+          // The row is named by what it draws, so a screen reader hears the
+          // same thing the eye does — and the title still carries the path.
+          button.title = file.path;
           button.appendChild(name);
           const separator = file.path.lastIndexOf('/');
           if (separator !== -1) {
@@ -1657,6 +1691,7 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'theme-system', group: 'Appearance', label: 'Match the system', keys: '', canRun: () => true, isActive: () => vault.theme === 'system', run: () => setTheme('system', true) },
         { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
         { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
+        { id: 'toggle-extensions', group: 'Appearance', label: 'Show file extensions', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showExtensions, run: () => setShowExtensions(!vault.showExtensions) },
         { id: 'close-vault', group: 'Vault', label: 'Close vault', keys: '', canRun: () => vault.root !== null, run: closeVault },
       ];
 
@@ -1709,8 +1744,11 @@ const pageTemplate = `<!DOCTYPE html>
           item.className = 'menu-item';
           // A command fires and closes the menu; a choice among a set stays put
           // and has to say which one is on, so it is a radio item with a mark.
+          // A setting that is on or off rather than one of several is a
+          // checkbox, which is a different role and a different promise to a
+          // screen reader even though it draws the same mark.
           const isChoice = typeof command.isActive === 'function';
-          item.setAttribute('role', isChoice ? 'menuitemradio' : 'menuitem');
+          item.setAttribute('role', command.role ?? (isChoice ? 'menuitemradio' : 'menuitem'));
           if (isChoice) {
             item.setAttribute('aria-checked', command.isActive() ? 'true' : 'false');
             const check = document.createElement('span');

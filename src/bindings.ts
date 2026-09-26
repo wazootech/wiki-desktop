@@ -30,6 +30,8 @@ export interface VaultState {
   recents: string[];
   /** Whether the file sidebar was collapsed when the app last ran. */
   sidebarCollapsed: boolean;
+  /** Whether the file list shows each file's extension. */
+  showExtensions: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
   /** Light/dark appearance the user last chose, `system` if they never did. */
@@ -55,6 +57,8 @@ export interface WikiBindings {
   closeVault(): Promise<VaultState>;
   /** Remember whether the sidebar is collapsed, so it survives a restart. */
   setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
+  /** Remember whether the file list shows extensions, so it survives a restart. */
+  setShowExtensions(show: boolean): Promise<VaultState>;
   /** Remember the sidebar column's width, so it survives a restart. */
   setSidebarWidth(width: number): Promise<VaultState>;
   /** Remember the appearance, so it survives a restart. */
@@ -97,6 +101,13 @@ export function createVaultApi(): VaultApi {
     }),
     setSidebarCollapsed: guard(async (collapsed: boolean) => {
       await updateConfig({ sidebarCollapsed: collapsed === true });
+      return await readState();
+    }),
+    setShowExtensions: guard(async (show: boolean) => {
+      // `!== false` here as well, for the reason the sanitizer uses: a caller
+      // that sends anything but false means "on", and this value outlives the
+      // session that set it.
+      await updateConfig({ showExtensions: show !== false });
       return await readState();
     }),
     setSidebarWidth: guard(async (width: number) => {
@@ -166,6 +177,7 @@ async function readState(): Promise<VaultState> {
   const ui = {
     recents: config.recentVaults,
     sidebarCollapsed: config.sidebarCollapsed,
+    showExtensions: config.showExtensions,
     sidebarWidth: config.sidebarWidth,
     theme: config.theme,
   };
