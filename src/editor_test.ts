@@ -21,6 +21,20 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+/**
+ * Source with its comments removed.
+ *
+ * An assertion about what the code must not contain has to look at the code.
+ * A comment explaining the very thing being excluded contains it — the
+ * `event.detail` check below matched this file's own explanation of why
+ * event.detail is not used, and failed on a correct implementation.
+ */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/^\s*\/\/.*$/gm, " ");
+}
+
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) {
     throw new Error(
@@ -162,14 +176,25 @@ Deno.test("a triple click selects the whole line, not the word under it", async 
   );
 
   // The count has to be ours. Reading event.detail would reproduce the bug.
+  //
+  // These are deliberately anchored on the counting itself rather than on the
+  // observer's opening brace: the observer now also arbitrates a Ctrl+click, so
+  // a window measured from `mousedown(` describes how much code happens to sit
+  // above the triple click rather than what it asserts.
   assert(
-    /mousedown\(event, view\) \{[\s\S]{0,400}?now - lastClickAt < TRIPLE_CLICK_MS/
-      .test(source),
+    /now - lastClickAt < TRIPLE_CLICK_MS/.test(source),
     "the clicks are counted here, by time and place, rather than read from the browser's own count",
   );
   assert(
-    !/mousedown\(event, view\) \{[\s\S]{0,200}?event\.detail/.test(source),
-    "nothing in the handler depends on event.detail, which is what let the gesture fail",
+    /clicks = together \? clicks \+ 1 : 1;/.test(source),
+    "and the count is ours, incrementing only while the clicks stay together",
+  );
+  // Checked against the code rather than the file, because the file's own
+  // comment explains what event.detail is and why it is not used. An assertion
+  // that matches prose cannot tell a fix from the sentence describing it.
+  assert(
+    !/event\.detail/.test(withoutComments(source)),
+    "nothing in the editor depends on event.detail, which is what let the gesture fail",
   );
 
   // An observer runs before the editor's own event handlers, and preventing

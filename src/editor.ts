@@ -22,6 +22,8 @@ import {
 } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { tags as t } from "@lezer/highlight";
+
+import { asksToFollowLink, linkHrefAt } from "./markdown_links.ts";
 import {
   drawSelection,
   dropCursor,
@@ -49,6 +51,12 @@ export interface WikiEditorOptions {
   container: HTMLElement;
   /** Any edit or cursor move — the page treats both as a status refresh. */
   onChange: () => void;
+  /**
+   * Ctrl/Cmd+click landed on a link. The editor reports the href as written
+   * and the page decides what it means, because the page is what knows the
+   * vault, the open file and the folder browser.
+   */
+  onFollowLink?: (href: string) => void;
 }
 
 /** Two spaces, matching what the plain-textarea editor did on Tab. */
@@ -221,6 +229,26 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     EditorView.domEventObservers({
       mousedown(event, view) {
         if (event.button !== 0) return;
+        /*
+         * Ctrl/Cmd+click follows a link, and it is checked before the triple
+         * click counter because it is a decision about this click rather than
+         * a step in a gesture: a modified click is never one of three.
+         *
+         * The href is read from the tree, so a click anywhere in the link —
+         * label, brackets or target — finds it, and one that is not on a link
+         * returns null and falls through to the caret exactly as before.
+         */
+        if (asksToFollowLink(event)) {
+          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+          const href = pos === null ? null : linkHrefAt(view.state, pos);
+          if (href !== null) {
+            event.preventDefault();
+            // The page owns the vault, so it owns the decision about what a
+            // href means; the editor only knows what the link says.
+            options.onFollowLink?.(href);
+            return;
+          }
+        }
         const now = Date.now();
         const together = now - lastClickAt < TRIPLE_CLICK_MS &&
           Math.abs(event.clientX - lastClickX) < TRIPLE_CLICK_SLOP &&
