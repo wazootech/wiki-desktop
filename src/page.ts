@@ -726,6 +726,9 @@ const pageTemplate = `<!DOCTYPE html>
           <label class="assets-toggle" id="extensionsToggle" title="Write each file's extension out in full">
             <input type="checkbox" id="showExtensions" checked />Extensions
           </label>
+          <label class="assets-toggle" id="pathsToggle" title="Write each file's folder on a second line under its name">
+            <input type="checkbox" id="showPaths" checked />Paths
+          </label>
         </div>
         <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
       </div>
@@ -901,6 +904,7 @@ const pageTemplate = `<!DOCTYPE html>
       const assetsToggle = el('assetsToggle');
       const showAssetsInput = el('showAssets');
       const extensionsInput = el('showExtensions');
+      const pathsInput = el('showPaths');
       const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
@@ -971,6 +975,7 @@ const pageTemplate = `<!DOCTYPE html>
         recents: [],
         sidebarCollapsed: false,
         showExtensions: true,
+        showPaths: true,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
         theme: '${DEFAULT_THEME}',
       };
@@ -1092,6 +1097,20 @@ const pageTemplate = `<!DOCTYPE html>
         vault.showExtensions = show;
         if (persist) call('setShowExtensions', [show]);
         extensionsInput.checked = show;
+        renderFiles();
+        refreshMenu();
+      }
+
+      /**
+       * Whether each row carries the folder its file sits in. That is a second
+       * line, so it is the tallest thing in the list by a wide margin, and in a
+       * vault one folder deep it is the same word on every row. Off, a row is
+       * one line and the button's title still holds the full path.
+       */
+      function setShowPaths(show, persist) {
+        vault.showPaths = show;
+        if (persist) call('setShowPaths', [show]);
+        pathsInput.checked = show;
         renderFiles();
         refreshMenu();
       }
@@ -1494,16 +1513,18 @@ const pageTemplate = `<!DOCTYPE html>
           button.title = file.path;
           button.appendChild(name);
           const separator = file.path.lastIndexOf('/');
-          if (separator !== -1) {
-            const dir = document.createElement('span');
-            dir.className = 'file-dir';
-            dir.textContent = file.path.slice(0, separator);
-            button.appendChild(dir);
-          } else if (file.isMarkdown) {
-            const dir = document.createElement('span');
-            dir.className = 'file-dir';
-            dir.textContent = 'Markdown';
-            button.appendChild(dir);
+          if (vault.showPaths) {
+            if (separator !== -1) {
+              const dir = document.createElement('span');
+              dir.className = 'file-dir';
+              dir.textContent = file.path.slice(0, separator);
+              button.appendChild(dir);
+            } else if (file.isMarkdown) {
+              const dir = document.createElement('span');
+              dir.className = 'file-dir';
+              dir.textContent = 'Markdown';
+              button.appendChild(dir);
+            }
           }
           // An asset is dimmed, which is a distinction the eye can see and a
           // screen reader cannot: the row said only its name, so a build output
@@ -1633,6 +1654,7 @@ const pageTemplate = `<!DOCTYPE html>
         setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
         extensionsInput.checked = state.showExtensions !== false;
+        pathsInput.checked = state.showPaths !== false;
         applySidebarWidth();
         renderVault();
         renderFiles();
@@ -1946,6 +1968,7 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
         { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
         { id: 'toggle-extensions', group: 'Appearance', label: 'Show file extensions', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showExtensions, run: () => setShowExtensions(!vault.showExtensions) },
+        { id: 'toggle-paths', group: 'Appearance', label: 'Show folder paths', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showPaths, run: () => setShowPaths(!vault.showPaths) },
         // context: this one is also an item in the vault header's own menu,
         // which is filled from the same list. Two surfaces, one command, so
         // the header's menu cannot hold an action the app menu has never heard
@@ -2218,6 +2241,7 @@ const pageTemplate = `<!DOCTYPE html>
         // as the Appearance menu. Both controls drive the same state, so this
         // syncs the checkbox and refreshes the menu's own check mark.
         extensionsInput.addEventListener('change', () => setShowExtensions(extensionsInput.checked, true));
+        pathsInput.addEventListener('change', () => setShowPaths(pathsInput.checked, true));
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks

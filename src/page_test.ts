@@ -657,6 +657,50 @@ Deno.test("the extension setting is reachable from the list it changes", () => {
   );
 });
 
+Deno.test("the path setting is reachable from the list it changes", () => {
+  // The folder under each name is a second line, so it is what makes the list
+  // tall, and in a vault one folder deep it is the same word repeated down the
+  // whole column. Hiding it needs the same two controls extensions has: the
+  // checkbox beside the list, and the item in the Appearance menu.
+  assert(
+    /<input type="checkbox" id="showPaths"/.test(page),
+    "the sidebar offers the setting beside the list it redraws",
+  );
+  assert(
+    /pathsInput\.addEventListener\('change', \(\) => setShowPaths\(pathsInput\.checked, true\)\)/
+      .test(page),
+    "and that checkbox drives the same setter the menu command uses",
+  );
+  assert(
+    /pathsInput\.checked = show;/.test(page),
+    "so the menu command and the checkbox cannot drift apart",
+  );
+  assert(
+    /pathsInput\.checked = state\.showPaths !== false;/.test(page),
+    "and the stored setting wins over the markup's default on load",
+  );
+  // The span is not created at all when the setting is off, rather than hidden
+  // with CSS: a display:none node is out of sight but still in the tab order
+  // and still read aloud, which is not what turning the setting off means.
+  assert(
+    /if \(vault\.showPaths\) \{\s*if \(separator !== -1\)/.test(page),
+    "the folder line is left out of the row entirely",
+  );
+  assert(
+    /role: 'menuitemcheckbox'[^\n]*isActive: \(\) => vault\.showPaths/.test(
+      page,
+    ),
+    "and the Appearance menu reports which way the setting is on",
+  );
+  // The row still names the file it opens, so turning the setting off cannot
+  // turn two files in different folders into the same row.
+  assert(
+    /name\.textContent = listedName\(file\)/.test(page) &&
+      /button\.title = file\.path/.test(page),
+    "the name and the row's title are untouched by the setting",
+  );
+});
+
 Deno.test("hiding an extension never changes the file it opens", () => {
   // The list draws a shortened name, but the row is a button that opens by
   // path: if the shortening leaked into the path, a page called README.md and

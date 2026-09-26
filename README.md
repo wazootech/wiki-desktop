@@ -184,6 +184,15 @@ pre-paint path here is the real one, not a model of it.
   checkboxes are grouped so they wrap as a pair instead of one per line. The row
   still opens by path and carries it in its `title`, so the shorter label is
   display only.
+- **Folder paths** — a third checkbox in the same toolbar, on by default, for
+  the folder each file sits in. That line is why the file list is as tall as it
+  is: it is a second line under every row, and in a vault one folder deep — the
+  usual shape of a wiki — it is the same word repeated down the whole column.
+  Turned off, a row is one line, and the height of a row in `wiki/docs` drops
+  from 37px to 24px. The span is left out of the row rather than hidden with
+  CSS, because a `display: none` node is out of sight but still in the tab order
+  and still read aloud. The row's `title` keeps the full path, so a reader who
+  wants it hovers or focuses the row.
 - **Appearance** — `System`, `Light`, and `Dark`, under their own group in the
   menu, stored in the app config beside the sidebar width and restored on the
   next launch. They are rendered as radio items (`menuitemradio` +
