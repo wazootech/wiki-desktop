@@ -23,6 +23,17 @@ function chromeIcon(paths: string, size: number = 15): string {
 }
 
 /**
+ * Lucide's folder, named once.
+ *
+ * Three controls draw it — the empty state's placeholder, the sidebar's open
+ * action and the close action, which is this folder with a cross through it.
+ * Sharing the geometry is the point of the map: a second copy of the same
+ * path is a shape that can drift onto a different mark in one of the three.
+ */
+const FOLDER_PATH =
+  '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />';
+
+/**
  * The app's whole icon set, from Lucide (ISC), copied here rather than imported
  * so `deno task build` stays a single self-contained artefact.
  *
@@ -52,9 +63,18 @@ const ICONS = {
   disclosure: chromeIcon('<path d="m9 18 6-6-6-6" />', 12),
   activeCheck: chromeIcon('<path d="M20 6 9 17l-5-5" />', 11),
   /** Sized for the 42px placeholder tile, which used a 19px font. */
-  noVault: chromeIcon(
-    '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />',
-    20,
+  noVault: chromeIcon(FOLDER_PATH, 20),
+  /** The sidebar's own way in: the same folder, at control size. */
+  openVault: chromeIcon(FOLDER_PATH, 15),
+  /**
+   * Closing a vault is the same folder with a cross through it, rather than a
+   * plain X. A bare X in a sidebar reads as closing the window, the tab or the
+   * panel; the crossed folder says which of the three it is.
+   */
+  closeVault: chromeIcon(
+    FOLDER_PATH +
+      '<path d="m9.5 10.5 5 5" /><path d="m14.5 10.5-5 5" />',
+    15,
   ),
   noFile: chromeIcon(
     '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />',
@@ -322,10 +342,23 @@ const pageTemplate = `<!DOCTYPE html>
       border-bottom: 1px solid var(--line);
       background: var(--panel-muted);
     }
-    .vault-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+    .vault-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
     .vault-label { color: var(--muted); font-size: 9.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; flex-shrink: 0; }
     .vault-name { font-size: 12.5px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-name.is-placeholder { color: var(--muted); font-weight: 600; }
+    /*
+     * The vault's two actions live in its own header row, as 24px squares
+     * beside the name, and the row they used to occupy is gone.
+     *
+     * They were full-width buttons stacked under the name, which made the
+     * sidebar's first read "Open vault…" directly beneath a vault that was
+     * already open, gave closing a vault the bare word "Close", and cost 40px
+     * of a column that is 360px wide. The name is the heading; the actions
+     * belong to it, the way the tab bar's belong to the document.
+     */
+    .vault-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+    .vault-actions .icon-button { width: 24px; min-height: 24px; border-radius: 6px; color: var(--muted); }
+    .vault-actions .icon-button:hover { color: var(--text); background: var(--surface-hover); }
     /*
      * The path earns its row only when there is no vault: then it is the
      * sentence saying what Open vault is for. With a vault open it is the
@@ -338,15 +371,17 @@ const pageTemplate = `<!DOCTYPE html>
       margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.4;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .vault-actions { display: flex; gap: 6px; margin-top: 8px; }
-    .vault-actions .button { flex: 1; min-height: 25px; font-size: 11.5px; }
-
     /*
      * The file list's own toolbar: the filter, then the button that creates a
      * file. Creating lives here rather than in the top bar, which holds the open
-     * document's actions, and rather than in the vault's Open/Close row, where a
-     * third labeled button collapses this sidebar's content box to 200px and
-     * measures 63px per button — every label wraps onto two lines.
+     * document's actions — the same reason it did not join the vault's row of
+     * labeled buttons, which has since become two icons on the vault's own
+     * heading.
+     *
+     * The row is hidden outright with no vault open. The file list empties then,
+     * so what was left was a filter over nothing, a toggle with nothing to
+     * toggle, and a disabled create button: chrome for an empty list, which is
+     * the part of "closing the vault" that had not been finished.
      */
     .file-tools { display: flex; align-items: center; gap: 6px; padding: 8px 10px 5px; }
     .filter {
@@ -663,15 +698,15 @@ const pageTemplate = `<!DOCTYPE html>
         <div class="vault-head">
           <span class="vault-label">Vault</span>
           <span class="vault-name is-placeholder" id="vaultName">No vault open</span>
+          <div class="vault-actions">
+            <button class="button button-secondary icon-button" id="openVaultButton" type="button" title="Open a vault" aria-label="Open a vault">${ICONS.openVault}</button>
+            <button class="button button-secondary icon-button" id="closeVaultButton" type="button" title="Close vault" aria-label="Close vault" hidden>${ICONS.closeVault}</button>
+          </div>
         </div>
         <div class="vault-path" id="vaultPath">Choose the folder that holds your wiki.</div>
-        <div class="vault-actions">
-          <button class="button button-secondary" id="openVaultButton" type="button">Open vault…</button>
-          <button class="button button-secondary" id="closeVaultButton" type="button" hidden>Close</button>
-        </div>
       </section>
 
-      <div class="file-tools">
+      <div class="file-tools" id="fileTools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
         <div class="file-tools-checks">
@@ -839,6 +874,7 @@ const pageTemplate = `<!DOCTYPE html>
       const emptyOpenVaultButton = el('emptyOpenVaultButton');
       const emptyNewFileButton = el('emptyNewFileButton');
       const vaultName = el('vaultName');
+      const fileTools = el('fileTools');
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
       const assetsToggle = el('assetsToggle');
@@ -1350,6 +1386,13 @@ const pageTemplate = `<!DOCTYPE html>
         // that tells an unopened vault what Open vault is for.
         vaultPath.hidden = open;
         closeVaultButton.hidden = !open;
+        // With a vault open the same button switches it, so its name has to
+        // change with the state it acts on rather than describing neither.
+        openVaultButton.title = open ? 'Open another vault' : 'Open a vault';
+        openVaultButton.setAttribute('aria-label', open ? 'Open another vault' : 'Open a vault');
+        // The list empties with the vault, so the row that filters and creates
+        // from it has nothing to act on and goes with it.
+        fileTools.hidden = !open;
         newFileButton.disabled = !open;
         placeholderNoVault.hidden = open;
         refreshMenu();

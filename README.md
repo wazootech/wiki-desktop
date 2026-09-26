@@ -205,6 +205,21 @@ pre-paint path here is the real one, not a model of it.
   permanent header. With no vault open the same row is the sentence saying what
   `Open vault…` is for, which is the one time it earns its height, so it is
   hidden rather than removed. The block goes from 86px to 69px.
+- **The vault's own actions sit in its heading, as two icons** — they were
+  full-width labelled buttons stacked under the vault's name, so the sidebar's
+  first read was `Open vault…` directly beneath a vault that was already open,
+  closing a vault had the bare word `Close` to say so, and the pair cost 40px of
+  a 360px column. The name is the heading and the actions belong to it, the way
+  the tab bar's belong to the document: two 24px squares at the end of the
+  name's row, so the name keeps the width and ellipsises instead of pushing them
+  off the panel. An icon names nothing on its own, so the open button carries
+  `Open another vault` once a vault is open and `Open a vault` until then, and
+  close is that same folder with a cross through it rather than a bare X — in a
+  sidebar a bare X reads as closing the window, the tab or the panel. The file
+  list's toolbar goes with the vault rather than sitting there inert: with no
+  vault the list is empty, so the filter filtered nothing, the asset and
+  extension checkboxes had no list to redraw, and the create button was
+  disabled.
 - **Editor** — [CodeMirror 6](https://codemirror.net/) with the Markdown
   grammar, chosen in [#6](https://github.com/wazootech/wiki-desktop/issues/6)
   against a regex overlay and against `editorcn`/Tiptap (HTML- or
@@ -255,7 +270,7 @@ pre-paint path here is the real one, not a model of it.
   renders as a box, and the one colour emoji that had crept in ignored `color`
   entirely and so could not follow the palette at all. One map means a shape is
   not drawn twice and two controls cannot drift onto the same mark — the sidebar
-  toggle and the app menu are both 28px squares in the same band, and were once
+  toggle and the app menu are squares in the same band of chrome, and were once
   both a `☰`. Each is sized on the element (a bare `viewBox` with no width
   renders at 300x150), inherits `currentColor` from its container, and is
   `aria-hidden`, so every such control carries its name in `aria-label`.

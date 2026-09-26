@@ -164,27 +164,33 @@ Deno.test("collapsing never strands the only way to reopen", () => {
 });
 
 Deno.test("no two icon-only buttons draw the same glyph", () => {
-  // These buttons are 28px squares in one band of chrome, so a shared glyph
+  // These buttons are 24-28px squares in one band of chrome, so a shared glyph
   // reads as one control drawn twice — which is what the sidebar toggle and the
   // app menu were, both ☰. The toggle draws a panel, the bar's reload is an
   // arrow, the file list's create button is a +, and the menu keeps ☰.
+  //
+  // The vault's two sit closest together of all: an open and a close a few
+  // pixels apart in the sidebar's heading, where a shared folder would be the
+  // difference between the app working and not.
   const iconButtons = [
     ...page.matchAll(/<button ([^>]*)>([\s\S]*?)<\/button>/g),
   ]
     .map(([, attrs, inner]) => ({ attrs, inner: inner.trim() }))
     .filter(({ attrs }) => /\bicon-button\b/.test(attrs));
 
-  assert(iconButtons.length === 5, "the app has five icon-only buttons");
+  assert(iconButtons.length === 7, "the app has seven icon-only buttons");
   const by = (pattern: RegExp) =>
     iconButtons.filter(({ attrs }) => pattern.test(attrs));
   const toggles = by(/\bsidebar-toggle\b/);
   const menus = by(/id="menuButton"/);
   const creates = by(/id="newFileButton"/);
   const reloads = by(/id="reloadButton"/);
+  const opens = by(/id="openVaultButton"/);
+  const closes = by(/id="closeVaultButton"/);
   assert(
     toggles.length === 2 && menus.length === 1 && creates.length === 1 &&
-      reloads.length === 1,
-    "one app menu, one create button, one reload, and one toggle per state",
+      reloads.length === 1 && opens.length === 1 && closes.length === 1,
+    "one app menu, one create button, one reload, one toggle per state, and one open and one close for the vault",
   );
   // The two toggles are never on screen together, so only a shared source keeps
   // them identical when one is edited.
@@ -193,11 +199,19 @@ Deno.test("no two icon-only buttons draw the same glyph", () => {
     "the two toggles draw different icons",
   );
   assert(toggles[0].inner.startsWith("<svg"), "the toggle draws a panel");
+  // Close is the open folder with a cross through it rather than a bare X, so
+  // the two differ in geometry as well as in size.
+  assert(
+    opens[0].inner !== closes[0].inner,
+    "the vault's open and close draw the same folder",
+  );
   const glyphs = [
     toggles[0].inner,
     menus[0].inner,
     creates[0].inner,
     reloads[0].inner,
+    opens[0].inner,
+    closes[0].inner,
   ];
   assert(
     new Set(glyphs).size === glyphs.length,
@@ -296,11 +310,68 @@ Deno.test("the vault's path row is spent only when there is no vault", () => {
       .test(page),
     "and it keeps the guidance an unopened vault needs",
   );
-  // Hiding the row must not close the gap it left: the buttons still need to
-  // sit clear of the name, and an unopened vault still needs its own spacing.
+  // Hiding the row must not close the gap it left, and the way to guarantee
+  // that is not to pad the buttons but to stop them being a row of their own:
+  // the actions now share the name's row, so the header is one line with an
+  // optional sentence under it.
+  const head = page.slice(
+    page.indexOf('<div class="vault-head">'),
+    page.indexOf("</section>", page.indexOf('<div class="vault-head">')),
+  );
   assert(
-    /\.vault-actions \{[^}]*margin-top: 8px/.test(page),
-    "the buttons carry the spacing the path row used to provide",
+    /id="openVaultButton"/.test(head) && /id="closeVaultButton"/.test(head),
+    "the vault's actions share the row that holds its name",
+  );
+  // The name takes the width it needs and the actions keep theirs, so a long
+  // folder name ellipsises instead of pushing them off the panel.
+  assert(
+    /\.vault-actions \{[^}]*margin-left: auto/.test(page),
+    "the actions sit at the far end of the name's row",
+  );
+});
+
+Deno.test("the vault's actions are named for the state they act on", () => {
+  // They were labelled buttons, so the words came with them. As two icons the
+  // name has to come from somewhere, and what it has to say changes: with a
+  // vault open the same button switches it, and "Open a vault" then describes
+  // neither what it does nor the fact that a vault is already open.
+  assert(
+    /<button[^>]*id="openVaultButton"[^>]*title="Open a vault"[^>]*aria-label="Open a vault"/
+      .test(page),
+    "the open button ships a name, since an aria-hidden glyph names nothing",
+  );
+  assert(
+    /openVaultButton\.title = open \? 'Open another vault' : 'Open a vault';/
+      .test(
+        page,
+      ),
+    "and it changes with the state it acts on",
+  );
+  assert(
+    /openVaultButton\.setAttribute\('aria-label', open \? 'Open another vault' : 'Open a vault'\);/
+      .test(page),
+    "and the accessible name changes with it, not only the tooltip",
+  );
+  // Close is the destructive one, and with no vault open there is nothing to
+  // close — a dead button in the heading is worse than no button.
+  assert(
+    /<button[^>]*id="closeVaultButton"[^>]*hidden>/.test(page),
+    "the close button starts hidden, because the app starts with no vault",
+  );
+  assert(
+    /closeVaultButton\.hidden = !open;/.test(page),
+    "and it appears with the vault it closes",
+  );
+  // The file list empties with the vault, so the row that filters and creates
+  // from it has nothing to act on: it was a filter over nothing and a disabled
+  // create button, the part of closing a vault that had not been finished.
+  assert(
+    /<div class="file-tools" id="fileTools">/.test(page),
+    "the file list's toolbar is something the page can hide",
+  );
+  assert(
+    /fileTools\.hidden = !open;/.test(page),
+    "and it goes when the vault it acts on does",
   );
 });
 
