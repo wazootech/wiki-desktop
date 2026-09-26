@@ -137,6 +137,19 @@ pre-paint path here is the real one, not a model of it.
   as `bindings.name(args)`. They run in-process (no socket IPC) and inherit the
   runtime's permissions, so the tasks start Deno with
   `--allow-read --allow-write --allow-env`.
+
+  **The page calls them with a spread, never `.apply`.** One function reaches
+  every operation: `bridge[name](...(args || []))`. The desktop runtime hands
+  the webview a proxy whose property access _is_ the binding name, so reading
+  `.apply` off the function it returns asks for a binding called
+  `getState.apply` and the call is refused — every operation in the app fails
+  and the window sits on the empty state toasting
+  `No binding for 'browse.apply'`. The browser bridge returns a plain function,
+  so the dev server and the string tests cannot see it, and
+  `src/appearance_check.ts` stubs the bindings outright, so the one check that
+  runs in the real webview could not either. It was found by calling one binding
+  three ways in the real runtime; `src/bindings_test.ts` now pins the call form
+  so it cannot come back.
 - **Path safety** — bindings are a trust boundary. `src/vault.ts` rejects
   absolute paths and `..`, resolves symlinks with `Deno.realPath`, and verifies
   the result stays inside the vault root before touching the filesystem.
@@ -171,6 +184,15 @@ pre-paint path here is the real one, not a model of it.
   checkboxes are grouped so they wrap as a pair instead of one per line. The row
   still opens by path and carries it in its `title`, so the shorter label is
   display only.
+- **Folder paths** — a third checkbox in the same toolbar, on by default, for
+  the folder each file sits in. That line is why the file list is as tall as it
+  is: it is a second line under every row, and in a vault one folder deep — the
+  usual shape of a wiki — it is the same word repeated down the whole column.
+  Turned off, a row is one line, and the height of a row in `wiki/docs` drops
+  from 37px to 24px. The span is left out of the row rather than hidden with
+  CSS, because a `display: none` node is out of sight but still in the tab order
+  and still read aloud. The row's `title` keeps the full path, so a reader who
+  wants it hovers or focuses the row.
 - **Appearance** — `System`, `Light`, and `Dark`, under their own group in the
   menu, stored in the app config beside the sidebar width and restored on the
   next launch. They are rendered as radio items (`menuitemradio` +
@@ -197,6 +219,19 @@ pre-paint path here is the real one, not a model of it.
   paragraphs. It runs as a `domEventObservers` handler because observers run
   before the editor's own, and preventing the default there is what stops
   CodeMirror adding a word selection on top.
+- **The folder dialog is the app's way in, and its home screen** — there is no
+  "no vault" panel. It used to be one: a folder glyph, a sentence, and a button
+  whose only job was to open the folder dialog, so the app had two surfaces for
+  one action and the first click bought nothing. The dialog now opens itself
+  when there is no vault, and the sidebar's button opens that same dialog when
+  there is one, so closing a vault and opening another are the same gesture.
+  With nothing open it is the app, so it says `Open a vault` rather than
+  `Open another vault`, says in the intro that no vault is being closed, and
+  offers no way out of itself — `Cancel` is hidden and `Escape` does nothing,
+  because there is nothing to go back to. Choosing a folder takes it down
+  through the one path allowed to, which is the bug the guard caused when it did
+  not: the guard reads the state as it is, and a user with no vault is exactly
+  how a vault gets opened.
 - **The vault's path row is shown only with no vault open** — with one open it
   is the root, and that is the one piece of the sidebar header that is pure
   decoration: the name already identifies the folder, and no sidebar wide enough
@@ -204,7 +239,48 @@ pre-paint path here is the real one, not a model of it.
   308px box, so what the user actually read was an ellipsis, for 26px of a
   permanent header. With no vault open the same row is the sentence saying what
   `Open vault…` is for, which is the one time it earns its height, so it is
-  hidden rather than removed. The block goes from 86px to 69px.
+  hidden rather than removed. The block goes from 86px to 69px. The whole path
+  is one right-click away while a vault is open, though — see the header's own
+  menu below.- **The vault header has its own menu, and it is one command** —
+  right-click the name for `Copy vault path`, which is the only honest way to
+  get the full path out of a sidebar that no longer shows one. It is a command
+  in the same list as everything else, marked `context: true`, so the header's
+  item and the app menu's entry are one entry with one run path rather than two
+  copies. With no vault open the menu does not open at all: a menu of one
+  greyed-out item is a worse answer than no menu. `Close vault` could have
+  joined it for the same reason `Open vault…` did not — it is already in the app
+  menu, one level from the panel rather than on it.
+
+  **Reveal in Explorer is deliberately not there.** `deno desktop` has no
+  file-manager API — `Deno.BrowserWindow` offers `bind`, `executeJs` and menus,
+  and nothing else — so it would mean a `Deno.Command` and `--allow-run` on the
+  desktop tasks, for a permission the app is otherwise built without on purpose.
+  Copying the path is the part a user can act on from the clipboard, so that is
+  what shipped; a test asserts the binding layer launches no process, so the
+  decision cannot be quietly reversed.
+- **The vault header carries one action, and the rest are menu entries** — it
+  was a row of two full-width labelled buttons stacked under the vault's name,
+  so the sidebar's first read was `Open vault…` directly beneath a vault that
+  was already open, closing a vault had the bare word `Close` to say so, and the
+  pair cost 40px of a 360px column. It is now one 24px folder at the end of the
+  name's row, so the name keeps the width and ellipsises instead of pushing it
+  off the panel, and an icon names nothing on its own, so the button carries
+  `Open another vault` once a vault is open and `Open a vault` until then.
+
+  **Closing a vault is a menu entry, not a second button.** VS Code's File menu
+  has `Open Folder…` and `Close Folder` as entries and neither of them as a
+  button on the folder; the same split reads here as opening a different vault
+  from the panel you are in, and closing the current one from the menu's `Vault`
+  group, where it sits under the name it always had next to `Copy vault path`
+  and is disabled when there is nothing to close. One command, one place to
+  reach it from. It took the crossed-folder glyph with it, which left the folder
+  as the last user of that geometry and the shared `FOLDER_PATH` constant as the
+  last user of a constant.
+
+  The file list's toolbar goes with the vault rather than sitting there inert:
+  with no vault the list is empty, so the filter filtered nothing, the asset and
+  extension checkboxes had no list to redraw, and the create button was
+  disabled.
 - **Editor** — [CodeMirror 6](https://codemirror.net/) with the Markdown
   grammar, chosen in [#6](https://github.com/wazootech/wiki-desktop/issues/6)
   against a regex overlay and against `editorcn`/Tiptap (HTML- or
@@ -219,6 +295,24 @@ pre-paint path here is the real one, not a model of it.
   _after_ the page's stylesheet with an extra class of specificity, so a
   page-written `.cm-gutters` rule loses and the gutter renders light grey in
   dark mode.
+- **Following a link** — `Ctrl`/`Cmd`+click opens a Markdown link, and holding
+  the modifier shows where it goes before you commit to it: the vault-relative
+  path for a page, the URL for an external link, and plainly that there is
+  nowhere to go when there is nowhere to go. An invisible modifier on a coloured
+  word is not a feature anyone finds on their own, so the tooltip is the feature
+  and the click is the easy half. The href is read from the syntax tree rather
+  than from the text, so a click anywhere in the link finds it — label, brackets
+  or target — and a URL containing a `)` resolves the way the parser says it
+  does instead of the way a regular expression guesses. `src/markdown_links.ts`
+  holds that read and the arithmetic that turns an href into a target, apart
+  from the page so both can be tested with no DOM; the editor resolves against
+  the document that is showing and the page decides what to do, because the page
+  is a classic script with no import to hand and is the part that knows the
+  vault. A target outside the vault opens the folder browser at the folder it
+  named. External links go to `window.open`: the app runs without `--allow-run`,
+  and handing a URL to the OS would mean granting a permission to every task so
+  it could shell out per platform. In the desktop webview that opens a window
+  rather than the system browser.
 - **Line endings** — the editor's document holds LF only, and the file keeps the
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a
@@ -228,7 +322,21 @@ pre-paint path here is the real one, not a model of it.
   640px. It is one action with two affordances: the brand row's while the
   sidebar is showing and the tab bar's once it is collapsed, so the control
   stays in the window's top-left corner and never strands itself. The collapsed
-  state is stored in the app config, so it survives a restart.
+  state is stored in the app config, so it survives a restart. The two layouts
+  keep different states for that one control — a collapsed column against a
+  closed drawer — so the wording is derived from whichever layout is on screen,
+  and re-derived when a window crosses 640px. It is derived for the `title` as
+  well as the `aria-label`, because the tooltip is the one a mouse user reads:
+  the buttons shipped with the wording each layout starts in, so after the first
+  collapse the brand toggle's tooltip still said "Hide vault files" while the
+  control beside it said "Show".
+- **A file row says what it is, not only what colour it is** — the row for the
+  document on screen carries `aria-current`, and an asset row — one the vault's
+  config lists as static rather than as a page — carries a visually hidden
+  "static file". Both were drawn states and nothing else: brand colour and a
+  rail for the open ones, a dimmed row for the assets, which a screen reader
+  cannot see. The note goes in the row rather than in an `aria-label` that would
+  replace the visible name and break voice control.
 - **One curated icon set** — every icon in the app is an inline SVG from one map
   in `src/page.ts` (`ICONS`), copied from [Lucide](https://lucide.dev) rather
   than imported so `deno task build` stays a single self-contained artefact.
@@ -237,7 +345,7 @@ pre-paint path here is the real one, not a model of it.
   renders as a box, and the one colour emoji that had crept in ignored `color`
   entirely and so could not follow the palette at all. One map means a shape is
   not drawn twice and two controls cannot drift onto the same mark — the sidebar
-  toggle and the app menu are both 28px squares in the same band, and were once
+  toggle and the app menu are squares in the same band of chrome, and were once
   both a `☰`. Each is sized on the element (a bare `viewBox` with no width
   renders at 300x150), inherits `currentColor` from its container, and is
   `aria-hidden`, so every such control carries its name in `aria-label`.

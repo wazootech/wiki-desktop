@@ -161,30 +161,56 @@ Deno.test("collapsing never strands the only way to reopen", () => {
       .length === 2,
     "there is one toggle per layout state",
   );
+  // The tooltip is the one of the two labels a mouse user reads, and the two
+  // toggles shipped with opposite wording — each right for the layout it
+  // appears in, and wrong the moment the state moved. So the wording is
+  // derived with the rest, and the shortcut rides along.
+  assert(
+    /toggle\.title = label \+ ' \(Ctrl\+B\)';/.test(page),
+    "the toggle's tooltip is rewritten with the state, not left in the markup",
+  );
+  assert(
+    /syncSidebarToggles\(\)[\s\S]*?toggle\.setAttribute\('aria-label', label\)/
+      .test(
+        page,
+      ),
+    "and the tooltip cannot be derived from anything but the accessible name",
+  );
+  // The two layouts keep different states for the same control, so a window
+  // dragged across the breakpoint has to re-derive the labels; otherwise both
+  // toggles go on describing the layout that just left.
+  assert(
+    /narrowWindow\.addEventListener\('change', syncSidebarToggles\);/.test(
+      page,
+    ),
+    "crossing the breakpoint re-derives what both toggles say",
+  );
 });
 
 Deno.test("no two icon-only buttons draw the same glyph", () => {
-  // These buttons are 28px squares in one band of chrome, so a shared glyph
+  // These buttons are 24-28px squares in one band of chrome, so a shared glyph
   // reads as one control drawn twice — which is what the sidebar toggle and the
   // app menu were, both ☰. The toggle draws a panel, the bar's reload is an
-  // arrow, the file list's create button is a +, and the menu keeps ☰.
+  // arrow, the file list's create button is a +, the menu keeps ☰, and the
+  // vault's own button is a folder.
   const iconButtons = [
     ...page.matchAll(/<button ([^>]*)>([\s\S]*?)<\/button>/g),
   ]
     .map(([, attrs, inner]) => ({ attrs, inner: inner.trim() }))
     .filter(({ attrs }) => /\bicon-button\b/.test(attrs));
 
-  assert(iconButtons.length === 5, "the app has five icon-only buttons");
+  assert(iconButtons.length === 6, "the app has six icon-only buttons");
   const by = (pattern: RegExp) =>
     iconButtons.filter(({ attrs }) => pattern.test(attrs));
   const toggles = by(/\bsidebar-toggle\b/);
   const menus = by(/id="menuButton"/);
   const creates = by(/id="newFileButton"/);
   const reloads = by(/id="reloadButton"/);
+  const opens = by(/id="openVaultButton"/);
   assert(
     toggles.length === 2 && menus.length === 1 && creates.length === 1 &&
-      reloads.length === 1,
-    "one app menu, one create button, one reload, and one toggle per state",
+      reloads.length === 1 && opens.length === 1,
+    "one app menu, one create button, one reload, one toggle per state, and one button for the vault",
   );
   // The two toggles are never on screen together, so only a shared source keeps
   // them identical when one is edited.
@@ -198,6 +224,7 @@ Deno.test("no two icon-only buttons draw the same glyph", () => {
     menus[0].inner,
     creates[0].inner,
     reloads[0].inner,
+    opens[0].inner,
   ];
   assert(
     new Set(glyphs).size === glyphs.length,
@@ -221,8 +248,10 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
   // A curated set, so a glyph cannot creep back in as a character. Seven were
   // characters: the menu and the create button were icon-buttons in the markup,
   // the tab close, folder disclosure and active check are assigned in the
-  // script, and the two placeholders are divs. The folder was a colour emoji,
-  // which ignores `color` and so could not follow the palette at all.
+  // script, and the placeholder is a div. The folder was a colour emoji,
+  // which ignores `color` and so could not follow the palette at all. There was
+  // a second placeholder on the no-vault panel; the panel is gone, and with it
+  // the only remaining use of the folder at placeholder size.
   //
   // Typography is deliberately untouched: an ellipsis in a label, a middot
   // between hints and an em dash in prose are part of a sentence, not a control.
@@ -275,8 +304,8 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
     ...page.matchAll(/class="placeholder-icon" aria-hidden="true"><svg/g),
   ];
   assert(
-    placeholders.length === 2,
-    `both placeholders draw an icon rather than a character: found ${placeholders.length}`,
+    placeholders.length === 1,
+    `the one placeholder left draws an icon rather than a character: found ${placeholders.length}`,
   );
 });
 
@@ -296,11 +325,300 @@ Deno.test("the vault's path row is spent only when there is no vault", () => {
       .test(page),
     "and it keeps the guidance an unopened vault needs",
   );
-  // Hiding the row must not close the gap it left: the buttons still need to
-  // sit clear of the name, and an unopened vault still needs its own spacing.
+  // Hiding the row must not close the gap it left, and the way to guarantee
+  // that is not to pad the button but to stop it being a row of its own: it
+  // shares the name's row, so the header is one line with an optional sentence
+  // under it.
+  const headAt = page.search(/<div class="vault-head"[^>]*>/);
+  assert(headAt > 0, "the vault header is one row in the markup");
+  const head = page.slice(headAt, page.indexOf("</section>", headAt));
   assert(
-    /\.vault-actions \{[^}]*margin-top: 8px/.test(page),
-    "the buttons carry the spacing the path row used to provide",
+    /id="openVaultButton"/.test(head),
+    "the vault's action shares the row that holds its name",
+  );
+  // The name takes the width it needs and the button keeps its own, so a long
+  // folder name ellipsises instead of pushing it off the panel.
+  assert(
+    /\.vault-actions \{[^}]*margin-left: auto/.test(page),
+    "the button sits at the far end of the name's row",
+  );
+});
+
+Deno.test("the folder dialog is the only way in, and it is the app's home", () => {
+  // It used to have a panel of its own: an empty state with a folder icon, a
+  // sentence, and a button whose only job was to open the dialog. So the app
+  // had two surfaces for one action and the first click bought nothing, and
+  // closing a vault put you back on a panel you then had to click through to
+  // leave again. One dialog now opens itself when there is no vault, and the
+  // sidebar's button opens that same dialog when there is one.
+  assert(
+    !/placeholderNoVault|emptyOpenVaultButton|Open a folder to begin|Choose a vault/
+      .test(page),
+    "there is no second surface for opening a vault",
+  );
+  assert(
+    /async function init\(\)[\s\S]*?if \(vault\.root === null\) openBrowser\(\);/
+      .test(
+        page,
+      ),
+    "the app opens the dialog itself when it starts with no vault",
+  );
+  // After the listing is reloaded, not before: the dialog browses from the
+  // state the app is in, so it must be opened once that state is the new one.
+  const closeAt = page.indexOf("async function closeVault()");
+  const closeBody = page.slice(
+    closeAt,
+    page.indexOf("async function", closeAt + 10),
+  );
+  const listingAt = closeBody.indexOf("await loadFiles();");
+  assert(
+    listingAt > 0 &&
+      closeBody.indexOf("openBrowser();", listingAt) > listingAt,
+    "and closing a vault returns to it rather than to a panel with a button",
+  );
+  // With nothing open the dialog is the app, so it names that rather than the
+  // switch, and it does not offer a way out of itself: Cancel, Escape and the
+  // scrim all lead to a window with no vault and no way to work in it.
+  assert(
+    /browserTitle\.textContent = vault\.root === null[\s\S]{0,80}'Open a vault'/
+      .test(
+        page,
+      ),
+    "the dialog says which of the two questions it is asking",
+  );
+  assert(
+    /cancelBrowseButton\.hidden = vault\.root === null;/.test(page),
+    "Cancel is hidden when there is nothing to return to",
+  );
+  assert(
+    /function closeBrowser\(\) \{[\s\S]*?if \(vault\.root === null\) return;/
+      .test(
+        page,
+      ),
+    "and Escape cannot dismiss it into an app with no vault",
+  );
+  // The guard reads the state as it is, and choosing a folder is how a user
+  // with no vault gets one — so that path has to take the dialog down without
+  // asking the guard, or the app opens its vault and leaves the dialog over it.
+  assert(
+    /async function switchVault\([\s\S]*?hideBrowser\(\);/.test(page),
+    "opening a vault from the dialog puts the dialog away",
+  );
+  assert(
+    /function closeBrowser\(\)[\s\S]*?if \(vault\.root === null\) return;\s*hideBrowser\(\);/
+      .test(
+        page,
+      ),
+    "and the guarded path delegates to the same hide",
+  );
+});
+
+Deno.test("the vault header's menu is the command list, not a second copy", async () => {
+  // The sidebar's path row is gone while a vault is open, so the whole path
+  // has to come out some other way; the header's own menu is it. The menu is
+  // filled from the command list rather than written out again, so an action
+  // can never exist in one place and not the other, and the header's item and
+  // the app menu's entry are the same command with one run path.
+  assert(
+    /<div class="menu-popup vault-menu" id="vaultMenu"[^>]*hidden><\/div>/.test(
+      page,
+    ),
+    "the header's menu ships empty and hidden, like the app menu",
+  );
+  assert(
+    /for \(const command of commands\.filter\(\(entry\) => entry\.context\)\)/
+      .test(
+        page,
+      ),
+    "its items are the commands marked for it",
+  );
+  assert(
+    /item\.addEventListener\('click', \(\) => \{\s*hideVaultMenu\(\);\s*runCommand\(command\.id\);/
+      .test(page),
+    "and they run the way the app menu's do",
+  );
+  // Fixed positioning is measured against the window, and the sidebar is a
+  // transformed element in the drawer layout, so a menu inside it would be
+  // placed relative to a panel that may be off screen.
+  assert(
+    page.indexOf('id="vaultMenu"') > page.indexOf("</aside>"),
+    "the menu lives outside the sidebar, whose transform would capture it",
+  );
+  // It is the same popup class, anchored at right: 0 for the button it grew
+  // out of. Left and right both set with width: auto stretches the box to the
+  // window instead of hugging its item, which is a 735px menu with one line in
+  // it. Measured, not guessed.
+  const rule = page.match(/\.vault-menu\s*\{([^}]*)\}/);
+  assert(
+    rule !== null && /right:\s*auto/.test(rule[1]),
+    "the menu clears the side of the anchor it is not using",
+  );
+  // The path comes out through the webview's own clipboard, in the row's
+  // action and not in a binding: a binding would mean the app launching a
+  // process, and the app is built without --allow-run on purpose.
+  assert(
+    /id: 'copy-vault-path'[^}]*canRun: \(\) => vault\.root !== null, context: true, run: copyVaultPath/
+      .test(
+        page,
+      ),
+    "copying the path is one of those commands, and it says it needs a vault",
+  );
+  assert(
+    /await copyText\(path\);\s*showToast\('Copied the vault path'\);/.test(
+      page,
+    ),
+    "and it says when it worked",
+  );
+  assert(
+    /showToast\('Could not copy the path\.'\)/.test(page),
+    "and when it did not, rather than failing quietly",
+  );
+  const bindings = await Deno.readTextFile(
+    join(import.meta.dirname!, "bindings.ts"),
+  );
+  assert(
+    !/Deno\.Command|reveal|openExternal/i.test(bindings),
+    "the binding layer launches no process to do it",
+  );
+  // With no vault open the menu has nothing to act on, and a menu of one
+  // greyed-out item is a worse answer than no menu.
+  assert(
+    /if \(vault\.root === null\) return;\s*openVaultMenu\(event\.clientX/.test(
+      page,
+    ),
+    "the header's menu does not open when there is no vault",
+  );
+  // A right-click near the edge of the window must not open a menu that runs
+  // off it, with its only item unreachable.
+  assert(
+    /Math\.min\(x, window\.innerWidth - box\.width - edge\)/.test(page) &&
+      /Math\.min\(y, window\.innerHeight - box\.height - edge\)/.test(page),
+    "and it is pulled back inside the window",
+  );
+  // Escape closes it from the one document handler the other surfaces share,
+  // and opening it closes the app menu, so there is never a question of which
+  // of two popups Escape means.
+  assert(
+    /function openVaultMenu\([\s\S]*?closeMenu\(false\);/.test(page),
+    "opening the header's menu closes the app menu, so only one is ever up",
+  );
+  const keydown = page.slice(
+    page.indexOf("document.addEventListener('keydown'"),
+  );
+  assert(
+    /event\.key === 'Escape' && vaultMenuIsOpen\(\)/.test(keydown) &&
+      keydown.indexOf("vaultMenuIsOpen()") <
+        keydown.indexOf("event.key === 'Escape' && menuIsOpen()"),
+    "Escape closes the header's menu first, in the handler the surfaces share",
+  );
+});
+
+Deno.test("the vault's one button is named for the state it acts on", () => {
+  // It was a labelled button, so the word came with it. As an icon the name has
+  // to come from somewhere, and what it has to say changes: with a vault open
+  // the same button switches it, and "Open a vault" then describes neither what
+  // it does nor the fact that a vault is already open.
+  assert(
+    /<button[^>]*id="openVaultButton"[^>]*title="Open a vault"[^>]*aria-label="Open a vault"/
+      .test(page),
+    "the open button ships a name, since an aria-hidden glyph names nothing",
+  );
+  assert(
+    /openVaultButton\.title = open \? 'Open another vault' : 'Open a vault';/
+      .test(
+        page,
+      ),
+    "and it changes with the state it acts on",
+  );
+  assert(
+    /openVaultButton\.setAttribute\('aria-label', open \? 'Open another vault' : 'Open a vault'\);/
+      .test(page),
+    "and the accessible name changes with it, not only the tooltip",
+  );
+  // Closing a vault is a menu entry, the way VS Code keeps Close Folder in its
+  // File menu rather than on the folder: the header keeps the one action a user
+  // reaches for while browsing, and a second button beside it was a second way
+  // to reach a rarer action. One command, one place — so nothing in the markup
+  // or the script is left pointing at a button that is no longer there.
+  assert(
+    !/closeVaultButton/.test(page),
+    "nothing is left pointing at a close button the header no longer has",
+  );
+  assert(
+    /id: 'close-vault', group: 'Vault', label: 'Close vault', keys: '', canRun: \(\) => vault\.root !== null, run: closeVault/
+      .test(
+        page,
+      ),
+    "and Close vault is one menu command, which says when it cannot run",
+  );
+  // The file list empties with the vault, so the row that filters and creates
+  // from it has nothing to act on: it was a filter over nothing and a disabled
+  // create button, the part of closing a vault that had not been finished.
+  assert(
+    /<div class="file-tools" id="fileTools">/.test(page),
+    "the file list's toolbar is something the page can hide",
+  );
+  assert(
+    /fileTools\.hidden = !open;/.test(page),
+    "and it goes when the vault it acts on does",
+  );
+});
+
+Deno.test("both scrolling rows ask for a thin scrollbar", () => {
+  // The app is dark and the platform's default scrollbar is sized and coloured
+  // for a light page, so it sat in the middle of the file list as a light grey
+  // bar in the one column a reader is always scrolling. The tab strip already
+  // asked for a thin one; this makes the pair agree rather than leaving the
+  // next scrolling row to rediscover it.
+  for (const row of ["file-list", "tabs"]) {
+    assert(
+      new RegExp(`\\.${row} \\{[^}]*scrollbar-width: thin`).test(page),
+      `the ${row} asks for a thin scrollbar`,
+    );
+  }
+});
+
+Deno.test("a file row says which page is showing, and which rows are assets", () => {
+  // The active row was brand-coloured and bold, and the open ones carried a
+  // rail: both states a screen reader cannot see. In a list where a hundred
+  // rows differ only by folder, "which page am I in" has to be said rather than
+  // tinted.
+  assert(
+    /button\.setAttribute\('aria-current', 'true'\)/.test(page),
+    "the row for the open document is marked as the current one",
+  );
+  // Marked in the active branch, not the open one: a row with a buffer behind
+  // it is not the document on screen, and marking those too would make
+  // "current" mean "open" in the one list where the two differ.
+  const rows = page.slice(page.indexOf("for (const file of visible)"));
+  const activeBranch = rows.slice(
+    rows.indexOf("if (active !== null && active.path === file.path)"),
+    rows.indexOf("} else if (openPaths.has(file.path))"),
+  );
+  assert(
+    /button\.setAttribute\('aria-current', 'true'\)/.test(activeBranch),
+    "and it is the active row that is marked, not every row that is open",
+  );
+  // An asset was dimmed, which is the only thing that said it was not a page of
+  // the wiki. Said once more in the row's own words rather than in an
+  // aria-label: replacing the visible name is what breaks voice control, and
+  // the row already names itself correctly.
+  assert(
+    /kind\.className = 'sr-only';\s*kind\.textContent = 'static file'/.test(
+      page,
+    ),
+    "an asset row says it is a static file, in the row rather than over it",
+  );
+  assert(
+    /if \(file\.scope === 'asset'\) \{\s*const kind = document\.createElement\('span'\)/
+      .test(
+        page,
+      ),
+    "and only assets are marked as one",
+  );
+  assert(
+    !/button\.aria-label|button\.setAttribute\('aria-label'/.test(rows),
+    "no file row overrides its visible name with an aria-label",
   );
 });
 
@@ -336,6 +654,50 @@ Deno.test("the extension setting is reachable from the list it changes", () => {
   assert(
     /\.file-tools \{ flex-wrap: wrap/.test(page),
     "and the toolbar is allowed to wrap at all",
+  );
+});
+
+Deno.test("the path setting is reachable from the list it changes", () => {
+  // The folder under each name is a second line, so it is what makes the list
+  // tall, and in a vault one folder deep it is the same word repeated down the
+  // whole column. Hiding it needs the same two controls extensions has: the
+  // checkbox beside the list, and the item in the Appearance menu.
+  assert(
+    /<input type="checkbox" id="showPaths"/.test(page),
+    "the sidebar offers the setting beside the list it redraws",
+  );
+  assert(
+    /pathsInput\.addEventListener\('change', \(\) => setShowPaths\(pathsInput\.checked, true\)\)/
+      .test(page),
+    "and that checkbox drives the same setter the menu command uses",
+  );
+  assert(
+    /pathsInput\.checked = show;/.test(page),
+    "so the menu command and the checkbox cannot drift apart",
+  );
+  assert(
+    /pathsInput\.checked = state\.showPaths !== false;/.test(page),
+    "and the stored setting wins over the markup's default on load",
+  );
+  // The span is not created at all when the setting is off, rather than hidden
+  // with CSS: a display:none node is out of sight but still in the tab order
+  // and still read aloud, which is not what turning the setting off means.
+  assert(
+    /if \(vault\.showPaths\) \{\s*if \(separator !== -1\)/.test(page),
+    "the folder line is left out of the row entirely",
+  );
+  assert(
+    /role: 'menuitemcheckbox'[^\n]*isActive: \(\) => vault\.showPaths/.test(
+      page,
+    ),
+    "and the Appearance menu reports which way the setting is on",
+  );
+  // The row still names the file it opens, so turning the setting off cannot
+  // turn two files in different folders into the same row.
+  assert(
+    /name\.textContent = listedName\(file\)/.test(page) &&
+      /button\.title = file\.path/.test(page),
+    "the name and the row's title are untouched by the setting",
   );
 });
 
@@ -409,6 +771,14 @@ Deno.test("the icons come from one curated map", async () => {
   assert(
     new Set(keys).size === keys.length,
     "no icon is defined twice under two names",
+  );
+  // And the other half of the same failure: an icon nothing draws is a name in
+  // the map claiming a shape is part of the app when it is not. The no-vault
+  // placeholder went when the empty state did and left its folder behind.
+  const undrawn = keys.filter((key) => !source.includes(`ICONS.${key}`));
+  assert(
+    undrawn.length === 0,
+    `these icons are in the map but nothing draws them: ${undrawn.join(", ")}`,
   );
   // currentColor is the point of the migration: it is what lets a glyph follow
   // a palette, which is exactly what the colour emoji could not do.

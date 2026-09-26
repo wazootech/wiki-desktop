@@ -32,6 +32,8 @@ export interface VaultState {
   sidebarCollapsed: boolean;
   /** Whether the file list shows each file's extension. */
   showExtensions: boolean;
+  /** Whether the file list shows the folder each file sits in. */
+  showPaths: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
   /** Light/dark appearance the user last chose, `system` if they never did. */
@@ -59,6 +61,8 @@ export interface WikiBindings {
   setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
   /** Remember whether the file list shows extensions, so it survives a restart. */
   setShowExtensions(show: boolean): Promise<VaultState>;
+  /** Remember whether the file list shows folder paths, so it survives a restart. */
+  setShowPaths(show: boolean): Promise<VaultState>;
   /** Remember the sidebar column's width, so it survives a restart. */
   setSidebarWidth(width: number): Promise<VaultState>;
   /** Remember the appearance, so it survives a restart. */
@@ -108,6 +112,12 @@ export function createVaultApi(): VaultApi {
       // that sends anything but false means "on", and this value outlives the
       // session that set it.
       await updateConfig({ showExtensions: show !== false });
+      return await readState();
+    }),
+    setShowPaths: guard(async (show: boolean) => {
+      // Coerced the same way, and for the same reason: this one outlives the
+      // session that set it too.
+      await updateConfig({ showPaths: show !== false });
       return await readState();
     }),
     setSidebarWidth: guard(async (width: number) => {
@@ -178,6 +188,7 @@ async function readState(): Promise<VaultState> {
     recents: config.recentVaults,
     sidebarCollapsed: config.sidebarCollapsed,
     showExtensions: config.showExtensions,
+    showPaths: config.showPaths,
     sidebarWidth: config.sidebarWidth,
     theme: config.theme,
   };

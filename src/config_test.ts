@@ -208,6 +208,38 @@ Deno.test("extensions stay on unless something turns them off", async () => {
   });
 });
 
+Deno.test("paths stay on unless something turns them off", async () => {
+  // Same rule as extensions, and the same reason: a config written before
+  // this setting existed has no key for it, and the stored default is what
+  // the app has always drawn. An upgrade must not silently reflow every row
+  // in the file list.
+  await withScratchHome(async (home) => {
+    assertEqual(
+      (await loadConfig()).showPaths,
+      true,
+      "a fresh config shows folder paths",
+    );
+    await writeConfigFile(home, { sidebarWidth: 400 });
+    assertEqual(
+      (await loadConfig()).showPaths,
+      true,
+      "a config that never heard of the setting still shows them",
+    );
+    await writeConfigFile(home, { showPaths: false });
+    assertEqual(
+      (await loadConfig()).showPaths,
+      false,
+      "an explicit false is honoured",
+    );
+    await writeConfigFile(home, { showPaths: "no" });
+    assertEqual(
+      (await loadConfig()).showPaths,
+      true,
+      "and so is anything that is not false",
+    );
+  });
+});
+
 Deno.test("a stored write leaves no scratch file behind", async () => {
   await withScratchHome(async () => {
     await updateConfig({ sidebarWidth: 300 });

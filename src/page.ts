@@ -51,10 +51,16 @@ const ICONS = {
   closeTab: chromeIcon('<path d="M18 6 6 18" /><path d="m6 6 12 12" />', 12),
   disclosure: chromeIcon('<path d="m9 18 6-6-6-6" />', 12),
   activeCheck: chromeIcon('<path d="M20 6 9 17l-5-5" />', 11),
-  /** Sized for the 42px placeholder tile, which used a 19px font. */
-  noVault: chromeIcon(
+  /**
+   * The sidebar's own way in, and the only place the folder is drawn: opening
+   * a vault is the one action a user reaches for from the panel, while closing
+   * one lives in the menu beside the other vault commands. Once the empty state
+   * and the close button were gone it was the last user of this geometry, so
+   * the shared constant went with them.
+   */
+  openVault: chromeIcon(
     '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />',
-    20,
+    15,
   ),
   noFile: chromeIcon(
     '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />',
@@ -322,10 +328,27 @@ const pageTemplate = `<!DOCTYPE html>
       border-bottom: 1px solid var(--line);
       background: var(--panel-muted);
     }
-    .vault-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+    .vault-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
     .vault-label { color: var(--muted); font-size: 9.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; flex-shrink: 0; }
     .vault-name { font-size: 12.5px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-name.is-placeholder { color: var(--muted); font-weight: 600; }
+    /*
+     * The vault's one action, in its own row beside the name rather than a row
+     * of its own under it. It was a full-width button labelled "Open vault…"
+     * sitting directly beneath a vault that was already open, which made the
+     * sidebar's first sentence about the wrong thing.
+     *
+     * There was a second button here — a crossed folder, for closing the vault.
+     * It went the way editors have gone: VS Code's File menu has Open Folder
+     * and Close Folder as entries and neither of them as a button on the
+     * folder, and the one a user reaches for while browsing is opening a
+     * different one. Closing a vault is in the menu's Vault group under the
+     * same name it always had, next to Copy vault path, disabled when there is
+     * nothing to close.
+     */
+    .vault-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+    .vault-actions .icon-button { width: 24px; min-height: 24px; border-radius: 6px; color: var(--muted); }
+    .vault-actions .icon-button:hover { color: var(--text); background: var(--surface-hover); }
     /*
      * The path earns its row only when there is no vault: then it is the
      * sentence saying what Open vault is for. With a vault open it is the
@@ -338,15 +361,17 @@ const pageTemplate = `<!DOCTYPE html>
       margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.4;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .vault-actions { display: flex; gap: 6px; margin-top: 8px; }
-    .vault-actions .button { flex: 1; min-height: 25px; font-size: 11.5px; }
-
     /*
      * The file list's own toolbar: the filter, then the button that creates a
      * file. Creating lives here rather than in the top bar, which holds the open
-     * document's actions, and rather than in the vault's Open/Close row, where a
-     * third labeled button collapses this sidebar's content box to 200px and
-     * measures 63px per button — every label wraps onto two lines.
+     * document's actions — the same reason it did not join the vault's row of
+     * labeled buttons, which has since become two icons on the vault's own
+     * heading.
+     *
+     * The row is hidden outright with no vault open. The file list empties then,
+     * so what was left was a filter over nothing, a toggle with nothing to
+     * toggle, and a disabled create button: chrome for an empty list, which is
+     * the part of "closing the vault" that had not been finished.
      */
     .file-tools { display: flex; align-items: center; gap: 6px; padding: 8px 10px 5px; }
     .filter {
@@ -376,7 +401,16 @@ const pageTemplate = `<!DOCTYPE html>
     .file-tools .filter { flex-basis: 100px; }
     .file-tools-checks { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
-    .file-list { flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none; }
+    /*
+     * The list scrolls constantly and the column is dark, so the platform's
+     * default scrollbar — a light grey bar, sized for a light page — sat in the
+     * middle of it. The tab strip already asks for a thin one; this is the same
+     * request for the one control a reader is always scrolling.
+     */
+    .file-list {
+      flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none;
+      scrollbar-width: thin;
+    }
     .file-button {
       position: relative;
       display: block; width: 100%; padding: 4px 8px; border: 0; border-radius: 6px;
@@ -479,6 +513,18 @@ const pageTemplate = `<!DOCTYPE html>
        labels of a group of choices line up. */
     .menu-check { display: grid; place-items: center; flex-shrink: 0; width: 11px; height: 11px; color: var(--brand-text); }
     .menu-keys { flex-shrink: 0; color: var(--text-faint); font-size: 10.5px; }
+    /*
+     * The same popup at the pointer rather than under a button. Fixed, because
+     * the menu is placed in window coordinates and the sidebar is a
+     * transformed element in the drawer layout, which would otherwise become
+     * its containing block. The left and top are written by the script, which
+     * also pulls it back inside the window.
+     *
+     * right: auto is not decoration. The base rule anchors the menu at
+     * right: 0, and a fixed box with both left and right set and width: auto
+     * stretches to fill the window rather than hugging its one item.
+     */
+    .vault-menu { position: fixed; top: 0; left: 0; right: auto; min-width: 188px; }
 
     .editor-region { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--panel-muted); }
     .placeholder { display: grid; place-items: center; height: 100%; padding: 24px; text-align: center; }
@@ -660,18 +706,17 @@ const pageTemplate = `<!DOCTYPE html>
       </div>
 
       <section class="vault" aria-label="Vault">
-        <div class="vault-head">
+        <div class="vault-head" id="vaultHead">
           <span class="vault-label">Vault</span>
           <span class="vault-name is-placeholder" id="vaultName">No vault open</span>
+          <div class="vault-actions">
+            <button class="button button-secondary icon-button" id="openVaultButton" type="button" title="Open a vault" aria-label="Open a vault">${ICONS.openVault}</button>
+          </div>
         </div>
         <div class="vault-path" id="vaultPath">Choose the folder that holds your wiki.</div>
-        <div class="vault-actions">
-          <button class="button button-secondary" id="openVaultButton" type="button">Open vault…</button>
-          <button class="button button-secondary" id="closeVaultButton" type="button" hidden>Close</button>
-        </div>
       </section>
 
-      <div class="file-tools">
+      <div class="file-tools" id="fileTools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
         <div class="file-tools-checks">
@@ -680,6 +725,9 @@ const pageTemplate = `<!DOCTYPE html>
           </label>
           <label class="assets-toggle" id="extensionsToggle" title="Write each file's extension out in full">
             <input type="checkbox" id="showExtensions" checked />Extensions
+          </label>
+          <label class="assets-toggle" id="pathsToggle" title="Write each file's folder on a second line under its name">
+            <input type="checkbox" id="showPaths" checked />Paths
           </label>
         </div>
         <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
@@ -721,14 +769,14 @@ const pageTemplate = `<!DOCTYPE html>
       </header>
 
       <div class="editor-region">
-        <div class="placeholder" id="placeholderNoVault">
-          <div class="placeholder-inner">
-            <div class="placeholder-icon" aria-hidden="true">${ICONS.noVault}</div>
-            <h1>Open a folder to begin</h1>
-            <p>Pick the folder that holds your wiki. The app reads and writes Markdown files there, directly on disk.</p>
-            <button class="button button-primary" id="emptyOpenVaultButton" type="button">Choose a vault</button>
-          </div>
-        </div>
+        <!--
+          There is no "no vault" panel here. It used to sit here with a button
+          whose only job was to open the folder dialog, so the app had two
+          surfaces for one action and the first click bought nothing. The
+          dialog is the app's way in instead: it opens by itself when there is
+          no vault, and it is the same dialog the sidebar's button opens when
+          there is one.
+        -->
 
         <div class="placeholder" id="placeholderNoFile" hidden>
           <div class="placeholder-inner">
@@ -759,8 +807,8 @@ const pageTemplate = `<!DOCTYPE html>
   <div class="overlay" id="browserOverlay" hidden>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="browserTitle">
       <div class="dialog-header">
-        <h2 id="browserTitle">Open vault</h2>
-        <p>Browse to the folder you want to work in, then choose it. deno desktop has no native folder picker yet, so this dialog stands in for one — paste a path if you would rather navigate that way.</p>
+        <h2 id="browserTitle">Open a vault</h2>
+        <p id="browserIntro">Browse to the folder you want to work in, then choose it. deno desktop has no native folder picker yet, so this dialog stands in for one — paste a path if you would rather navigate that way.</p>
       </div>
       <div class="path-row">
         <button class="button button-secondary" id="upButton" type="button">Up</button>
@@ -783,6 +831,20 @@ const pageTemplate = `<!DOCTYPE html>
       </div>
     </div>
   </div>
+
+  <!--
+    The vault header's own menu, for the things you can do to the vault rather
+    than to the page. It ships empty and is filled from the command list, like
+    the app menu, so an action is written down once: the item here and the
+    entry in the app menu are the same command, and only the run path can
+    change.
+
+    It lives outside the sidebar because the drawer is a transformed element,
+    and a transformed ancestor becomes the containing block for anything
+    position: fixed inside it -- which would put this menu at window
+    coordinates relative to a panel that may be off screen.
+  -->
+  <div class="menu-popup vault-menu" id="vaultMenu" role="menu" aria-label="Vault actions" hidden></div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -824,7 +886,6 @@ const pageTemplate = `<!DOCTYPE html>
       const shell = el('app');
       const editorHost = el('editor');
       const editorWrap = el('editorWrap');
-      const placeholderNoVault = el('placeholderNoVault');
       const placeholderNoFile = el('placeholderNoFile');
       const placeholderNoFileText = el('placeholderNoFileText');
       const tabsEl = el('tabs');
@@ -835,15 +896,15 @@ const pageTemplate = `<!DOCTYPE html>
       const commandMenu = el('commandMenu');
       const newFileButton = el('newFileButton');
       const openVaultButton = el('openVaultButton');
-      const closeVaultButton = el('closeVaultButton');
-      const emptyOpenVaultButton = el('emptyOpenVaultButton');
       const emptyNewFileButton = el('emptyNewFileButton');
       const vaultName = el('vaultName');
+      const fileTools = el('fileTools');
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
       const assetsToggle = el('assetsToggle');
       const showAssetsInput = el('showAssets');
       const extensionsInput = el('showExtensions');
+      const pathsInput = el('showPaths');
       const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
@@ -852,6 +913,8 @@ const pageTemplate = `<!DOCTYPE html>
       const cursorPosition = el('cursorPosition');
       const toast = el('toast');
       const overlay = el('browserOverlay');
+      const browserTitle = el('browserTitle');
+      const browserIntro = el('browserIntro');
       const browserPath = el('browserPath');
       const upButton = el('upButton');
       const goButton = el('goButton');
@@ -864,6 +927,8 @@ const pageTemplate = `<!DOCTYPE html>
       const recentRow = el('recentRow');
       const sidebar = document.querySelector('.sidebar');
       const sidebarResizer = el('sidebarResizer');
+      const vaultHead = el('vaultHead');
+      const vaultMenu = el('vaultMenu');
       const sidebarScrim = el('sidebarScrim');
       // One action, two affordances: the brand row's while the sidebar is
       // showing, the tabbar's once it is collapsed, so the control stays in the
@@ -881,6 +946,7 @@ const pageTemplate = `<!DOCTYPE html>
         ? window.WikiEditor.create({
             container: editorHost,
             onChange: onEditorChange,
+            onFollowLink: followLink,
           })
         : null;
       if (editorApi === null) {
@@ -909,6 +975,7 @@ const pageTemplate = `<!DOCTYPE html>
         recents: [],
         sidebarCollapsed: false,
         showExtensions: true,
+        showPaths: true,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
         theme: '${DEFAULT_THEME}',
       };
@@ -949,7 +1016,18 @@ const pageTemplate = `<!DOCTYPE html>
       // and the caller can just check for null.
       async function call(name, args) {
         try {
-          return await bridge[name].apply(null, args || []);
+          // A spread, never bridge[name].apply(null, args). The desktop runtime
+          // hands the webview a proxy whose property access IS the binding
+          // name, so reading .apply off the function it returns asks for a
+          // binding called "getState.apply" and the call is refused: every
+          // operation in the app failed, and the window sat on the empty state
+          // toasting No binding for 'browse.apply'. The browser bridge returns
+          // a plain function, so the dev server and the string tests saw
+          // nothing wrong, and src/appearance_check.ts stubs the bindings
+          // outright, so the one check that runs in the real webview could not
+          // see it either. Found by calling one binding three ways in the real
+          // desktop runtime; both a direct call and a spread work.
+          return await bridge[name](...(args || []));
         } catch (error) {
           showToast((error && error.message) || 'Something went wrong.');
           return null;
@@ -978,17 +1056,22 @@ const pageTemplate = `<!DOCTYPE html>
        * narrow ones. Deriving the wording here keeps the labels honest — the
        * drawer also closes on every file open, which must not make the brand
        * toggle claim the sidebar is hidden.
+       *
+       * The tooltip is written here too, not only in the markup, because that
+       * is the one of the two a mouse user reads: the buttons shipped with the
+       * wording each layout starts in, so after the first collapse the brand
+       * toggle's tooltip still said "Hide vault files" while the control beside
+       * it said "Show".
        */
       function syncSidebarToggles() {
         const showing = narrowWindow.matches
           ? isSidebarOpen()
           : !isSidebarCollapsed();
+        const label = showing ? 'Hide vault files' : 'Show vault files';
         for (const toggle of sidebarToggles) {
           toggle.setAttribute('aria-expanded', String(showing));
-          toggle.setAttribute(
-            'aria-label',
-            showing ? 'Hide vault files' : 'Show vault files',
-          );
+          toggle.setAttribute('aria-label', label);
+          toggle.title = label + ' (Ctrl+B)';
         }
       }
 
@@ -1014,6 +1097,20 @@ const pageTemplate = `<!DOCTYPE html>
         vault.showExtensions = show;
         if (persist) call('setShowExtensions', [show]);
         extensionsInput.checked = show;
+        renderFiles();
+        refreshMenu();
+      }
+
+      /**
+       * Whether each row carries the folder its file sits in. That is a second
+       * line, so it is the tallest thing in the list by a wide margin, and in a
+       * vault one folder deep it is the same word on every row. Off, a row is
+       * one line and the button's title still holds the full path.
+       */
+      function setShowPaths(show, persist) {
+        vault.showPaths = show;
+        if (persist) call('setShowPaths', [show]);
+        pathsInput.checked = show;
         renderFiles();
         refreshMenu();
       }
@@ -1212,6 +1309,58 @@ const pageTemplate = `<!DOCTYPE html>
         openPayload(payload);
       }
 
+      /**
+       * Ctrl/Cmd+click landed on a link, already resolved by the editor
+       * against the document that is showing. What to do about it is here,
+       * because this is what knows the vault and the folder browser.
+       *
+       * A target that is not in the vault falls through to the folder browser
+       * at the folder it named, rather than doing nothing: a link that looks
+       * live and silently does nothing is the failure mode worth avoiding, and
+       * the picker is already the app's way of finding a file.
+       *
+       * Measured, and worth recording because it looks like the opposite: the
+       * vault has no dead links at all. A text search reports six, every one
+       * of them inside a code span, written as example syntax rather than as
+       * a link. Read through the parser they are links nowhere. So this path
+       * is reachable only by a link someone is still typing, which is exactly
+       * when a folder to look in beats a dead click.
+       *
+       * (No backticks in this comment: the page script is one template
+       * literal, and a backtick in prose here closes the string outright.)
+       */
+      async function followLink(target) {
+        if (target.kind === 'external') {
+          // window.open rather than a new binding: the app runs without
+          // --allow-run, so handing a URL to the OS would mean granting a
+          // permission to every task to shell out per platform. In the browser
+          // dev target this is exactly right; in the desktop webview it opens
+          // a window rather than the system browser, which is the limit worth
+          // naming rather than the reason to add the permission here.
+          window.open(target.url, '_blank', 'noopener');
+          return;
+        }
+        if (target.kind === 'none') {
+          showToast('That link does not point anywhere yet.');
+          return;
+        }
+        if (target.kind === 'anchor') {
+          // The page is already open, so this is the one gesture with nothing
+          // to open. Jumping to the heading needs an editor handle the app
+          // does not have yet; saying so beats a click that appears broken.
+          showToast('Jumping to a heading is not built yet — this page is already open.');
+          return;
+        }
+        const exists = files.some((file) => file.path === target.path);
+        if (exists) {
+          await openFile(target.path);
+          return;
+        }
+        const cut = target.path.lastIndexOf('/');
+        openBrowser();
+        await browseTo(cut === -1 ? '' : target.path.slice(0, cut));
+      }
+
       function closeTab(index) {
         const tab = tabs[index];
         if (tab === undefined) return;
@@ -1296,9 +1445,14 @@ const pageTemplate = `<!DOCTYPE html>
         // Hidden rather than removed, because the same row is the guidance
         // that tells an unopened vault what Open vault is for.
         vaultPath.hidden = open;
-        closeVaultButton.hidden = !open;
+        // With a vault open the same button switches it, so its name has to
+        // change with the state it acts on rather than describing neither.
+        openVaultButton.title = open ? 'Open another vault' : 'Open a vault';
+        openVaultButton.setAttribute('aria-label', open ? 'Open another vault' : 'Open a vault');
+        // The list empties with the vault, so the row that filters and creates
+        // from it has nothing to act on and goes with it.
+        fileTools.hidden = !open;
         newFileButton.disabled = !open;
-        placeholderNoVault.hidden = open;
         refreshMenu();
       }
 
@@ -1343,8 +1497,13 @@ const pageTemplate = `<!DOCTYPE html>
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'file-button';
-          if (active !== null && active.path === file.path) button.classList.add('is-active');
-          else if (openPaths.has(file.path)) button.classList.add('is-open');
+          if (active !== null && active.path === file.path) {
+            button.classList.add('is-active');
+            // Which page the editor is showing was brand-coloured and bold and
+            // nothing else, so a reader using a screen reader could not tell
+            // where they were in a list of a hundred similar names.
+            button.setAttribute('aria-current', 'true');
+          } else if (openPaths.has(file.path)) button.classList.add('is-open');
           if (file.scope === 'asset') button.classList.add('is-asset');
           const name = document.createElement('span');
           name.className = 'file-name';
@@ -1354,18 +1513,30 @@ const pageTemplate = `<!DOCTYPE html>
           button.title = file.path;
           button.appendChild(name);
           const separator = file.path.lastIndexOf('/');
-          if (separator !== -1) {
-            const dir = document.createElement('span');
-            dir.className = 'file-dir';
-            dir.textContent = file.path.slice(0, separator);
-            button.appendChild(dir);
-          } else if (file.isMarkdown) {
-            const dir = document.createElement('span');
-            dir.className = 'file-dir';
-            dir.textContent = 'Markdown';
-            button.appendChild(dir);
+          if (vault.showPaths) {
+            if (separator !== -1) {
+              const dir = document.createElement('span');
+              dir.className = 'file-dir';
+              dir.textContent = file.path.slice(0, separator);
+              button.appendChild(dir);
+            } else if (file.isMarkdown) {
+              const dir = document.createElement('span');
+              dir.className = 'file-dir';
+              dir.textContent = 'Markdown';
+              button.appendChild(dir);
+            }
           }
-          button.title = file.path;
+          // An asset is dimmed, which is a distinction the eye can see and a
+          // screen reader cannot: the row said only its name, so a build output
+          // file and a page of the wiki announced identically. Said once, in
+          // the row's own words, rather than in an aria-label that would
+          // replace the visible name and break voice control.
+          if (file.scope === 'asset') {
+            const kind = document.createElement('span');
+            kind.className = 'sr-only';
+            kind.textContent = 'static file';
+            button.appendChild(kind);
+          }
           button.addEventListener('click', () => openFile(file.path));
           item.appendChild(button);
           fileList.appendChild(item);
@@ -1379,7 +1550,6 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       function showEditor() {
-        placeholderNoVault.hidden = true;
         placeholderNoFile.hidden = true;
         editorWrap.hidden = false;
       }
@@ -1387,9 +1557,10 @@ const pageTemplate = `<!DOCTYPE html>
       function showPlaceholder() {
         const hasTab = activeTab() !== null;
         // The editor is hidden while the placeholder stands in for it, and
-        // shown again the moment a tab exists.
+        // shown again the moment a tab exists. With no vault open there is
+        // nothing to stand in for it either: the folder dialog is up, and it
+        // is the app until a vault is chosen.
         editorWrap.hidden = !hasTab;
-        placeholderNoVault.hidden = vault.root !== null;
         placeholderNoFile.hidden = vault.root === null || hasTab;
         emptyNewFileButton.hidden = vault.root === null;
       }
@@ -1483,6 +1654,7 @@ const pageTemplate = `<!DOCTYPE html>
         setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
         extensionsInput.checked = state.showExtensions !== false;
+        pathsInput.checked = state.showPaths !== false;
         applySidebarWidth();
         renderVault();
         renderFiles();
@@ -1495,13 +1667,18 @@ const pageTemplate = `<!DOCTYPE html>
         if (vault.root !== null) await loadFiles();
         showPlaceholder();
         renderTabs();
+        // With no vault the dialog is the app, so it opens itself rather than
+        // waiting behind a panel whose only button opens it.
+        if (vault.root === null) openBrowser();
       }
 
       async function switchVault(path) {
         if (!confirmDiscardAll()) return;
         const state = await call('openVault', [path]);
         if (state === null) return;
-        closeBrowser();
+        // The unconditional hide: the guard in closeBrowser reads the state as
+        // it was, and choosing a folder is how a user with no vault gets one.
+        hideBrowser();
         discardAllTabs();
         applyState(state);
         renderTabs();
@@ -1524,13 +1701,32 @@ const pageTemplate = `<!DOCTYPE html>
         // file list over an app that now has no vault at all. switchVault
         // reloads the same way for the same reason.
         await loadFiles();
+        // Closing returns to the dialog the app opened on, rather than to a
+        // panel with a button that opens it: one surface for one action, and
+        // the recents are the first thing in it.
+        openBrowser();
       }
 
       // Vault picker
 
-      function closeBrowser() {
+      /**
+       * The dialog off the screen, for the paths that have a reason to put it
+       * there: a vault was opened, or the user cancelled a switch.
+       */
+      function hideBrowser() {
         overlay.hidden = true;
         listing = null;
+      }
+
+      function closeBrowser() {
+        // With no vault open this dialog is the app, so there is nothing to
+        // go back to and dismissing it would leave a window with no way to
+        // work in it. Cancel is hidden for the same reason, which makes this
+        // guard the last line rather than the only one — opening a vault from
+        // here goes through hideBrowser, because that is the one action that
+        // takes the user past it.
+        if (vault.root === null) return;
+        hideBrowser();
       }
 
       async function browseTo(path) {
@@ -1593,8 +1789,59 @@ const pageTemplate = `<!DOCTYPE html>
         }
       }
 
+      /**
+       * The vault's path, for a user who has been told it is somewhere they
+       * cannot see: the sidebar's path row is gone while a vault is open, so
+       * this is the one honest way to get the whole thing out of the app.
+       */
+      async function copyVaultPath() {
+        const path = vault.root;
+        if (path === null) return;
+        try {
+          await copyText(path);
+          showToast('Copied the vault path');
+        } catch {
+          // No binding can fix this: the clipboard belongs to the webview, and
+          // a refusal is the truthful answer rather than a silent nothing.
+          showToast('Could not copy the path.');
+        }
+      }
+
+      async function copyText(text) {
+        // A menu click is a gesture in a secure context, which is all the
+        // clipboard API asks for. WebKitGTK wants the user's permission first
+        // -- a dialog inside a dialog -- so a webview that refuses or is not
+        // asked falls through to selecting the text and copying that.
+        try {
+          if (navigator.clipboard) {
+            await navigator.clipboard.writeText(text);
+            return;
+          }
+        } catch {
+          // The fallback below is the case this catch is for.
+        }
+        const scratch = document.createElement('textarea');
+        scratch.value = text;
+        scratch.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(scratch);
+        scratch.select();
+        const copied = document.execCommand('copy');
+        scratch.remove();
+        if (!copied) throw new Error('The clipboard refused the copy.');
+      }
+
       function openBrowser() {
         setSidebarOpen(false);
+        // The dialog names the state it is in, because the two are not the
+        // same question: the first one is the way in, the second one is a
+        // switch, and the second one is going to close a vault and its tabs.
+        browserTitle.textContent = vault.root === null
+          ? 'Open a vault'
+          : 'Open another vault';
+        browserIntro.textContent = vault.root === null
+          ? 'Pick the folder that holds your wiki. deno desktop has no native folder picker yet, so this dialog stands in for one — paste a path if you would rather navigate that way.'
+          : 'Pick a different folder to work in. This closes the vault you have open, along with its tabs, and opens this one in their place.';
+        cancelBrowseButton.hidden = vault.root === null;
         overlay.hidden = false;
         browseTo(vault.root);
       }
@@ -1721,6 +1968,12 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
         { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
         { id: 'toggle-extensions', group: 'Appearance', label: 'Show file extensions', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showExtensions, run: () => setShowExtensions(!vault.showExtensions) },
+        { id: 'toggle-paths', group: 'Appearance', label: 'Show folder paths', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showPaths, run: () => setShowPaths(!vault.showPaths) },
+        // context: this one is also an item in the vault header's own menu,
+        // which is filled from the same list. Two surfaces, one command, so
+        // the header's menu cannot hold an action the app menu has never heard
+        // of -- or a second copy of one that has changed.
+        { id: 'copy-vault-path', group: 'Vault', label: 'Copy vault path', keys: '', canRun: () => vault.root !== null, context: true, run: copyVaultPath },
         { id: 'close-vault', group: 'Vault', label: 'Close vault', keys: '', canRun: () => vault.root !== null, run: closeVault },
       ];
 
@@ -1806,6 +2059,79 @@ const pageTemplate = `<!DOCTYPE html>
         if (focused !== null && focused !== undefined) focusCommand(focused);
       }
 
+      /* The vault header's own menu, at the pointer */
+
+      function vaultMenuIsOpen() {
+        return !vaultMenu.hidden;
+      }
+
+      /* The same item as the app menu, built the same way and run the same way:
+         the only difference is which list it walks and where it is placed. */
+      function renderVaultMenu() {
+        vaultMenu.textContent = '';
+        for (const command of commands.filter((entry) => entry.context)) {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'menu-item';
+          item.setAttribute('role', 'menuitem');
+          item.setAttribute('aria-disabled', command.canRun() ? 'false' : 'true');
+          item.dataset.command = command.id;
+          const name = document.createElement('span');
+          name.className = 'menu-item-label';
+          name.textContent = command.label;
+          item.appendChild(name);
+          item.addEventListener('click', () => {
+            hideVaultMenu();
+            runCommand(command.id);
+          });
+          vaultMenu.appendChild(item);
+        }
+      }
+
+      function openVaultMenu(x, y) {
+        // One popup at a time. The app menu is opened with a click and this one
+        // with a right-click, so a user can ask for the second without the
+        // first closing -- and Escape would then have two surfaces to choose
+        // between, with the app menu's check written first.
+        closeMenu(false);
+        renderVaultMenu();
+        vaultMenu.hidden = false;
+        // Placed after it is shown, because its size is what has to fit: a
+        // right-click near the window's edge would otherwise open a menu that
+        // runs off it, with its only item unreachable.
+        const box = vaultMenu.getBoundingClientRect();
+        const edge = 6;
+        vaultMenu.style.left =
+          Math.max(edge, Math.min(x, window.innerWidth - box.width - edge)) + 'px';
+        vaultMenu.style.top =
+          Math.max(edge, Math.min(y, window.innerHeight - box.height - edge)) + 'px';
+        const first = vaultMenu.querySelector('.menu-item[aria-disabled="false"]') ??
+          vaultMenu.querySelector('.menu-item');
+        if (first) first.focus();
+      }
+
+      function hideVaultMenu() {
+        vaultMenu.hidden = true;
+      }
+
+      function wireVaultMenu() {
+        vaultHead.addEventListener('contextmenu', (event) => {
+          // The app's menu replaces the webview's, which offers a page of
+          // spell-check and view-source over a folder name.
+          event.preventDefault();
+          // With no vault open there is nothing for this menu to act on, so it
+          // does not open: a menu of one greyed-out item is a worse answer than
+          // no menu.
+          if (vault.root === null) return;
+          openVaultMenu(event.clientX, event.clientY);
+        });
+        document.addEventListener('click', (event) => {
+          if (!vaultMenuIsOpen()) return;
+          if (vaultMenu.contains(event.target)) return;
+          hideVaultMenu();
+        });
+      }
+
       function stepMenuItem(step) {
         const items = enabledMenuItems();
         if (items.length === 0) return;
@@ -1879,12 +2205,18 @@ const pageTemplate = `<!DOCTYPE html>
         for (const toggle of sidebarToggles) {
           toggle.addEventListener('click', toggleSidebar);
         }
+        // The two layouts keep different states for the same control — a
+        // collapsed column on a wide window, a closed drawer on a narrow one —
+        // so crossing the breakpoint has to re-derive the labels. Without this
+        // a window dragged from narrow to wide leaves both toggles describing
+        // the drawer that just left: "Show vault files" beside a sidebar that
+        // is on screen.
+        narrowWindow.addEventListener('change', syncSidebarToggles);
         wireResizer();
         wireMenu();
+        wireVaultMenu();
         sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
         openVaultButton.addEventListener('click', openBrowser);
-        emptyOpenVaultButton.addEventListener('click', openBrowser);
-        closeVaultButton.addEventListener('click', closeVault);
         cancelBrowseButton.addEventListener('click', closeBrowser);
         useFolderButton.addEventListener('click', () => {
           if (listing) switchVault(listing.path);
@@ -1909,6 +2241,7 @@ const pageTemplate = `<!DOCTYPE html>
         // as the Appearance menu. Both controls drive the same state, so this
         // syncs the checkbox and refreshes the menu's own check mark.
         extensionsInput.addEventListener('change', () => setShowExtensions(extensionsInput.checked, true));
+        pathsInput.addEventListener('change', () => setShowPaths(pathsInput.checked, true));
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks
@@ -1919,6 +2252,14 @@ const pageTemplate = `<!DOCTYPE html>
           event.returnValue = '';
         });
         document.addEventListener('keydown', (event) => {
+          // The header's menu and the app menu are the two surfaces on top of
+          // the page, and only one of them is ever open: opening either closes
+          // the other, so Escape has a single answer whichever is up.
+          if (event.key === 'Escape' && vaultMenuIsOpen()) {
+            event.preventDefault();
+            hideVaultMenu();
+            return;
+          }
           // The menu is on top of everything, so it gets first refusal on
           // Escape — otherwise closing it would also close the sidebar drawer.
           if (event.key === 'Escape' && menuIsOpen()) {
