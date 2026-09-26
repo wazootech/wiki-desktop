@@ -881,6 +881,7 @@ const pageTemplate = `<!DOCTYPE html>
         ? window.WikiEditor.create({
             container: editorHost,
             onChange: onEditorChange,
+            onFollowLink: followLink,
           })
         : null;
       if (editorApi === null) {
@@ -1210,6 +1211,58 @@ const pageTemplate = `<!DOCTYPE html>
         const payload = await call('readFile', [path]);
         if (payload === null) return;
         openPayload(payload);
+      }
+
+      /**
+       * Ctrl/Cmd+click landed on a link, already resolved by the editor
+       * against the document that is showing. What to do about it is here,
+       * because this is what knows the vault and the folder browser.
+       *
+       * A target that is not in the vault falls through to the folder browser
+       * at the folder it named, rather than doing nothing: a link that looks
+       * live and silently does nothing is the failure mode worth avoiding, and
+       * the picker is already the app's way of finding a file.
+       *
+       * Measured, and worth recording because it looks like the opposite: the
+       * vault has no dead links at all. A text search reports six, every one
+       * of them inside a code span, written as example syntax rather than as
+       * a link. Read through the parser they are links nowhere. So this path
+       * is reachable only by a link someone is still typing, which is exactly
+       * when a folder to look in beats a dead click.
+       *
+       * (No backticks in this comment: the page script is one template
+       * literal, and a backtick in prose here closes the string outright.)
+       */
+      async function followLink(target) {
+        if (target.kind === 'external') {
+          // window.open rather than a new binding: the app runs without
+          // --allow-run, so handing a URL to the OS would mean granting a
+          // permission to every task to shell out per platform. In the browser
+          // dev target this is exactly right; in the desktop webview it opens
+          // a window rather than the system browser, which is the limit worth
+          // naming rather than the reason to add the permission here.
+          window.open(target.url, '_blank', 'noopener');
+          return;
+        }
+        if (target.kind === 'none') {
+          showToast('That link does not point anywhere yet.');
+          return;
+        }
+        if (target.kind === 'anchor') {
+          // The page is already open, so this is the one gesture with nothing
+          // to open. Jumping to the heading needs an editor handle the app
+          // does not have yet; saying so beats a click that appears broken.
+          showToast('Jumping to a heading is not built yet — this page is already open.');
+          return;
+        }
+        const exists = files.some((file) => file.path === target.path);
+        if (exists) {
+          await openFile(target.path);
+          return;
+        }
+        const cut = target.path.lastIndexOf('/');
+        openBrowser();
+        await browseTo(cut === -1 ? '' : target.path.slice(0, cut));
       }
 
       function closeTab(index) {
