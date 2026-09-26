@@ -111,6 +111,7 @@ pre-paint path here is the real one, not a model of it.
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
 | `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                                                  |
 | `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                                                                                                                                                                                                                     |
+| `src/fence_languages.ts`  | Which grammar highlights a fenced code block, if any. Its own module so the mapping is testable without a DOM, like `vault.ts` and `wiki_config.ts`.                                                                                                                                                                                              |
 | `src/editor_bundle.js`    | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact. CI rebuilds it and fails on any diff, which is the only way drift is visible: `deno task build` makes the binary, not the bundle, so a change to `src/editor.ts` can pass every other check and still serve the old behaviour. |
 
 ## How it works
@@ -219,6 +220,31 @@ pre-paint path here is the real one, not a model of it.
   _after_ the page's stylesheet with an extra class of specificity, so a
   page-written `.cm-gutters` rule loses and the gutter renders light grey in
   dark mode.
+- **Fenced code is highlighted by its language** — `src/fence_languages.ts` maps
+  a fence's info string to a grammar for the twelve languages this vault
+  actually uses (`bash`, `yaml`, `python`, `json`, `toml`, `powershell`,
+  `javascript`, `jsx`, `typescript`, `tsx`, `html`, `xml`), plus the aliases a
+  wiki writes (`sh`, `zsh`, `py`, `yml`, `js`, `ts`, `ps1`, `pwsh`). It is a
+  hand-picked subset rather than `@codemirror/language-data`, which measured
+  1,527 KB against this editor's 514 KB, and whose `load()` is a dynamic import
+  that `deno bundle` inlines anyway — a grammar that never runs still costs its
+  bytes. The subset measured **+83 KB minified, +33 KB gzipped**, 5% of the
+  registry, and covers 101 of the vault's 123 named fences.
+
+  The lookup reads only the **first word** of the info string, because it is
+  free text: a real page carries `` ```ts twoslash title=example ``, where the
+  rest belongs to a tool. Anything it cannot resolve returns null — an
+  unlabelled fence, a typo, `sparql`, a half-typed word — and the block renders
+  exactly as it did before, so adding or mistyping an info string stays an
+  ordinary text edit and nothing can throw. `sparql` (18 fences) and `turtle`
+  (1) are the deliberate gap: neither has a maintained CodeMirror 6 grammar, and
+  a third-party one is not a dependency this app takes on for 15% of its fences.
+
+  This is what makes the last four syntax tokens live. `keyword`, `string`,
+  `number` and `type` were mapped in the highlight style from the start and
+  rendered nothing, because the Markdown grammar does not parse fence contents;
+  the grammars produce the tags and the existing tokens colour them, with no
+  change to the stylesheet.
 - **Line endings** — the editor's document holds LF only, and the file keeps the
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a
