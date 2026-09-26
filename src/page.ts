@@ -357,6 +357,16 @@ const pageTemplate = `<!DOCTYPE html>
       color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer;
     }
     .assets-toggle input { margin: 0; }
+    /*
+     * Two labelled checkboxes plus the filter plus a button is more than a
+     * 200px sidebar's toolbar has, so it is allowed to wrap: a second line
+     * costs 17px of file list, where clipping a control costs the user the
+     * setting itself. They are grouped so they wrap together — left to wrap
+     * freely the pair splits across three ragged lines, one checkbox each.
+     */
+    .file-tools { flex-wrap: wrap; }
+    .file-tools .filter { flex-basis: 100px; }
+    .file-tools-checks { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
     .file-list { flex: 1; min-height: 0; margin: 0; padding: 3px 7px 8px; overflow-y: auto; list-style: none; }
     .file-button {
@@ -656,9 +666,14 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="file-tools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
-        <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
-          <input type="checkbox" id="showAssets" />Assets
-        </label>
+        <div class="file-tools-checks">
+          <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
+            <input type="checkbox" id="showAssets" />Assets
+          </label>
+          <label class="assets-toggle" id="extensionsToggle" title="Write each file's extension out in full">
+            <input type="checkbox" id="showExtensions" checked />Extensions
+          </label>
+        </div>
         <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
       </div>
 
@@ -820,6 +835,7 @@ const pageTemplate = `<!DOCTYPE html>
       const filterInput = el('filter');
       const assetsToggle = el('assetsToggle');
       const showAssetsInput = el('showAssets');
+      const extensionsInput = el('showExtensions');
       const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
@@ -989,6 +1005,7 @@ const pageTemplate = `<!DOCTYPE html>
       function setShowExtensions(show, persist) {
         vault.showExtensions = show;
         if (persist) call('setShowExtensions', [show]);
+        extensionsInput.checked = show;
         renderFiles();
         refreshMenu();
       }
@@ -1454,6 +1471,7 @@ const pageTemplate = `<!DOCTYPE html>
         vault = state;
         setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
+        extensionsInput.checked = state.showExtensions !== false;
         applySidebarWidth();
         renderVault();
         renderFiles();
@@ -1876,6 +1894,10 @@ const pageTemplate = `<!DOCTYPE html>
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
         showAssetsInput.addEventListener('change', renderFiles);
+        // The setting lives in the sidebar, next to the list it draws, as well
+        // as the Appearance menu. Both controls drive the same state, so this
+        // syncs the checkbox and refreshes the menu's own check mark.
+        extensionsInput.addEventListener('change', () => setShowExtensions(extensionsInput.checked, true));
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks

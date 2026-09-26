@@ -280,6 +280,41 @@ Deno.test("no icon-drawing control is drawn as a character", () => {
   );
 });
 
+Deno.test("the extension setting is reachable from the list it changes", () => {
+  // It was filed as a menu command first, and that put it one level too far
+  // from the thing it controls: a user looking at the file list had no reason
+  // to think Appearance governed it. Both controls drive one state, and each
+  // has to redraw the other, or the two disagree about the same setting.
+  assert(
+    /<input type="checkbox" id="showExtensions"/.test(page),
+    "the sidebar offers the setting beside the list it redraws",
+  );
+  assert(
+    /extensionsInput\.addEventListener\('change', \(\) => setShowExtensions\(extensionsInput\.checked, true\)\)/
+      .test(page),
+    "and that checkbox drives the same setter the menu command uses",
+  );
+  assert(
+    /extensionsInput\.checked = show;/.test(page),
+    "so the menu command and the checkbox cannot drift apart",
+  );
+  assert(
+    /extensionsInput\.checked = state\.showExtensions !== false;/.test(page),
+    "and the stored setting wins over the markup's default on load",
+  );
+  // Two labelled checkboxes, a filter and a button exceed a 200px sidebar, so
+  // the row wraps. Grouping keeps the pair together: left free they split
+  // across three lines, one checkbox each.
+  assert(
+    /\.file-tools-checks \{[^}]*display: flex/.test(page),
+    "the checkboxes wrap as a pair rather than one per line",
+  );
+  assert(
+    /\.file-tools \{ flex-wrap: wrap/.test(page),
+    "and the toolbar is allowed to wrap at all",
+  );
+});
+
 Deno.test("hiding an extension never changes the file it opens", () => {
   // The list draws a shortened name, but the row is a button that opens by
   // path: if the shortening leaked into the path, a page called README.md and
