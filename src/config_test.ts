@@ -8,6 +8,9 @@ import {
   DEFAULT_SIDEBAR_WIDTH,
   DEFAULT_THEME,
   homeDirectory,
+  LIST_VIEW_DEFAULTS,
+  type ListViewKey,
+  listViewValue,
   loadConfig,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
@@ -176,68 +179,85 @@ Deno.test("overlapping updates in one process do not lose each other", async () 
   });
 });
 
-Deno.test("extensions stay on unless something turns them off", async () => {
-  // A config written before this setting existed has no key for it, and the
-  // stored default is the behaviour the app shipped with: a list of names with
-  // extensions. Only an explicit false hides them, so an upgrade does not
-  // silently change what the list looks like.
-  await withScratchHome(async (home) => {
-    assertEqual(
-      (await loadConfig()).showExtensions,
-      true,
-      "a fresh config shows extensions",
-    );
-    await writeConfigFile(home, { sidebarWidth: 400 });
-    assertEqual(
-      (await loadConfig()).showExtensions,
-      true,
-      "a config that never heard of the setting still shows them",
-    );
-    await writeConfigFile(home, { showExtensions: false });
-    assertEqual(
-      (await loadConfig()).showExtensions,
-      false,
-      "an explicit false is honoured",
-    );
-    await writeConfigFile(home, { showExtensions: "no" });
-    assertEqual(
-      (await loadConfig()).showExtensions,
-      true,
-      "and so is anything that is not false",
-    );
-  });
+Deno.test("every list switch is stored, and one rule reads it back", async () => {
+  // One test for all three, because they are one setting in kind: a checkbox
+  // beside the file list, an item in the Appearance menu, and a boolean that
+  // survives a restart. Assets used to be the odd one out — per-session while
+  // its two neighbours persisted — and the way that happened is three copies
+  // of this same assertion, each forgetting that the other two existed.
+  //
+  // The rule has to be one rule, and it is: a stored boolean is believed,
+  // anything else falls back to that switch's own default. That covers both
+  // polarities at once, so "only an explicit false turns this off" and "only
+  // an explicit true turns that on" are the same sentence with a different
+  // default, and a config written before a switch existed cannot change what
+  // the list looks like.
+  const keys = Object.keys(LIST_VIEW_DEFAULTS) as ListViewKey[];
+  assertEqual(keys.length, 3, "the toolbar's three switches are all declared");
+
+  for (const key of keys) {
+    const fallback = LIST_VIEW_DEFAULTS[key];
+    await withScratchHome(async (home) => {
+      assertEqual(
+        (await loadConfig())[key],
+        fallback,
+        `a fresh config leaves ${key} at its default`,
+      );
+      // A config written before this switch existed has no key for it at all.
+      await writeConfigFile(home, { sidebarWidth: 400 });
+      assertEqual(
+        (await loadConfig())[key],
+        fallback,
+        `a config that never heard of ${key} still gets the default`,
+      );
+      // An explicit boolean is the user's own decision and is honoured either
+      // way round, which is the part a single-polarity rule gets wrong.
+      await writeConfigFile(home, { [key]: !fallback });
+      assertEqual(
+        (await loadConfig())[key],
+        !fallback,
+        `an explicit ${!fallback} for ${key} is honoured`,
+      );
+      await writeConfigFile(home, { [key]: fallback });
+      assertEqual(
+        (await loadConfig())[key],
+        fallback,
+        `and so is an explicit ${fallback}`,
+      );
+      // A value that is not a boolean is not a decision. Reading "no" as false
+      // would let a hand-edited file reflow the list nobody asked to change.
+      for (const rubbish of ["no", 0, 1, null, [], {}]) {
+        await writeConfigFile(home, { [key]: rubbish });
+        assertEqual(
+          (await loadConfig())[key],
+          fallback,
+          `${JSON.stringify(rubbish)} for ${key} is ignored, not obeyed`,
+        );
+      }
+    });
+  }
 });
 
-Deno.test("paths stay on unless something turns them off", async () => {
-  // Same rule as extensions, and the same reason: a config written before
-  // this setting existed has no key for it, and the stored default is what
-  // the app has always drawn. An upgrade must not silently reflow every row
-  // in the file list.
-  await withScratchHome(async (home) => {
+Deno.test("one function decides a switch's value, for both directions", () => {
+  // The reader of a stored config and the writer of a stored value ask the
+  // same question, so they call the same function: a value written through the
+  // bindings and read back has to come out as it went in, and the only way to
+  // be sure is for there to be one implementation of the rule.
+  for (const key of Object.keys(LIST_VIEW_DEFAULTS) as ListViewKey[]) {
+    const fallback = LIST_VIEW_DEFAULTS[key];
+    assertEqual(listViewValue(key, true), true, `${key} believes a true`);
+    assertEqual(listViewValue(key, false), false, `${key} believes a false`);
     assertEqual(
-      (await loadConfig()).showPaths,
-      true,
-      "a fresh config shows folder paths",
+      listViewValue(key, undefined),
+      fallback,
+      `${key} falls back when nothing was stored`,
     );
-    await writeConfigFile(home, { sidebarWidth: 400 });
     assertEqual(
-      (await loadConfig()).showPaths,
-      true,
-      "a config that never heard of the setting still shows them",
+      listViewValue(key, "true"),
+      fallback,
+      `${key} ignores a string that looks like one`,
     );
-    await writeConfigFile(home, { showPaths: false });
-    assertEqual(
-      (await loadConfig()).showPaths,
-      false,
-      "an explicit false is honoured",
-    );
-    await writeConfigFile(home, { showPaths: "no" });
-    assertEqual(
-      (await loadConfig()).showPaths,
-      true,
-      "and so is anything that is not false",
-    );
-  });
+  }
 });
 
 Deno.test("a stored write leaves no scratch file behind", async () => {

@@ -4,7 +4,14 @@ import {
   clampSidebarWidth,
   coerceTheme,
   homeDirectory,
+  LIST_VIEW_DEFAULTS,
+  type ListViewKey,
+  type ListViews,
+  type ListViewSetter,
+  listViewsOf,
+  listViewValue,
   loadConfig,
+  setterFor,
   type ThemePreference,
   updateConfig,
   withRecentVault,
@@ -22,7 +29,8 @@ import {
   writeVaultFile,
 } from "./vault.ts";
 
-export interface VaultState {
+/** Everything about the open vault that is not a list-view switch. */
+export interface VaultStateBase {
   /** Absolute path of the open vault, or null when none is open. */
   root: string | null;
   /** Folder name of the open vault, for display. */
@@ -30,10 +38,6 @@ export interface VaultState {
   recents: string[];
   /** Whether the file sidebar was collapsed when the app last ran. */
   sidebarCollapsed: boolean;
-  /** Whether the file list shows each file's extension. */
-  showExtensions: boolean;
-  /** Whether the file list shows the folder each file sits in. */
-  showPaths: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
   /** Light/dark appearance the user last chose, `system` if they never did. */
@@ -41,33 +45,53 @@ export interface VaultState {
 }
 
 /**
+ * The state the page reads at launch, the switches included.
+ *
+ * The switches arrive as one group because they are stored as one group and
+ * sanitised by one rule, and a state that has to name them one by one is a
+ * state where a fourth is easy to forget.
+ */
+export type VaultState = VaultStateBase & ListViews;
+
+/** The name of the operation that stores one switch, from its key. */
+export type { ListViewSetter } from "./config.ts";
+
+/**
  * The API the webview sees as `bindings.<name>(...)`. Both the desktop
  * bindings and the HTTP transport in src/dev_server.ts implement this shape,
  * and src/page.ts calls it, so the contract lives in one place.
  */
-export interface WikiBindings {
-  /** Current vault plus the list of recent vaults. */
-  getState(): Promise<VaultState>;
-  /** Every editable file in the vault, Markdown first. */
-  listFiles(): Promise<VaultFile[]>;
-  readFile(path: string): Promise<VaultFileContents>;
-  writeFile(path: string, content: string): Promise<VaultFileContents>;
-  createFile(path: string, content?: string): Promise<VaultFileContents>;
-  /** List subfolders of `path` for the in-app vault picker. */
-  browse(path: string | null): Promise<DirectoryListing>;
-  openVault(path: string): Promise<VaultState>;
-  closeVault(): Promise<VaultState>;
-  /** Remember whether the sidebar is collapsed, so it survives a restart. */
-  setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
-  /** Remember whether the file list shows extensions, so it survives a restart. */
-  setShowExtensions(show: boolean): Promise<VaultState>;
-  /** Remember whether the file list shows folder paths, so it survives a restart. */
-  setShowPaths(show: boolean): Promise<VaultState>;
-  /** Remember the sidebar column's width, so it survives a restart. */
-  setSidebarWidth(width: number): Promise<VaultState>;
-  /** Remember the appearance, so it survives a restart. */
-  setTheme(theme: string): Promise<VaultState>;
-}
+export type WikiBindings =
+  & {
+    /** Current vault plus the list of recent vaults. */
+    getState(): Promise<VaultState>;
+    /** Every editable file in the vault, Markdown first. */
+    listFiles(): Promise<VaultFile[]>;
+    readFile(path: string): Promise<VaultFileContents>;
+    writeFile(path: string, content: string): Promise<VaultFileContents>;
+    createFile(path: string, content?: string): Promise<VaultFileContents>;
+    /** List subfolders of `path` for the in-app vault picker. */
+    browse(path: string | null): Promise<DirectoryListing>;
+    openVault(path: string): Promise<VaultState>;
+    closeVault(): Promise<VaultState>;
+    /** Remember whether the sidebar is collapsed, so it survives a restart. */
+    setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
+    /** Remember the sidebar column's width, so it survives a restart. */
+    setSidebarWidth(width: number): Promise<VaultState>;
+    /** Remember the appearance, so it survives a restart. */
+    setTheme(theme: string): Promise<VaultState>;
+  }
+  & {
+    /**
+     * Remember one of the file list's switches, so it survives a restart.
+     *
+     * One operation per switch, generated from the table in src/config.ts, so the
+     * stored surface and the page's list of controls cannot disagree about how
+     * many switches there are. Hence the type rather than an interface: an
+     * interface cannot carry a mapped member.
+     */
+    [Name in ListViewSetter]: (show: boolean) => Promise<VaultState>;
+  };
 
 /** The same operations as plain functions, ready for any transport. */
 export type VaultApi = {
@@ -107,19 +131,7 @@ export function createVaultApi(): VaultApi {
       await updateConfig({ sidebarCollapsed: collapsed === true });
       return await readState();
     }),
-    setShowExtensions: guard(async (show: boolean) => {
-      // `!== false` here as well, for the reason the sanitizer uses: a caller
-      // that sends anything but false means "on", and this value outlives the
-      // session that set it.
-      await updateConfig({ showExtensions: show !== false });
-      return await readState();
-    }),
-    setShowPaths: guard(async (show: boolean) => {
-      // Coerced the same way, and for the same reason: this one outlives the
-      // session that set it too.
-      await updateConfig({ showPaths: show !== false });
-      return await readState();
-    }),
+    ...listViewSetters(),
     setSidebarWidth: guard(async (width: number) => {
       // Clamped here as well as in the webview: this is a trust boundary, and
       // a stored width outside the bounds would distort every future launch.
@@ -182,13 +194,34 @@ async function requireVaultRoot(): Promise<string> {
   return config.vaultRoot;
 }
 
+/**
+ * One setter per switch, generated from the table, so adding a switch is a line
+ * in src/config.ts rather than a line here as well.
+ *
+ * The value is coerced by the same function the stored config is read with
+ * rather than cast: the page is a caller like any other, and whatever it sends
+ * outlives the session that sent it.
+ */
+function listViewSetters(): Pick<VaultApi, ListViewSetter> {
+  const setters = {} as Record<
+    ListViewSetter,
+    (show: boolean) => Promise<VaultState>
+  >;
+  for (const key of Object.keys(LIST_VIEW_DEFAULTS) as ListViewKey[]) {
+    setters[setterFor(key)] = guard(async (show: boolean) => {
+      await updateConfig({ [key]: listViewValue(key, show) });
+      return await readState();
+    });
+  }
+  return setters as Pick<VaultApi, ListViewSetter>;
+}
+
 async function readState(): Promise<VaultState> {
   const config = await loadConfig();
   const ui = {
     recents: config.recentVaults,
     sidebarCollapsed: config.sidebarCollapsed,
-    showExtensions: config.showExtensions,
-    showPaths: config.showPaths,
+    ...listViewsOf(config),
     sidebarWidth: config.sidebarWidth,
     theme: config.theme,
   };

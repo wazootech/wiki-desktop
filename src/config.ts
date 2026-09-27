@@ -31,15 +31,18 @@ export interface WindowGeometry {
   y?: number;
 }
 
-export interface AppConfig {
-  /** Absolute path of the folder the app treats as the wiki vault. */
-  vaultRoot: string | null;
-  /** Most recently opened vault roots, newest first. */
-  recentVaults: string[];
-  /** Last known window size and position, restored on the next launch. */
-  window: WindowGeometry | null;
-  /** Whether the file sidebar was collapsed, restored on the next launch. */
-  sidebarCollapsed: boolean;
+/**
+ * The switches on the file list's own toolbar, and what each is worth when
+ * nothing has said otherwise.
+ *
+ * They differ in what they change and agree in everything else: a checkbox
+ * beside the list, an item in the Appearance menu, one stored boolean, and a
+ * value that survives a restart. Declared as one table so that is the only way
+ * to add a fourth — and so the sanitiser below has one rule to apply rather
+ * than one per setting, which is how Assets ended up per-session while its two
+ * neighbours persisted.
+ */
+export const LIST_VIEW_DEFAULTS = {
   /**
    * Whether the file list shows each file's extension.
    *
@@ -48,7 +51,7 @@ export interface AppConfig {
    * the extension is hidden in the list and shown only where a name is being
    * typed — the New file prompt, which has to carry the real name anyway.
    */
-  showExtensions: boolean;
+  showExtensions: true,
   /**
    * Whether the file list shows the folder each file sits in.
    *
@@ -59,23 +62,123 @@ export interface AppConfig {
    * the folder is hidden here and the row's title still carries the full path
    * for anyone who hovers it.
    */
-  showPaths: boolean;
+  showPaths: true,
+  /**
+   * Whether the vault's static files are listed beside its pages.
+   *
+   * Off by default, and for a reason that is not tidiness: the vault's own
+   * `wiki.yml` decides what is a page and what is an asset, so a build output
+   * folder beside four hundred pages is not what a wiki looks like. It is
+   * stored anyway, because a user who ticked it once meant it, and re-earning
+   * that decision on every launch is the kind of small friction that makes a
+   * setting feel broken rather than default.
+   */
+  showAssets: false,
+} as const;
+
+/** The name of a list-view switch, which is also its key in the config file. */
+export type ListViewKey = keyof typeof LIST_VIEW_DEFAULTS;
+
+/** The operation that stores one switch, named after it: `setShowAssets`. */
+export type ListViewSetter = `set${Capitalize<ListViewKey>}`;
+
+/**
+ * The operation that stores one switch, from the switch's own name.
+ *
+ * Written once, here, where the table is, and used by both sides of the seam:
+ * src/bindings.ts registers the operation under this name and src/page.ts calls
+ * it, so the two cannot spell the same convention two ways and have a fourth
+ * switch reach for one of them.
+ */
+export function setterFor(key: ListViewKey): ListViewSetter {
+  return `set${key.charAt(0).toUpperCase()}${
+    key.slice(
+      1,
+    )
+  }` as ListViewSetter;
+}
+
+/** One boolean per switch in {@link LIST_VIEW_DEFAULTS}. */
+export type ListViews = { [Key in ListViewKey]: boolean };
+
+/** Everything else the app remembers between launches. */
+export interface AppSettings {
+  /** Absolute path of the folder the app treats as the wiki vault. */
+  vaultRoot: string | null;
+  /** Most recently opened vault roots, newest first. */
+  recentVaults: string[];
+  /** Last known window size and position, restored on the next launch. */
+  window: WindowGeometry | null;
+  /** Whether the file sidebar was collapsed, restored on the next launch. */
+  sidebarCollapsed: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
   /** Light/dark appearance: `system` follows the OS, or the user pinned one. */
   theme: ThemePreference;
 }
 
+/**
+ * The stored config: the app's own settings plus the list's switches.
+ *
+ * A type rather than an interface because the switches come from a table, and
+ * an interface cannot be written over a mapped type.
+ */
+export type AppConfig = AppSettings & ListViews;
+
 export const DEFAULT_CONFIG: AppConfig = {
   vaultRoot: null,
   recentVaults: [],
   window: null,
   sidebarCollapsed: false,
-  showExtensions: true,
-  showPaths: true,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   theme: DEFAULT_THEME,
+  ...LIST_VIEW_DEFAULTS,
 };
+
+/**
+ * The list's switches, each falling back to its own default.
+ *
+ * One rule for all three, and it has to be this one: a stored value is believed
+ * when it is a boolean and ignored otherwise, so the setting's default decides
+ * both the config written before the setting existed and the file where a
+ * string or a number landed in its place. That covers both polarities without
+ * two versions of the rule — "only an explicit false turns this off" and "only
+ * an explicit true turns that on" are the same sentence with a different
+ * default — and it is the reason a `"no"` in the file cannot silently flip a
+ * list that the user never touched.
+ */
+export function sanitizeListViews(
+  record: Record<string, unknown>,
+): ListViews {
+  const views = {} as ListViews;
+  for (const key of Object.keys(LIST_VIEW_DEFAULTS) as ListViewKey[]) {
+    views[key] = listViewValue(key, record[key]);
+  }
+  return views;
+}
+
+/**
+ * One switch's value, from whatever a file or a caller offered.
+ *
+ * The single place the rule is written, so the reader of a stored config and
+ * the writer of a stored value cannot drift apart: they are the same question
+ * asked in two directions.
+ */
+export function listViewValue(key: ListViewKey, value: unknown): boolean {
+  return typeof value === "boolean" ? value : LIST_VIEW_DEFAULTS[key];
+}
+
+/**
+ * Pull the switches out of a config, for a state object that wants them as a
+ * group rather than one field at a time.
+ */
+export function listViewsOf(config: ListViews): ListViews {
+  const views = {} as ListViews;
+  for (const key of Object.keys(LIST_VIEW_DEFAULTS) as ListViewKey[]) {
+    views[key] = config[key];
+  }
+  return views;
+}
 
 /**
  * Coerce a stored or requested appearance into one the page can apply. An
@@ -246,12 +349,7 @@ function sanitize(value: unknown): AppConfig {
     recentVaults,
     window: hasSize ? { ...readPosition(geometry), width, height } : null,
     sidebarCollapsed: record.sidebarCollapsed === true,
-    // Only an explicit false turns it off: a config written before this
-    // setting existed, or one where it is missing, keeps showing extensions.
-    showExtensions: record.showExtensions !== false,
-    // The same rule as extensions, for the same reason: a config written
-    // before this setting existed keeps showing paths.
-    showPaths: record.showPaths !== false,
+    ...sanitizeListViews(record),
     sidebarWidth: clampSidebarWidth(Number(record.sidebarWidth)),
     theme: coerceTheme(record.theme),
   };

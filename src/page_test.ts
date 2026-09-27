@@ -622,34 +622,86 @@ Deno.test("a file row says which page is showing, and which rows are assets", ()
   );
 });
 
-Deno.test("the extension setting is reachable from the list it changes", () => {
-  // It was filed as a menu command first, and that put it one level too far
-  // from the thing it controls: a user looking at the file list had no reason
-  // to think Appearance governed it. Both controls drive one state, and each
-  // has to redraw the other, or the two disagree about the same setting.
+Deno.test("every list switch is reachable from the list it changes", () => {
+  // Extensions was filed as a menu command first, which put it one level too
+  // far from the thing it controls: a user looking at the file list had no
+  // reason to think Appearance governed it. So each switch has two controls —
+  // the checkbox beside the list and the item in the menu — and both drive one
+  // state, or the two disagree about the same setting.
+  //
+  // They are now one table and one setter, and this is the test that says so.
+  // Written per setting, it is three tests that can each pass while the third
+  // one is wired differently from the other two, which is exactly what happened:
+  // Assets got a checkbox and no menu item, and forgot itself on every launch.
+  // The table lives in src/page.ts's own scope and is injected into the page,
+  // so what the script wires up is the same list that drew the markup. This is
+  // that list as the browser receives it: the first entry, which pins the order
+  // the two surfaces are drawn in.
   assert(
-    /<input type="checkbox" id="showExtensions"/.test(page),
-    "the sidebar offers the setting beside the list it redraws",
+    /const LIST_VIEWS = \[\{"key":"showAssets"/.test(page),
+    "the switches reach the script as one table, in the toolbar's order",
   );
+  for (const key of ["showAssets", "showExtensions", "showPaths"]) {
+    assert(
+      new RegExp(`"key":"${key}"`).test(page),
+      `the table declares ${key}`,
+    );
+  }
+  // The table draws the markup, so the three labels are the same list the
+  // script wires up. These ids are the ones the label elements have always
+  // had — they come from the key, so a rename would be a break the stylesheet
+  // would not explain.
+  for (const id of ["assetsToggle", "extensionsToggle", "pathsToggle"]) {
+    assert(
+      new RegExp(`id="${id}"`).test(page),
+      `the toolbar has the label the table derives: ${id}`,
+    );
+  }
+  for (const key of ["showAssets", "showExtensions", "showPaths"]) {
+    assert(
+      new RegExp(`<input type="checkbox" id="${key}"`).test(page),
+      `and a checkbox for ${key} beside the list it redraws`,
+    );
+  }
   assert(
-    /extensionsInput\.addEventListener\('change', \(\) => setShowExtensions\(extensionsInput\.checked, true\)\)/
+    /for \(const view of listViews\) \{\s*view\.input\.addEventListener\('change', \(\) => setListView\(view\.key, view\.input\.checked, true\)\)/
       .test(page),
-    "and that checkbox drives the same setter the menu command uses",
+    "and each checkbox drives the one setter the menu command uses",
   );
   assert(
-    /extensionsInput\.checked = show;/.test(page),
-    "so the menu command and the checkbox cannot drift apart",
+    /function setListView\(key, show, persist\) \{[\s\S]*?vault\[key\] = show;/
+      .test(page) &&
+      /function setListView\(key, show, persist\) \{[\s\S]*?viewByKey\[key\]\.input\.checked = show;/
+        .test(page),
+    "which moves the state and the checkbox together, so the two cannot drift",
   );
   assert(
-    /extensionsInput\.checked = state\.showExtensions !== false;/.test(page),
+    /function setListView\(key, show, persist\) \{[\s\S]*?call\(viewByKey\[key\]\.operation, \[show\]\)/
+      .test(page),
+    "and stores it, so every switch survives a restart like every other",
+  );
+  // The stored state wins over the markup's checked attribute on load. It is
+  // already a boolean for all three, so the rule is one typeof test and the
+  // switch's own default for a caller that sent a partial state — which is
+  // what src/appearance_check.ts sends, and why the fallback is not a guess.
+  assert(
+    /const stored = state\[view\.key\];[\s\S]*?typeof stored === 'boolean' \? stored : view\.default;/
+      .test(page),
     "and the stored setting wins over the markup's default on load",
   );
-  // Two labelled checkboxes, a filter and a button exceed a 200px sidebar, so
-  // the row wraps. Grouping keeps the pair together: left free they split
-  // across three lines, one checkbox each.
+  // One menu item per switch, from the same table, and each says which way it
+  // is on rather than firing and closing the menu.
+  assert(
+    /\.\.\.listViews\.map\(\(view\) => \(\{[\s\S]*?role: 'menuitemcheckbox'[\s\S]*?isActive: \(\) => vault\[view\.key\]/
+      .test(page),
+    "the Appearance menu has an item per switch, reporting which way it is on",
+  );
+  // Three labelled checkboxes, a filter and a button are more than a 200px
+  // sidebar's toolbar has, so the row wraps. Grouping keeps them together: left
+  // free they split across lines one checkbox each.
   assert(
     /\.file-tools-checks \{[^}]*display: flex/.test(page),
-    "the checkboxes wrap as a pair rather than one per line",
+    "the checkboxes wrap as a group rather than one per line",
   );
   assert(
     /\.file-tools \{ flex-wrap: wrap/.test(page),
@@ -657,47 +709,41 @@ Deno.test("the extension setting is reachable from the list it changes", () => {
   );
 });
 
-Deno.test("the path setting is reachable from the list it changes", () => {
-  // The folder under each name is a second line, so it is what makes the list
-  // tall, and in a vault one folder deep it is the same word repeated down the
-  // whole column. Hiding it needs the same two controls extensions has: the
-  // checkbox beside the list, and the item in the Appearance menu.
+Deno.test("what each switch changes is still its own", () => {
+  // The table shares how a switch is wired; it cannot share what it does, and
+  // the three effects are different enough to be worth pinning separately. If
+  // this test fails, one switch has been wired to another's state.
+  // Extensions: the name.
   assert(
-    /<input type="checkbox" id="showPaths"/.test(page),
-    "the sidebar offers the setting beside the list it redraws",
+    /function listedName\(file\) \{[\s\S]*?vault\.showExtensions/.test(page),
+    "the shortened name depends on showExtensions",
   );
-  assert(
-    /pathsInput\.addEventListener\('change', \(\) => setShowPaths\(pathsInput\.checked, true\)\)/
-      .test(page),
-    "and that checkbox drives the same setter the menu command uses",
-  );
-  assert(
-    /pathsInput\.checked = show;/.test(page),
-    "so the menu command and the checkbox cannot drift apart",
-  );
-  assert(
-    /pathsInput\.checked = state\.showPaths !== false;/.test(page),
-    "and the stored setting wins over the markup's default on load",
-  );
-  // The span is not created at all when the setting is off, rather than hidden
-  // with CSS: a display:none node is out of sight but still in the tab order
-  // and still read aloud, which is not what turning the setting off means.
+  // Paths: the second line. The span is not created at all when it is off,
+  // rather than hidden with CSS: a display:none node is out of sight but still
+  // in the tab order and still read aloud, which is not what turning the
+  // setting off means.
   assert(
     /if \(vault\.showPaths\) \{\s*if \(separator !== -1\)/.test(page),
-    "the folder line is left out of the row entirely",
+    "the folder line is left out of the row entirely when showPaths is off",
+  );
+  // Assets: which files are listed. Read from the state, not the checkbox, so
+  // the stored preference survives a vault with nothing to list — reading the
+  // checkbox is what made this one per-session in all but name.
+  assert(
+    /const listed = hasAssets && vault\.showAssets/.test(page),
+    "the list of files reads showAssets from the state",
   );
   assert(
-    /role: 'menuitemcheckbox'[^\n]*isActive: \(\) => vault\.showPaths/.test(
-      page,
-    ),
-    "and the Appearance menu reports which way the setting is on",
+    /for \(const view of listViews\) \{\s*if \(view\.needsAssets\) view\.label\.hidden = !hasAssets;/
+      .test(page),
+    "and the switch hides itself in a vault that declares no assets",
   );
-  // The row still names the file it opens, so turning the setting off cannot
-  // turn two files in different folders into the same row.
+  // The row still names the file it opens, so no switch can turn two different
+  // files into the same row.
   assert(
     /name\.textContent = listedName\(file\)/.test(page) &&
       /button\.title = file\.path/.test(page),
-    "the name and the row's title are untouched by the setting",
+    "the name and the row's title are untouched by the switches",
   );
 });
 
@@ -1223,9 +1269,9 @@ Deno.test("the appearance is one choice out of three, and the menu shows it", ()
   );
   assert(
     /role: 'menuitemcheckbox'/.test(list) &&
-      /role: 'menuitemcheckbox'[^\n]*isActive: \(\) => vault\.showExtensions/
+      /role: 'menuitemcheckbox'[\s\S]*?isActive: \(\) => vault\[view\.key\]/
         .test(list),
-    "the extension toggle declares itself a checkbox and says which way it is on",
+    "a list switch declares itself a checkbox and says which way it is on",
   );
   assert(
     page.includes(

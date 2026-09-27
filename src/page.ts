@@ -1,10 +1,97 @@
 import {
   DEFAULT_SIDEBAR_WIDTH,
   DEFAULT_THEME,
+  LIST_VIEW_DEFAULTS,
+  type ListViewKey,
+  type ListViewSetter,
+  setterFor,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   type ThemePreference,
 } from "./config.ts";
+
+/** One switch on the file list's own toolbar, and everything both surfaces need. */
+interface ListView {
+  /** The setting it drives, and the key it is stored under. */
+  key: ListViewKey;
+  /** What the toolbar checkbox says. */
+  label: string;
+  /** Its tooltip: what turning it off does. */
+  title: string;
+  /** What the Appearance menu says, which is not always the same words. */
+  menu: string;
+  /**
+   * Set on the switch that only means something in some vaults. Assets is the
+   * one: a vault that declares no static files has no such distinction to
+   * offer, so the checkbox stays hidden rather than ticking nothing.
+   */
+  needsAssets: boolean;
+  /** What it is worth before anyone has said otherwise. */
+  default: boolean;
+  /** The label's element id, which the script hides. */
+  labelId: string;
+  /** The command id, so the menu item and the checkbox run the same entry. */
+  command: string;
+  /** The operation that stores it. */
+  operation: ListViewSetter;
+}
+
+/** The switch's own name, without the `show` every one of them starts with. */
+function shortName(key: ListViewKey): string {
+  return key.replace(/^show/, "").toLowerCase();
+}
+
+/**
+ * The file list's three switches, declared once.
+ *
+ * They differ in what they change — a name, a second line, which files are
+ * listed at all — and agree in everything else: a checkbox beside the list, an
+ * item in the Appearance menu, one stored boolean, and a value that survives a
+ * restart. Writing that agreement out three times is how Assets came to be
+ * per-session while its two neighbours persisted, so everything both surfaces
+ * share is derived from this table: the markup, the listeners, the menu
+ * commands, the stored operation, and the default the checkbox starts at.
+ */
+const LIST_VIEWS: ListView[] = ([
+  {
+    key: "showAssets",
+    label: "Assets",
+    title: "List the vault's static files too",
+    menu: "List the vault's static files",
+    needsAssets: true,
+  },
+  {
+    key: "showExtensions",
+    label: "Extensions",
+    title: "Write each file's extension out in full",
+    menu: "Show file extensions",
+    needsAssets: false,
+  },
+  {
+    key: "showPaths",
+    label: "Paths",
+    title: "Write each file's folder on a second line under its name",
+    menu: "Show folder paths",
+    needsAssets: false,
+  },
+] as const).map((view) => ({
+  ...view,
+  default: LIST_VIEW_DEFAULTS[view.key],
+  // showAssets -> assetsToggle, which is the id the label has always had, so
+  // the CSS and anything reaching for it keep working.
+  labelId: shortName(view.key) + "Toggle",
+  command: "toggle-" + shortName(view.key),
+  operation: setterFor(view.key),
+}));
+
+/** One switch's checkbox, as the toolbar's markup has always written it. */
+function listViewCheckbox(view: ListView): string {
+  return `<label class="assets-toggle" id="${view.labelId}" title="${view.title}"${
+    view.default ? " checked" : ""
+  }${view.needsAssets ? " hidden" : ""}>
+            <input type="checkbox" id="${view.key}" />${view.label}
+          </label>`;
+}
 
 /**
  * The frame every icon in `page` draws in: a stroke-2 glyph that inherits its
@@ -391,11 +478,11 @@ const pageTemplate = `<!DOCTYPE html>
     }
     .assets-toggle input { margin: 0; }
     /*
-     * Two labelled checkboxes plus the filter plus a button is more than a
+     * Three labelled checkboxes plus the filter plus a button is more than a
      * 200px sidebar's toolbar has, so it is allowed to wrap: a second line
      * costs 17px of file list, where clipping a control costs the user the
      * setting itself. They are grouped so they wrap together — left to wrap
-     * freely the pair splits across three ragged lines, one checkbox each.
+     * freely they split across ragged lines, one checkbox each.
      */
     .file-tools { flex-wrap: wrap; }
     .file-tools .filter { flex-basis: 100px; }
@@ -719,16 +806,9 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="file-tools" id="fileTools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
-        <div class="file-tools-checks">
-          <label class="assets-toggle" id="assetsToggle" title="List the vault's static files too" hidden>
-            <input type="checkbox" id="showAssets" />Assets
-          </label>
-          <label class="assets-toggle" id="extensionsToggle" title="Write each file's extension out in full">
-            <input type="checkbox" id="showExtensions" checked />Extensions
-          </label>
-          <label class="assets-toggle" id="pathsToggle" title="Write each file's folder on a second line under its name">
-            <input type="checkbox" id="showPaths" checked />Paths
-          </label>
+        <div class="file-tools-checks">${
+  LIST_VIEWS.map(listViewCheckbox).join("\n          ")
+}
         </div>
         <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
       </div>
@@ -883,6 +963,11 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       const el = (id) => document.getElementById(id);
+      // The switches, as the table in src/page.ts declared them. Injected
+      // rather than written again here: the table is what drew the markup
+      // above, and this is the same list the script wires up, so the two cannot
+      // be different lists.
+      const LIST_VIEWS = ${JSON.stringify(LIST_VIEWS)};
       const shell = el('app');
       const editorHost = el('editor');
       const editorWrap = el('editorWrap');
@@ -901,10 +986,18 @@ const pageTemplate = `<!DOCTYPE html>
       const fileTools = el('fileTools');
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
-      const assetsToggle = el('assetsToggle');
-      const showAssetsInput = el('showAssets');
-      const extensionsInput = el('showExtensions');
-      const pathsInput = el('showPaths');
+      // The three switches, each paired with the elements it owns. One list
+      // drives the markup above, the listeners below, and the Appearance
+      // commands, so a switch cannot have a checkbox in one of those and not
+      // the other two.
+      const listViews = LIST_VIEWS.map((view) => ({
+        ...view,
+        input: el(view.key),
+        label: el(view.labelId),
+      }));
+      // And one lookup by key, so the setter below does not have to search.
+      const viewByKey = {};
+      for (const view of listViews) viewByKey[view.key] = view;
       const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
@@ -974,11 +1067,13 @@ const pageTemplate = `<!DOCTYPE html>
         name: null,
         recents: [],
         sidebarCollapsed: false,
-        showExtensions: true,
-        showPaths: true,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
         theme: '${DEFAULT_THEME}',
       };
+      // Before the stored state arrives, every switch is worth its default, so
+      // the toolbar never draws a checkbox that disagrees with the list behind
+      // it for the moment between the two.
+      for (const view of LIST_VIEWS) vault[view.key] = view.default;
       let files = [];
       let listing = null;
       let toastTimer;
@@ -1087,36 +1182,32 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       /**
-       * Whether the list shows each file's extension. Turned off, the extension
-       * is hidden here and shown only where a name is being typed — the New
-       * file prompt, which has to carry the real name regardless. The tab strip
-       * and the status bar keep it, because a tab is the document's identity
-       * rather than one entry in a list of similar names.
+       * Apply one of the list's switches, and tell the two controls that show
+       * it.
+       *
+       * One function for all three, because they differ in what they change and
+       * not in how: the state, the checkbox beside the list, the item in the
+       * Appearance menu, and the stored value all move together here, and each
+       * of the three redraws the other two. That is what stops the menu and the
+       * sidebar from answering differently about the same setting — and what
+       * Assets was missing when it alone was per-session.
        */
-      function setShowExtensions(show, persist) {
-        vault.showExtensions = show;
-        if (persist) call('setShowExtensions', [show]);
-        extensionsInput.checked = show;
-        renderFiles();
-        refreshMenu();
-      }
-
-      /**
-       * Whether each row carries the folder its file sits in. That is a second
-       * line, so it is the tallest thing in the list by a wide margin, and in a
-       * vault one folder deep it is the same word on every row. Off, a row is
-       * one line and the button's title still holds the full path.
-       */
-      function setShowPaths(show, persist) {
-        vault.showPaths = show;
-        if (persist) call('setShowPaths', [show]);
-        pathsInput.checked = show;
+      function setListView(key, show, persist) {
+        vault[key] = show;
+        if (persist) call(viewByKey[key].operation, [show]);
+        viewByKey[key].input.checked = show;
         renderFiles();
         refreshMenu();
       }
 
       /** The name as the list draws it, which may be without its extension. */
       function listedName(file) {
+        // The switch itself is table-driven; what it changes is not, because
+        // only the name is shortened. Turned off, the extension is hidden here
+        // and shown only where a name is being typed — the New file prompt,
+        // which has to carry the real name regardless. The tab strip and the
+        // status bar keep it, because a tab is the document's identity rather
+        // than one entry in a list of similar names.
         if (vault.showExtensions || !file.isMarkdown) return file.name;
         // Only Markdown loses its extension: every page in a wiki is one, so it
         // is the repetition that is noise. A vault's own .py and .yml files are
@@ -1461,10 +1552,14 @@ const pageTemplate = `<!DOCTYPE html>
         // static files are one tick away by default, because a build output
         // folder beside 400 pages is not what a wiki looks like.
         const hasAssets = files.some((file) => file.scope === 'asset');
-        assetsToggle.hidden = !hasAssets;
-        // An empty vault should not leave a checkbox ticking nothing.
-        if (!hasAssets) showAssetsInput.checked = false;
-        const listed = showAssetsInput.checked
+        // The switch reads the state rather than the checkbox, so the stored
+        // preference survives a vault that has nothing to offer: the checkbox
+        // is a mirror of the state, never the other way round, which is what
+        // made Assets forget itself on every launch.
+        for (const view of listViews) {
+          if (view.needsAssets) view.label.hidden = !hasAssets;
+        }
+        const listed = hasAssets && vault.showAssets
           ? files
           : files.filter((file) => file.scope !== 'asset');
         const query = filterInput.value.trim().toLowerCase();
@@ -1653,8 +1748,13 @@ const pageTemplate = `<!DOCTYPE html>
         vault = state;
         setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
-        extensionsInput.checked = state.showExtensions !== false;
-        pathsInput.checked = state.showPaths !== false;
+        // Every switch, from one loop and one rule. The stored state is already
+        // a boolean for all three; anything else means a caller sent a partial
+        // state, and the switch's own default is the honest answer for that.
+        for (const view of listViews) {
+          const stored = state[view.key];
+          view.input.checked = typeof stored === 'boolean' ? stored : view.default;
+        }
         applySidebarWidth();
         renderVault();
         renderFiles();
@@ -1967,8 +2067,21 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'theme-system', group: 'Appearance', label: 'Match the system', keys: '', canRun: () => true, isActive: () => vault.theme === 'system', run: () => setTheme('system', true) },
         { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
         { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
-        { id: 'toggle-extensions', group: 'Appearance', label: 'Show file extensions', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showExtensions, run: () => setShowExtensions(!vault.showExtensions) },
-        { id: 'toggle-paths', group: 'Appearance', label: 'Show folder paths', keys: '', role: 'menuitemcheckbox', canRun: () => true, isActive: () => vault.showPaths, run: () => setShowPaths(!vault.showPaths) },
+        // One menu item per switch, generated from the same table the toolbar's
+        // checkboxes come from, so a switch cannot be in one surface and not
+        // the other and a fourth needs no line here. A checkbox rather than a
+        // command, because the setting is a state to be shown, not an action to
+        // have taken: aria-checked is what says which way it is on.
+        ...listViews.map((view) => ({
+          id: view.command,
+          group: 'Appearance',
+          label: view.menu,
+          keys: '',
+          role: 'menuitemcheckbox',
+          canRun: () => true,
+          isActive: () => vault[view.key],
+          run: () => setListView(view.key, !vault[view.key]),
+        })),
         // context: this one is also an item in the vault header's own menu,
         // which is filled from the same list. Two surfaces, one command, so
         // the header's menu cannot hold an action the app menu has never heard
@@ -2236,12 +2349,12 @@ const pageTemplate = `<!DOCTYPE html>
         saveButton.addEventListener('click', saveFile);
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
-        showAssetsInput.addEventListener('change', renderFiles);
         // The setting lives in the sidebar, next to the list it draws, as well
         // as the Appearance menu. Both controls drive the same state, so this
         // syncs the checkbox and refreshes the menu's own check mark.
-        extensionsInput.addEventListener('change', () => setShowExtensions(extensionsInput.checked, true));
-        pathsInput.addEventListener('change', () => setShowPaths(pathsInput.checked, true));
+        for (const view of listViews) {
+          view.input.addEventListener('change', () => setListView(view.key, view.input.checked, true));
+        }
         // Edits, cursor moves, and Tab all arrive through the editor's own
         // update listener, wired when the handle was created above.
         // A browser tab can vanish without warning; the desktop window asks
