@@ -171,6 +171,28 @@ Deno.test("the dev server drives the whole vault flow over HTTP", async () => {
       "a value that is not a number at all falls back to the default",
     );
 
+    // The two git operations cross this transport like the rest, and what
+    // matters here is the shape of the answer rather than the repository: the
+    // scratch vault above is not a repository, so the answer is null, and a
+    // commit against it fails with a sentence rather than an empty result.
+    const status = await call("vaultStatus");
+    assertEqual(status.status, 200, "the git status can be asked for");
+    assertEqual(
+      status.body,
+      null,
+      "and a vault outside a repository answers null, not an empty list",
+    );
+    const refused = await call("commitFiles", "a message", ["page.md"]);
+    assertEqual(
+      refused.status,
+      400,
+      "a commit outside a repository is refused",
+    );
+    assert(
+      /not inside a git repository/.test(refused.body.message),
+      "and the message names the reason, which is a different one from a failure",
+    );
+
     // The editor arrives over this transport as well, so the browser target
     // and the desktop window run the same page against the same bundle.
     const editor = await fetch(`${base}editor.js`);

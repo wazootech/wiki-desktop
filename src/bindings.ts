@@ -20,6 +20,12 @@ import {
   withRecentVault,
 } from "./config.ts";
 import {
+  commitFiles,
+  type CommitResult,
+  type GitStatus,
+  gitStatus,
+} from "./git.ts";
+import {
   activityByDay,
   type ActivityDay,
   assertVaultRoot,
@@ -100,6 +106,21 @@ export type WikiBindings =
      * draws rather than re-deriving it from a listing it happens to hold.
      */
     vaultActivity(): Promise<ActivityDay[]>;
+    /**
+     * What the vault's repository has pending, or null when it is not in one.
+     *
+     * Null is an answer rather than a failure: most vaults are not
+     * repositories, and the pane has to be able to say "not a repository" and
+     * "nothing pending" as two different things.
+     */
+    vaultStatus(): Promise<GitStatus | null>;
+    /**
+     * Commit the given vault-relative files with the given message.
+     *
+     * Takes the paths rather than trusting the index, so a commit from the
+     * changes pane can only ever contain what the reader ticked.
+     */
+    commitFiles(message: string, paths: string[]): Promise<CommitResult>;
     openVault(path: string): Promise<VaultState>;
     closeVault(): Promise<VaultState>;
     /** Remember whether the sidebar is collapsed, so it survives a restart. */
@@ -165,6 +186,10 @@ export function createVaultApi(): VaultApi {
     ),
     vaultActivity: guard(async () =>
       activityByDay(await listVaultFiles(await requireVaultRoot()))
+    ),
+    vaultStatus: guard(async () => await gitStatus(await requireVaultRoot())),
+    commitFiles: guard(async (message: string, paths: string[]) =>
+      await commitFiles(await requireVaultRoot(), message, paths)
     ),
     openVault: guard(openVault),
     closeVault: guard(async () => {
