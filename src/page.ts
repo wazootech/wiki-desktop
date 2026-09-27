@@ -9,6 +9,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   type ThemePreference,
 } from "./config.ts";
+import { PLEX_MONO_LATIN, PLEX_MONO_LATIN_EXT } from "./plex_mono.ts";
 
 /** One switch on the file list's own toolbar, and everything both surfaces need. */
 interface ListView {
@@ -174,6 +175,30 @@ const pageTemplate = `<!DOCTYPE html>
   <title>Wazoo Wiki</title>
   <style>
     /*
+     * The design system's body face, embedded rather than linked: an offline
+     * app has to look the same with no network, and the stack used to name a
+     * locally installed Inter that nothing ever loaded — so the type in every
+     * toolbar was whatever the machine happened to have. Two subsets, because a
+     * vault's filenames are user data and a wiki can contain an umlaut. The
+     * unicode ranges are the ones Google Fonts splits the family on.
+     */
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("${PLEX_MONO_LATIN}") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("${PLEX_MONO_LATIN_EXT}") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    /*
      * Two palettes, one per mode, selected by the data-theme attribute on <html>.
      * Nothing here reads prefers-color-scheme, so that attribute is the single
      * answer to "which mode is this": the head script below sets it from the
@@ -315,7 +340,10 @@ const pageTemplate = `<!DOCTYPE html>
       overflow: hidden;
       background: var(--canvas);
       color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      /* The design system's own advice for monospaced text, and the reason it
+         reads as set rather than typed. */
+      letter-spacing: -0.025em;
       font-size: 12.5px;
     }
 
@@ -429,7 +457,13 @@ const pageTemplate = `<!DOCTYPE html>
     .brand-mark svg { width: 100%; height: 100%; }
     /* Explicit line-heights: the two lines have to fit the row's padding box,
        and a fallback font's natural metrics are taller than the token allows. */
-    .brand-name { font-size: 13px; font-weight: 760; line-height: 1.2; letter-spacing: -.01em; }
+    /* The wordmark is the one thing the design system keeps sans: Inter for the
+       logotype, IBM Plex Mono for everything else. Inter is not embedded, so
+       this is a named local face with a real fallback rather than a promise. */
+    .brand-name {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px; font-weight: 760; line-height: 1.2; letter-spacing: -.01em;
+    }
     .brand-subtitle { color: var(--muted); font-size: 10.5px; line-height: 1.25; }
 
     .vault {
@@ -697,7 +731,9 @@ const pageTemplate = `<!DOCTYPE html>
     .dialog-header h2 { margin: 0 0 5px; font-size: 15px; letter-spacing: -.02em; }
     .dialog-header p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
     .path-row { display: flex; gap: 7px; padding: 0 18px 9px; }
-    .path-row .filter { flex: 1; font-family: "SFMono-Regular", Consolas, monospace; }
+    /* A path is text about a file, so it takes the same face as everything else
+       rather than reaching for a local monospace of its own. */
+    .path-row .filter { flex: 1; font-family: inherit; }
     .shortcuts { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 18px 9px; }
     .chip {
       padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px;

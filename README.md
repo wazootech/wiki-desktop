@@ -111,6 +111,7 @@ pre-paint path here is the real one, not a model of it.
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
 | `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                                                  |
 | `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                                                                                                                                                                                                                     |
+| `src/plex_mono.ts`        | IBM Plex Mono, the design system's body face, as two embedded woff2 subsets. Generated, not hand-edited; see the file's own header for how to regenerate it.                                                                                                                                                                                      |
 | `src/fence_languages.ts`  | Which grammar highlights a fenced code block, if any. Its own module so the mapping is testable without a DOM, like `vault.ts` and `wiki_config.ts`.                                                                                                                                                                                              |
 | `src/editor_bundle.js`    | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact. CI rebuilds it and fails on any diff, which is the only way drift is visible: `deno task build` makes the binary, not the bundle, so a change to `src/editor.ts` can pass every other check and still serve the old behaviour. |
 
@@ -150,6 +151,20 @@ pre-paint path here is the real one, not a model of it.
   control is Ink rather than white, which is 7.3:1 against 2.3:1. The native
   checkboxes take `accent-color` from the brand too, since it is the one part of
   a platform control the palette does not otherwise reach.
+- **The body face is embedded, and the wordmark is not** — `wazoo.dev/DESIGN.md`
+  puts IBM Plex Mono on body copy, buttons, tooltips and code, which is most of
+  this app, and Inter on the logotype. Neither was being loaded at all: the
+  stack named a locally installed `Inter` and no `@font-face` ever fetched it,
+  so every toolbar rendered in whatever the machine happened to have installed —
+  which is how a sidebar could come out in a serif face on a desktop with no
+  Inter on it. Plex Mono is now embedded from `src/plex_mono.ts` as two subsets,
+  latin and latin-ext, because an offline app has to look the same with no
+  network and a vault's filenames are user data that can perfectly well contain
+  an umlaut; that is 28KB of woff2 and 37KB of base64, which is the price of the
+  face. The wordmark keeps a named local sans with a real fallback, because
+  promising Inter without shipping it is the bug being fixed here. The design
+  system's own `letter-spacing: -0.025em` is on the body, which is what makes
+  the mono read as set rather than typed.
 - **Bindings** — `win.bind(name, handler)` exposes Deno functions to the webview
   as `bindings.name(args)`. They run in-process (no socket IPC) and inherit the
   runtime's permissions, so the tasks start Deno with
