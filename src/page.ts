@@ -9,6 +9,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   type ThemePreference,
 } from "./config.ts";
+import { PLEX_MONO_LATIN, PLEX_MONO_LATIN_EXT } from "./plex_mono.ts";
 
 /** One switch on the file list's own toolbar, and everything both surfaces need. */
 interface ListView {
@@ -174,6 +175,30 @@ const pageTemplate = `<!DOCTYPE html>
   <title>Wazoo Wiki</title>
   <style>
     /*
+     * The design system's body face, embedded rather than linked: an offline
+     * app has to look the same with no network, and the stack used to name a
+     * locally installed Inter that nothing ever loaded — so the type in every
+     * toolbar was whatever the machine happened to have. Two subsets, because a
+     * vault's filenames are user data and a wiki can contain an umlaut. The
+     * unicode ranges are the ones Google Fonts splits the family on.
+     */
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("${PLEX_MONO_LATIN}") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("${PLEX_MONO_LATIN_EXT}") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    /*
      * Two palettes, one per mode, selected by the data-theme attribute on <html>.
      * Nothing here reads prefers-color-scheme, so that attribute is the single
      * answer to "which mode is this": the head script below sets it from the
@@ -315,7 +340,10 @@ const pageTemplate = `<!DOCTYPE html>
       overflow: hidden;
       background: var(--canvas);
       color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      /* The design system's own advice for monospaced text, and the reason it
+         reads as set rather than typed. */
+      letter-spacing: -0.025em;
       font-size: 12.5px;
     }
 
@@ -429,7 +457,13 @@ const pageTemplate = `<!DOCTYPE html>
     .brand-mark svg { width: 100%; height: 100%; }
     /* Explicit line-heights: the two lines have to fit the row's padding box,
        and a fallback font's natural metrics are taller than the token allows. */
-    .brand-name { font-size: 13px; font-weight: 760; line-height: 1.2; letter-spacing: -.01em; }
+    /* The wordmark is the one thing the design system keeps sans: Inter for the
+       logotype, IBM Plex Mono for everything else. Inter is not embedded, so
+       this is a named local face with a real fallback rather than a promise. */
+    .brand-name {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px; font-weight: 760; line-height: 1.2; letter-spacing: -.01em;
+    }
     .brand-subtitle { color: var(--muted); font-size: 10.5px; line-height: 1.25; }
 
     .vault {
@@ -482,7 +516,7 @@ const pageTemplate = `<!DOCTYPE html>
      * toggle, and a disabled create button: chrome for an empty list, which is
      * the part of "closing the vault" that had not been finished.
      */
-    .file-tools { display: flex; align-items: center; gap: 6px; padding: 8px 10px 5px; }
+    .file-tools { display: flex; align-items: center; gap: 6px; }
     .filter {
       flex: 1; min-width: 0; min-height: 28px; padding: 0 9px;
       border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel-muted);
@@ -496,22 +530,35 @@ const pageTemplate = `<!DOCTYPE html>
      */
     .assets-toggle {
       display: flex; align-items: center; gap: 4px; flex-shrink: 0;
-      color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer;
+      color: var(--text-soft); font-size: 11px; white-space: nowrap; cursor: pointer;
     }
     /* accent-color is the one piece of a native control the palette does not
        reach on its own: left alone, the three switches are the platform's blue
        in an otherwise orange window. */
     .assets-toggle input { margin: 0; accent-color: var(--brand); }
     /*
-     * Three labelled checkboxes plus the filter plus a button is more than a
-     * 200px sidebar's toolbar has, so it is allowed to wrap: a second line
-     * costs 17px of file list, where clipping a control costs the user the
-     * setting itself. They are grouped so they wrap together — left to wrap
-     * freely they split across ragged lines, one checkbox each.
+     * Two rows at every width, which is the whole point of the order below: the
+     * filter takes what is left of the first row and the button sits on it, and
+     * the switches get the second row to themselves. The button used to come
+     * after the switches, so it only joined their row when the column was at
+     * least 250px wide and dropped to an orphaned row of its own below that —
+     * three rows of toolbar at the default width's left-hand end, and a fourth
+     * line for the file list in a column the user had made narrower on purpose.
      */
-    .file-tools { flex-wrap: wrap; }
+    .file-tools { flex-wrap: wrap; padding: 8px 10px; }
     .file-tools .filter { flex-basis: 100px; }
-    .file-tools-checks { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    /*
+     * A full basis is what pins this to its own row, so the row count does not
+     * depend on how far the column happens to be dragged. And it wraps inside
+     * itself rather than shrinking: three switches are 179px of text, the
+     * column's inner width at the 180px minimum is 160px, and clipping "Paths"
+     * is the one outcome the wrap above exists to prevent — which, at that
+     * width, it did not.
+     */
+    .file-tools-checks {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+      flex-basis: 100%; flex-shrink: 0;
+    }
 
     /*
      * The list scrolls constantly and the column is dark, so the platform's
@@ -684,7 +731,9 @@ const pageTemplate = `<!DOCTYPE html>
     .dialog-header h2 { margin: 0 0 5px; font-size: 15px; letter-spacing: -.02em; }
     .dialog-header p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
     .path-row { display: flex; gap: 7px; padding: 0 18px 9px; }
-    .path-row .filter { flex: 1; font-family: "SFMono-Regular", Consolas, monospace; }
+    /* A path is text about a file, so it takes the same face as everything else
+       rather than reaching for a local monospace of its own. */
+    .path-row .filter { flex: 1; font-family: inherit; }
     .shortcuts { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 18px 9px; }
     .chip {
       padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px;
@@ -831,11 +880,11 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="file-tools" id="fileTools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
         <div class="file-tools-checks">${
   LIST_VIEWS.map(listViewCheckbox).join("\n          ")
 }
         </div>
-        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
       </div>
 
       <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
