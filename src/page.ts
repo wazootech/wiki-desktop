@@ -482,7 +482,7 @@ const pageTemplate = `<!DOCTYPE html>
      * toggle, and a disabled create button: chrome for an empty list, which is
      * the part of "closing the vault" that had not been finished.
      */
-    .file-tools { display: flex; align-items: center; gap: 6px; padding: 8px 10px 5px; }
+    .file-tools { display: flex; align-items: center; gap: 6px; }
     .filter {
       flex: 1; min-width: 0; min-height: 28px; padding: 0 9px;
       border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel-muted);
@@ -496,22 +496,35 @@ const pageTemplate = `<!DOCTYPE html>
      */
     .assets-toggle {
       display: flex; align-items: center; gap: 4px; flex-shrink: 0;
-      color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer;
+      color: var(--text-soft); font-size: 11px; white-space: nowrap; cursor: pointer;
     }
     /* accent-color is the one piece of a native control the palette does not
        reach on its own: left alone, the three switches are the platform's blue
        in an otherwise orange window. */
     .assets-toggle input { margin: 0; accent-color: var(--brand); }
     /*
-     * Three labelled checkboxes plus the filter plus a button is more than a
-     * 200px sidebar's toolbar has, so it is allowed to wrap: a second line
-     * costs 17px of file list, where clipping a control costs the user the
-     * setting itself. They are grouped so they wrap together — left to wrap
-     * freely they split across ragged lines, one checkbox each.
+     * Two rows at every width, which is the whole point of the order below: the
+     * filter takes what is left of the first row and the button sits on it, and
+     * the switches get the second row to themselves. The button used to come
+     * after the switches, so it only joined their row when the column was at
+     * least 250px wide and dropped to an orphaned row of its own below that —
+     * three rows of toolbar at the default width's left-hand end, and a fourth
+     * line for the file list in a column the user had made narrower on purpose.
      */
-    .file-tools { flex-wrap: wrap; }
+    .file-tools { flex-wrap: wrap; padding: 8px 10px; }
     .file-tools .filter { flex-basis: 100px; }
-    .file-tools-checks { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    /*
+     * A full basis is what pins this to its own row, so the row count does not
+     * depend on how far the column happens to be dragged. And it wraps inside
+     * itself rather than shrinking: three switches are 179px of text, the
+     * column's inner width at the 180px minimum is 160px, and clipping "Paths"
+     * is the one outcome the wrap above exists to prevent — which, at that
+     * width, it did not.
+     */
+    .file-tools-checks {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+      flex-basis: 100%; flex-shrink: 0;
+    }
 
     /*
      * The list scrolls constantly and the column is dark, so the platform's
@@ -831,11 +844,11 @@ const pageTemplate = `<!DOCTYPE html>
       <div class="file-tools" id="fileTools">
         <label class="sr-only" for="filter">Filter files</label>
         <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
         <div class="file-tools-checks">${
   LIST_VIEWS.map(listViewCheckbox).join("\n          ")
 }
         </div>
-        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
       </div>
 
       <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
