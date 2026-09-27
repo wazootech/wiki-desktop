@@ -995,8 +995,10 @@ const pageTemplate = `<!DOCTYPE html>
         input: el(view.key),
         label: el(view.labelId),
       }));
+      // And one lookup by key, so the setter below does not have to search.
       const viewByKey = {};
-      for (const view of listViews) viewByKey[view.key] = view;      const fileList = el('fileList');
+      for (const view of listViews) viewByKey[view.key] = view;
+      const fileList = el('fileList');
       const fileCount = el('fileCount');
       const statusPath = el('statusPath');
       const characterCount = el('characterCount');
