@@ -1,4 +1,6 @@
 import {
+  ACTIVITY_BAR_WIDTH,
+  DEFAULT_SIDEBAR_VIEW,
   DEFAULT_SIDEBAR_WIDTH,
   DEFAULT_THEME,
   LIST_VIEW_DEFAULTS,
@@ -7,6 +9,7 @@ import {
   setterFor,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  type SidebarView,
   type ThemePreference,
 } from "./config.ts";
 import { PLEX_MONO_LATIN, PLEX_MONO_LATIN_EXT } from "./plex_mono.ts";
@@ -94,16 +97,6 @@ function listViewCheckbox(view: ListView): string {
           </label>`;
 }
 
-/**
- * The frame every icon in `page` draws in: a stroke-2 glyph that inherits its
- * container's colour.
- *
- * They are inline SVG rather than characters because the glyphs these controls
- * need are not in every font the desktop, browser and CI targets ship, where a
- * missing character renders as a box. Sizing is on the element, not in the
- * page's stylesheet: a bare viewBox with no width renders at 300x150, and these
- * icons must stay independent of the button's `font-size`.
- */
 function chromeIcon(paths: string, size: number = 15): string {
   return '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size +
     '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
@@ -126,6 +119,24 @@ const ICONS = {
   /** Shared by the two toggles: one action, two affordances (see `sidebarToggles`). */
   sidebarToggle: chromeIcon(
     '<rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" />',
+  ),
+  /*
+   * The activity bar's three views. 20px rather than the 15px of the toolbar
+   * glyphs, because these are the only marks on screen that say which pane is
+   * open: at 15px a strip of them is a column of grey smudges, and the bar is
+   * 48px wide precisely so the mark can be the size of a tab.
+   */
+  explorer: chromeIcon(
+    '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M8 13h8" /><path d="M8 17h5" />',
+    20,
+  ),
+  search: chromeIcon(
+    '<circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />',
+    20,
+  ),
+  recentlyChanged: chromeIcon(
+    '<path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l3 2" />',
+    20,
   ),
   /** The bar's one tool: an arrow, where a word beside Save was ambiguous. */
   reload: chromeIcon(
@@ -156,6 +167,162 @@ const ICONS = {
   ),
 } as const;
 
+/**
+ * The sidebar's views, declared once, in the order the activity bar draws them.
+ *
+ * The same arrangement as the list's switches above, and for the same reason:
+ * the bar's buttons, the panes the script switches between, the View commands
+ * in the menu and the stored setting all come from this one list, so a view
+ * cannot be a button with no pane behind it, and a pane cannot be reachable
+ * with no way to reach it.
+ *
+ * The pane's *contents* are not here. Each view draws its own toolbar, listing
+ * and footer in the markup, because those are the things that differ; a table
+ * of them would be a template rather than a list, and the table is here to be
+ * enumerated, not to be rendered.
+ */
+interface PaneView {
+  /** The stored key, and the value the setting and `setSidebarView` use. */
+  key: SidebarView;
+  /**
+   * What the view is called, everywhere the user can read a name for it: the
+   * View menu and the button's own accessible name.
+   */
+  label: string;
+  /**
+   * The button's tooltip — a description of the view rather than its name, so
+   * the bar can say more than the one word the menu already gives.
+   */
+  hint: string;
+  /** The markup the button draws. */
+  icon: string;
+}
+
+const PANES: PaneView[] = [
+  {
+    key: "explorer",
+    label: "Explorer",
+    hint: "Vault files",
+    icon: ICONS.explorer,
+  },
+  {
+    key: "search",
+    label: "Search",
+    hint: "Search every page",
+    icon: ICONS.search,
+  },
+  {
+    key: "recent",
+    label: "Recently changed",
+    hint: "Pages by when they were last edited",
+    icon: ICONS.recentlyChanged,
+  },
+];
+
+/**
+ * One button on the activity bar, drawn from the table above.
+ *
+ * `aria-label` is the view's name and `title` is its hint, rather than both
+ * being the same words: a screen-reader user tabbing the bar and a user reading
+ * the View menu should hear the same thing for the same view, and the tooltip
+ * can afford to say more than that.
+ */
+function activityButton(view: PaneView): string {
+  return `<button class="activity-button" type="button" id="activity-${view.key}"
+            data-view="${view.key}" role="tab" aria-selected="false" tabindex="-1"
+            aria-controls="pane-${view.key}" title="${view.hint}" aria-label="${view.label}"
+          >${view.icon}</button>`;
+}
+
+/**
+ * One pane: the section the bar switches to, wrapping whatever the view draws.
+ *
+ * Hidden in the markup and revealed by the script, so a pane can never be on
+ * screen before the stored view has said which one should be -- and so the
+ * no-JavaScript document is an empty sidebar rather than a wrong one.
+ */
+function paneSection(view: PaneView, body: string): string {
+  return `<section class="pane" id="pane-${view.key}" data-view="${view.key}"
+             role="tabpanel" aria-labelledby="activity-${view.key}" tabindex="-1" hidden>
+            ${body}
+          </section>`;
+}
+
+/** A pane's own name, which the bar's glyph only implies. */
+function paneTitle(view: PaneView): string {
+  return `<div class="pane-title">${view.label}</div>`;
+}
+
+/**
+ * The three panes, drawn once here so the template holds one reference each and
+ * the two never drift: the ids below are the ones the script looks up, and the
+ * switcher pairs them with {@link PANES} by the `data-view` on each section.
+ */
+function paneMarkup(key: SidebarView): string {
+  const view = PANES.find((entry) => entry.key === key);
+  if (view === undefined) throw new Error(`no view named ${key}`);
+  if (key === "explorer") {
+    // The file list as it has always been, with what used to be sidebar chrome
+    // now scoped to this pane: the filter and the three switches act on a
+    // listing, and the create button is the listing's own action.
+    return paneSection(
+      view,
+      `${paneTitle(view)}
+            <div class="view-tools" id="viewTools">
+              <label class="sr-only" for="filter">Filter files</label>
+              <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+              <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
+              <div class="view-tools-checks">${
+        LIST_VIEWS.map(listViewCheckbox).join("\n                ")
+      }</div>
+            </div>
+            <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
+            <div class="view-status">
+              <span id="fileCount">No vault open</span>
+              <span class="transport" id="transportBadge" hidden>Browser dev mode</span>
+            </div>`,
+    );
+  }
+  if (key === "search") {
+    // One query box and a grouped result list. No toolbar beyond the box: there
+    // is nothing to filter by, nothing to create, and no switch that means
+    // anything here -- which is the point of the pane owning its chrome.
+    return paneSection(
+      view,
+      `${paneTitle(view)}
+            <div class="view-tools" id="searchTools">
+              <label class="sr-only" for="searchQuery">Search this vault</label>
+              <input class="filter" id="searchQuery" type="search" placeholder="Search this vault" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="search-results" id="searchResults" role="list" aria-label="Search results"></div>
+            <div class="view-status">
+              <span id="searchStatus">Type to search every page</span>
+            </div>`,
+    );
+  }
+  // Recently changed. No toolbar at all, and no new operation behind it: the
+  // listing already carries each file's modification time, so this pane is a
+  // sort of what the app has already loaded.
+  return paneSection(
+    view,
+    `${paneTitle(view)}
+            <ul class="file-list" id="recentList" aria-label="Recently changed files"></ul>
+            <div class="view-status">
+              <span id="recentStatus">No vault open</span>
+            </div>`,
+  );
+}
+
+/**
+ * The frame every icon in `page` draws in: a stroke-2 glyph that inherits its
+ * container's colour.
+ *
+ * They are inline SVG rather than characters because the glyphs these controls
+ * need are not in every font the desktop, browser and CI targets ship, where a
+ * missing character renders as a box. Sizing is on the element, not in the
+ * page's stylesheet: a bare viewBox with no width renders at 300x150, and these
+ * icons must stay independent of the button's `font-size`.
+ */
 /**
  * The webview document. It is a plain string so the app stays a single
  * self-contained entrypoint: no bundler, and nothing to embed for
@@ -269,6 +436,7 @@ const pageTemplate = `<!DOCTYPE html>
       --toast-bg: #fffdf8;
       --shadow: 0 18px 45px rgba(31, 27, 20, 0.1);
       --sidebar-width: ${DEFAULT_SIDEBAR_WIDTH}px;
+      --activity-bar-width: ${ACTIVITY_BAR_WIDTH}px;
       /* The brand row and the tab bar share this height so the divider under
          them is one continuous line across the window, not two steps. The
          status rows pair up the same way at the bottom edge. */
@@ -377,7 +545,9 @@ const pageTemplate = `<!DOCTYPE html>
     }
     .button:active { transform: translateY(1px); }
     .button:focus-visible, input:focus-visible, .file-button:focus-visible,
-    .dir-button:focus-visible, .tab:focus-visible, .tab-close:focus-visible {
+    .dir-button:focus-visible, .tab:focus-visible, .tab-close:focus-visible,
+    .search-hit-name:focus-visible, .search-match:focus-visible,
+    .activity-button:focus-visible {
       outline: 3px solid var(--focus-ring); outline-offset: 1px;
     }
     .button:disabled { cursor: not-allowed; opacity: .5; box-shadow: none; }
@@ -395,12 +565,85 @@ const pageTemplate = `<!DOCTYPE html>
 
     .sidebar {
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       min-height: 0;
       /* The resize handle is positioned against this box. */
       position: relative;
       border-right: 1px solid var(--line);
       background: var(--panel);
+    }
+
+    /*
+     * The activity bar, and the pane beside it.
+     *
+     * The column is two boxes because the bar and the pane have different jobs
+     * and different lifetimes: the bar belongs to the sidebar and survives every
+     * view switch, while the pane, its toolbar, its listing and its footer all
+     * belong to one view. That is the whole reason the switcher exists -- a new
+     * view is a new pane, not a fourth block in a fixed order.
+     *
+     * The bar is inside the sidebar's width rather than beside it, so the width
+     * clamp below has to spend this much of the window before the editor gives
+     * up any.
+     */
+    .activity-bar {
+      display: flex; flex-direction: column; align-items: center;
+      width: var(--activity-bar-width); flex-shrink: 0;
+      padding: 0 0 9px;
+      border-right: 1px solid var(--line);
+      background: var(--panel-muted);
+    }
+    .activity-tabs {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      width: 100%;
+    }
+    /*
+     * The mark keeps the top row's height so its baseline lines up with the
+     * wordmark beside it and with the tab bar across the seam. The bar draws no
+     * horizontal rule there: it is a column, and the pane's own divider ending
+     * at its edge is what says where the top row stops.
+     */
+    .activity-brand {
+      display: grid; place-items: center;
+      width: 100%; height: var(--topbar-height); flex-shrink: 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .activity-button {
+      position: relative;
+      display: grid; place-items: center;
+      width: 40px; height: 40px; margin-top: 6px; padding: 0;
+      border: 0; border-radius: 9px;
+      color: var(--muted); background: transparent;
+    }
+    .activity-button:first-child { margin-top: 7px; }
+    .activity-button:hover { color: var(--text); background: var(--surface-hover); }
+    .activity-button.is-active { color: var(--brand-text); background: var(--brand-soft); }
+    /*
+     * The same rail the file list gives an open row, and for the same reason: a
+     * tint alone is a distinction the eye can miss at the edge of the window.
+     * A positioned bar rather than an inset shadow, because the button's radius
+     * would hook the accent around its corners.
+     */
+    .activity-button.is-active::before {
+      position: absolute; top: 9px; bottom: 9px; left: -4px; width: 2px;
+      border-radius: 999px; background: var(--brand-marker); content: "";
+    }
+    .sidebar-pane {
+      display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0;
+    }
+    .panes { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    /*
+     * Each pane names itself. The activity bar says which view is on in a
+     * column of glyphs, which is a visual answer; this is the one a screen
+     * reader lands on, and the one a user looks for when the bar's marks are
+     * small.
+     */
+    .pane-title {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 13px 6px;
+      color: var(--muted); font-size: 9.5px; font-weight: 750;
+      letter-spacing: .09em; text-transform: uppercase;
     }
 
     /*
@@ -452,6 +695,12 @@ const pageTemplate = `<!DOCTYPE html>
      * stretching, rotating, or recolouring the logo assets. Copy of
      * https://wazoo.dev/assets/wazoo.svg (the file the site and its JSON-LD
      * both point at), with the clip-path id namespaced for inlining.
+     */
+    /*
+     * The mark, which the activity bar owns the top slot of. It was the first
+     * thing in the brand row and is now the corner of the strip, so the wordmark
+     * beside it has the row to itself -- which is what the brand block "had room
+     * to give up" means in practice.
      */
     .brand-mark { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; }
     .brand-mark svg { width: 100%; height: 100%; }
@@ -505,18 +754,18 @@ const pageTemplate = `<!DOCTYPE html>
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     /*
-     * The file list's own toolbar: the filter, then the button that creates a
-     * file. Creating lives here rather than in the top bar, which holds the open
-     * document's actions — the same reason it did not join the vault's row of
-     * labeled buttons, which has since become two icons on the vault's own
-     * heading.
+     * A view's own toolbar, drawn inside the pane rather than across the top of
+     * the sidebar. It used to be the file list's, and that was the coupling:
+     * Filter, Assets, Extensions and New file all act on a listing, so with a
+     * switcher they belong to the Explorer view and a view whose content is not
+     * a listing has no use for any of them. Each pane brings its own; one that
+     * needs none (Recently changed) has none.
      *
-     * The row is hidden outright with no vault open. The file list empties then,
-     * so what was left was a filter over nothing, a toggle with nothing to
-     * toggle, and a disabled create button: chrome for an empty list, which is
-     * the part of "closing the vault" that had not been finished.
+     * A view's toolbar is hidden outright with no vault open, for the reason it
+     * was: the listings behind it empty, so what was left was a filter over
+     * nothing and a disabled create button.
      */
-    .file-tools { display: flex; align-items: center; gap: 6px; }
+    .view-tools { display: flex; align-items: center; gap: 6px; }
     .filter {
       flex: 1; min-width: 0; min-height: 28px; padding: 0 9px;
       border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel-muted);
@@ -545,8 +794,8 @@ const pageTemplate = `<!DOCTYPE html>
      * three rows of toolbar at the default width's left-hand end, and a fourth
      * line for the file list in a column the user had made narrower on purpose.
      */
-    .file-tools { flex-wrap: wrap; padding: 8px 10px; }
-    .file-tools .filter { flex-basis: 100px; }
+    .view-tools { flex-wrap: wrap; padding: 0 10px 8px; }
+    .view-tools .filter { flex-basis: 100px; }
     /*
      * A full basis is what pins this to its own row, so the row count does not
      * depend on how far the column happens to be dragged. And it wraps inside
@@ -555,7 +804,7 @@ const pageTemplate = `<!DOCTYPE html>
      * is the one outcome the wrap above exists to prevent — which, at that
      * width, it did not.
      */
-    .file-tools-checks {
+    .view-tools-checks {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
       flex-basis: 100%; flex-shrink: 0;
     }
@@ -591,12 +840,49 @@ const pageTemplate = `<!DOCTYPE html>
     /* Listed rather than hidden, but visibly not one of the wiki's pages. */
     .file-button.is-asset { opacity: .62; }
     .file-dir { display: block; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-time { display: block; color: var(--muted); font-size: 10px; }
     .file-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
-    .sidebar-status {
+
+    /*
+     * A view's footer, inside the pane for the same reason as its toolbar. It
+     * was one row for the whole sidebar, and its one piece of content — "95
+     * files" — means nothing in a search view, so each pane now carries its own
+     * and the word is spent on that view.
+     */
+    .view-status {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       height: var(--statusbar-height); padding: 0 13px;
       border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
     }
+
+    /*
+     * Search results: a file's name, then its matching lines under it.
+     *
+     * Grouped rather than flattened because a hit in a wiki is nearly always
+     * "this page, these lines" — a flat list of lines makes the reader assemble
+     * that grouping from sixty rows, which is the work the grouping is for.
+     */
+    .search-results {
+      flex: 1; min-height: 0; padding: 0 7px 8px; overflow-y: auto; list-style: none;
+      scrollbar-width: thin;
+    }
+    .search-hit { margin-bottom: 5px; }
+    .search-hit-name {
+      display: flex; align-items: baseline; gap: 6px; width: 100%;
+      padding: 4px 8px; border: 0; border-radius: 6px;
+      color: var(--text-body); background: transparent; text-align: left; font-size: 12px;
+    }
+    .search-hit-name:hover { background: var(--surface-hover); }
+    .search-hit-more { color: var(--muted); font-size: 9.5px; }
+    .search-match {
+      display: flex; align-items: baseline; gap: 7px; width: 100%;
+      padding: 3px 8px 3px 14px; border: 0; border-radius: 6px;
+      color: var(--text-soft); background: transparent; text-align: left; font-size: 11px; line-height: 1.35;
+    }
+    .search-match:hover { color: var(--text); background: var(--surface-hover); }
+    .search-line { flex-shrink: 0; color: var(--muted); font-size: 9.5px; }
+    .search-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .search-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
     .transport {
       flex-shrink: 0; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px;
       color: var(--text-soft); background: var(--panel-muted); font-size: 9.5px; font-weight: 650;
@@ -795,13 +1081,17 @@ const pageTemplate = `<!DOCTYPE html>
       .sidebar.is-open { transform: translateX(0); }
       /* The drawer hides the brand row's toggle, so the tabbar keeps one. */
       .tabbar .sidebar-toggle { display: inline-flex; }
+      /* The bar keeps its own width here: it is the only way to change view
+         while the drawer is up, and the scrim only dismisses a click that lands
+         outside the drawer, which a bar button never is. */
+      .activity-bar { padding-bottom: 0; }
       /* The drawer is an overlay whose position is the state itself, so a
          resize handle on its edge would fight the slide-in. */
       .resizer { display: none; }
       /* The drawer overlays the workspace here, so the rows no longer have to
          line up — and a wrapping tab or status bar must be free to grow. */
       .brand, .tabbar { height: auto; min-height: var(--topbar-height); }
-      .sidebar-status, .statusbar { height: auto; min-height: var(--statusbar-height); }
+      .view-status, .statusbar { height: auto; min-height: var(--statusbar-height); }
       .tabbar { flex-wrap: wrap; }
       .save-state { display: none; }
       .statusbar { flex-wrap: wrap; }
@@ -842,9 +1132,9 @@ const pageTemplate = `<!DOCTYPE html>
 <body>
   <main class="app" id="app">
     <aside class="sidebar">
-      <div class="brand">
-        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">${ICONS.sidebarToggle}</button>
-        <div class="brand-mark" aria-hidden="true">
+      <nav class="activity-bar" aria-label="Sidebar views">
+        <div class="activity-brand">
+          <div class="brand-mark" aria-hidden="true">
           <svg viewBox="0.0 0.0 520.0 520.0" fill="none" xmlns="http://www.w3.org/2000/svg">
             <clipPath id="wazooMarkClip">
               <path d="m0 0l520.0 0l0 520.0l-520.0 0l0 -520.0z" clip-rule="nonzero" />
@@ -859,7 +1149,16 @@ const pageTemplate = `<!DOCTYPE html>
               <path fill="#ff9800" fill-rule="evenodd" d="m505.64868 305.6166l0 0c-0.12124634 67.46524 -109.278656 122.224335 -244.35449 122.581085c-135.0758 0.3567505 -245.3866 -53.822754 -246.93633 -121.28354l245.63737 -1.4076538z" />
             </g>
           </svg>
+          </div>
         </div>
+        <div role="tablist" id="activityBar" aria-orientation="vertical" aria-label="Views">
+        ${PANES.map(activityButton).join("\n        ")}
+        </div>
+      </nav>
+
+      <div class="sidebar-pane">
+      <div class="brand">
+        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">${ICONS.sidebarToggle}</button>
         <div>
           <div class="brand-name">Wazoo Wiki</div>
           <div class="brand-subtitle">Desktop editor</div>
@@ -877,23 +1176,13 @@ const pageTemplate = `<!DOCTYPE html>
         <div class="vault-path" id="vaultPath">Choose the folder that holds your wiki.</div>
       </section>
 
-      <div class="file-tools" id="fileTools">
-        <label class="sr-only" for="filter">Filter files</label>
-        <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
-        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
-        <div class="file-tools-checks">${
-  LIST_VIEWS.map(listViewCheckbox).join("\n          ")
-}
-        </div>
+      <div class="panes" id="sidebarPanes">
+        ${PANES.map((view) => paneMarkup(view.key)).join("\n        ")}
+      </div>
       </div>
 
-      <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
-      <div class="sidebar-status">
-        <span id="fileCount">No vault open</span>
-        <span class="transport" id="transportBadge" hidden>Browser dev mode</span>
-      </div>
       <div class="resizer" id="sidebarResizer" role="separator" aria-orientation="vertical"
-           aria-label="Resize the vault sidebar" aria-controls="fileList"
+           aria-label="Resize the vault sidebar" aria-controls="sidebarPanes"
            aria-valuemin="${SIDEBAR_MIN_WIDTH}" aria-valuemax="${SIDEBAR_MAX_WIDTH}" aria-valuenow="${DEFAULT_SIDEBAR_WIDTH}"
            title="Drag to resize, double-click to reset" tabindex="0"></div>
     </aside>
@@ -936,7 +1225,7 @@ const pageTemplate = `<!DOCTYPE html>
           <div class="placeholder-inner">
             <div class="placeholder-icon" aria-hidden="true">${ICONS.noFile}</div>
             <h1>Select a file</h1>
-            <p id="placeholderNoFileText">Pick a file from the sidebar to open it in a tab.</p>
+            <p id="placeholderNoFileText">Pick a file from the Explorer view to open it in a tab.</p>
             <button class="button button-primary" id="emptyNewFileButton" type="button">New file</button>
             <div class="hint"><kbd>Ctrl</kbd> <kbd>N</kbd> makes a file · <kbd>Ctrl</kbd> <kbd>W</kbd> closes a tab · <kbd>Ctrl</kbd> <kbd>Tab</kbd> switches</div>
           </div>
@@ -1042,6 +1331,15 @@ const pageTemplate = `<!DOCTYPE html>
       // above, and this is the same list the script wires up, so the two cannot
       // be different lists.
       const LIST_VIEWS = ${JSON.stringify(LIST_VIEWS)};
+      // And the views, from the same kind of table in the same file. The markup
+      // above drew the bar and the panes from it; this is the list the script
+      // switches between and the menu's View entries are generated from, so
+      // the three cannot be different lists.
+      const PANES = ${
+  JSON.stringify(
+    PANES.map(({ key, label }) => ({ key, label })),
+  )
+};
       const shell = el('app');
       const editorHost = el('editor');
       const editorWrap = el('editorWrap');
@@ -1057,7 +1355,13 @@ const pageTemplate = `<!DOCTYPE html>
       const openVaultButton = el('openVaultButton');
       const emptyNewFileButton = el('emptyNewFileButton');
       const vaultName = el('vaultName');
-      const fileTools = el('fileTools');
+      const viewTools = el('viewTools');
+      const searchTools = el('searchTools');
+      const searchQuery = el('searchQuery');
+      const searchResults = el('searchResults');
+      const searchStatus = el('searchStatus');
+      const recentList = el('recentList');
+      const recentStatus = el('recentStatus');
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
       // The three switches, each paired with the elements it owns. One list
@@ -1101,6 +1405,12 @@ const pageTemplate = `<!DOCTYPE html>
       // showing, the tabbar's once it is collapsed, so the control stays in the
       // window's top-left corner either way. Only one is ever displayed.
       const sidebarToggles = document.querySelectorAll('.sidebar-toggle');
+      // The bar's buttons and the panes they switch to, matched by data-view
+      // rather than by id: the two lists are drawn from the same table above,
+      // and a pane with no button would leave it unreachable.
+      const activityBar = el('activityBar');
+      const activityButtons = document.querySelectorAll('.activity-button');
+      const sidebarPanes = document.querySelectorAll('.pane');
 
       // Below this width the sidebar is a drawer rather than a column, so the
       // same button means "slide it in" instead of "collapse the column".
@@ -1142,6 +1452,7 @@ const pageTemplate = `<!DOCTYPE html>
         recents: [],
         sidebarCollapsed: false,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
+        sidebarView: '${DEFAULT_SIDEBAR_VIEW}',
         theme: '${DEFAULT_THEME}',
       };
       // Before the stored state arrives, every switch is worth its default, so
@@ -1255,6 +1566,84 @@ const pageTemplate = `<!DOCTYPE html>
         if (persist) call('setSidebarCollapsed', [collapsed]);
       }
 
+      /* Views: one switcher, and every pane's own chrome */
+
+      /**
+       * The view whose name the state should hold, or the file list.
+       *
+       * Coerced in the page as well as in the binding, for the same reason the
+       * theme is: the stored state is a value from a settings file, and a view
+       * this build has no pane for would leave the sidebar showing nothing at
+       * all. An unknown name is a file list, which is the one answer that is
+       * always there.
+       */
+      function knownView(view) {
+        return PANES.some((entry) => entry.key === view) ? view : '${DEFAULT_SIDEBAR_VIEW}';
+      }
+
+      /**
+       * Show one view's pane and hide the rest. This is the whole of the
+       * switcher: nothing here knows what any pane contains, so a view is
+       * added by writing a pane and a row in the table, and the switcher is not
+       * edited.
+       *
+       * The choice is worth keeping -- it is where the user was, the way the
+       * sidebar's width and collapsed state are -- so it is written to the
+       * settings unless this is just applying stored state.
+       */
+      function setSidebarView(view, persist) {
+        const next = knownView(view);
+        vault.sidebarView = next;
+        for (const button of activityButtons) {
+          const active = button.dataset.view === next;
+          button.classList.toggle('is-active', active);
+          button.setAttribute('aria-selected', String(active));
+          // Roving tabindex: the bar is one tab stop, and the arrows move
+          // within it, which is what a row of role="tab" buttons owes its user.
+          button.tabIndex = active ? 0 : -1;
+        }
+        for (const pane of sidebarPanes) pane.hidden = pane.dataset.view !== next;
+        // Redrawn on arrival rather than kept: a search scan is milliseconds on
+        // a wiki-sized vault, and it is the only way the results can never be
+        // describing a file that has since been saved over.
+        if (next === 'search') runSearch();
+        if (next === 'recent') renderRecent();
+        if (persist) {
+          call('setSidebarView', [next]);
+          refreshMenu();
+        }
+      }
+
+      /** The bar's own click: switch view, or fold the sidebar away if it is already on. */
+      function chooseView(view) {
+        if (view === vault.sidebarView && !narrowWindow.matches) {
+          toggleSidebar();
+          return;
+        }
+        setSidebarView(view, true);
+      }
+
+      function wireActivityBar() {
+        for (const button of activityButtons) {
+          button.addEventListener('click', () => chooseView(button.dataset.view));
+        }
+        activityBar.addEventListener('keydown', (event) => {
+          const step = event.key === 'ArrowDown' ? 1
+            : event.key === 'ArrowUp' ? -1
+            : 0;
+          if (step === 0) return;
+          event.preventDefault();
+          const buttons = Array.from(activityButtons);
+          const current = buttons.indexOf(document.activeElement);
+          const next = (current + step + buttons.length) % buttons.length;
+          // Moving the focus is not moving the view: arrow keys across a bar
+          // land on a button and say so, and Enter or Space takes it. Switching
+          // under the keyboard as the focus moves would make the arrows feel
+          // like they were skipping steps.
+          buttons[next].focus();
+        });
+      }
+
       /**
        * Apply one of the list's switches, and tell the two controls that show
        * it.
@@ -1301,11 +1690,19 @@ const pageTemplate = `<!DOCTYPE html>
       // The editor needs room for a readable line, so the column gives up space
       // before the workspace does on a narrow window.
       const WORKSPACE_FLOOR = 360;
+      // The activity bar is inside the column rather than beside it, so the
+      // floor is spent before the column can be asked to grow: a sidebar
+      // dragged out to 520px on a 900px window would otherwise leave the editor
+      // 380px, which is the width this floor exists to prevent.
+      const ACTIVITY_BAR_WIDTH = ${ACTIVITY_BAR_WIDTH};
 
       function widestSidebarThatFits() {
         return Math.max(
           ${SIDEBAR_MIN_WIDTH},
-          Math.min(${SIDEBAR_MAX_WIDTH}, window.innerWidth - WORKSPACE_FLOOR),
+          Math.min(
+            ${SIDEBAR_MAX_WIDTH},
+            window.innerWidth - WORKSPACE_FLOOR - ACTIVITY_BAR_WIDTH,
+          ),
         );
       }
 
@@ -1462,16 +1859,21 @@ const pageTemplate = `<!DOCTYPE html>
         renderFiles();
       }
 
-      async function openFile(path) {
+      async function openFile(path, line) {
         setSidebarOpen(false);
         const existing = tabs.findIndex((tab) => tab.path === path);
         if (existing !== -1) {
           selectTab(existing);
-          return;
+        } else {
+          const payload = await call('readFile', [path]);
+          if (payload === null) return;
+          openPayload(payload);
         }
-        const payload = await call('readFile', [path]);
-        if (payload === null) return;
-        openPayload(payload);
+        // A search result names a line, and the jump has to follow the open
+        // rather than lead it: the editor holds one document at a time, so a
+        // jump issued first would land on whatever was on screen and leave the
+        // line the user clicked in a file they were not looking at.
+        if (typeof line === 'number' && line > 0) editorApi?.goToLine(line);
       }
 
       /**
@@ -1615,17 +2017,36 @@ const pageTemplate = `<!DOCTYPE html>
         openVaultButton.title = open ? 'Open another vault' : 'Open a vault';
         openVaultButton.setAttribute('aria-label', open ? 'Open another vault' : 'Open a vault');
         // The list empties with the vault, so the row that filters and creates
-        // from it has nothing to act on and goes with it.
-        fileTools.hidden = !open;
+        // from it has nothing to act on and goes with it. Search and Recently
+        // changed hide their toolbars the same way; their panes stay, and say
+        // why they are empty.
+        viewTools.hidden = !open;
+        searchTools.hidden = !open;
         newFileButton.disabled = !open;
+        renderRecent();
         refreshMenu();
+      }
+
+      /**
+       * The files the listing is offering right now, with the Assets switch
+       * applied. Shared rather than written twice: the Explorer list and the
+       * Recently changed sort are the same set in a different order, and a
+       * second copy of the switch's rule would be one that could disagree.
+       */
+      function listedFiles() {
+        if (hasAssetFiles() && vault.showAssets) return files;
+        return files.filter((file) => file.scope !== 'asset');
+      }
+
+      function hasAssetFiles() {
+        return files.some((file) => file.scope === 'asset');
       }
 
       function renderFiles() {
         // The vault's own config says which files are the wiki's pages. Its
         // static files are one tick away by default, because a build output
         // folder beside 400 pages is not what a wiki looks like.
-        const hasAssets = files.some((file) => file.scope === 'asset');
+        const hasAssets = hasAssetFiles();
         // The switch reads the state rather than the checkbox, so the stored
         // preference survives a vault that has nothing to offer: the checkbox
         // is a mirror of the state, never the other way round, which is what
@@ -1633,9 +2054,7 @@ const pageTemplate = `<!DOCTYPE html>
         for (const view of listViews) {
           if (view.needsAssets) view.label.hidden = !hasAssets;
         }
-        const listed = hasAssets && vault.showAssets
-          ? files
-          : files.filter((file) => file.scope !== 'asset');
+        const listed = listedFiles();
         const query = filterInput.value.trim().toLowerCase();
         const visible = query
           ? listed.filter((file) => file.path.toLowerCase().indexOf(query) !== -1)
@@ -1714,8 +2133,201 @@ const pageTemplate = `<!DOCTYPE html>
         if (placeholderNoFile.hidden === false) {
           placeholderNoFileText.textContent = visible.length === 0
             ? 'This vault has no files yet.'
-            : 'Pick a file from the sidebar to open it in a tab.';
+            : 'Pick a file from the Explorer view to open it in a tab.';
         }
+        // The recently changed list draws the same rows, so the open and active
+        // rails on it follow the tab strip -- but only while it is the pane on
+        // screen, because rebuilding it on every keystroke of the Explorer's
+        // filter would be a list of thousands rebuilt to be looked at by nobody.
+        if (vault.sidebarView === 'recent') renderRecent();
+      }
+
+      /* Search and Recently changed: the other two panes */
+
+      /**
+       * One keystroke is not one search. The scan itself is a walk of a few
+       * hundred kilobytes and needs nothing around it, but a vault at the
+       * listing's 5000-file bound is a different matter, and firing a scan per
+       * character is the one thing that would make the window stutter. A short
+       * wait, and a token so a slow earlier answer cannot land on top of a
+       * newer one.
+       */
+      const SEARCH_DEBOUNCE_MS = 150;
+      let searchTimer;
+      let searchToken = 0;
+
+      function scheduleSearch() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
+      }
+
+      async function runSearch() {
+        const query = searchQuery.value.trim();
+        const token = (searchToken += 1);
+        if (vault.root === null) {
+          searchResults.textContent = '';
+          searchStatus.textContent = 'No vault open';
+          return;
+        }
+        if (query === '') {
+          searchResults.textContent = '';
+          searchStatus.textContent = 'Type to search every page';
+          return;
+        }
+        const hits = await call('search', [query]);
+        // A response that is no longer the question is discarded rather than
+        // drawn: rendering it would show results for a string the box no longer
+        // holds.
+        if (token !== searchToken) return;
+        renderSearch(Array.isArray(hits) ? hits : [], query);
+      }
+
+      function renderSearch(hits, query) {
+        searchResults.textContent = '';
+        const total = hits.reduce((sum, hit) => sum + hit.matches.length, 0);
+        searchStatus.textContent = total === 0
+          ? 'No page contains "' + query + '"'
+          : total + (total === 1 ? ' match in ' : ' matches in ') + hits.length +
+            (hits.length === 1 ? ' file' : ' files');
+        if (hits.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'search-empty';
+          empty.textContent = 'Searches the text of every file in this vault. ' +
+            'Names, not just pages, so a word in a .yml is found too.';
+          searchResults.appendChild(empty);
+          return;
+        }
+
+        for (const hit of hits) {
+          const group = document.createElement('div');
+          group.className = 'search-hit';
+          group.setAttribute('role', 'listitem');
+
+          const name = document.createElement('button');
+          name.type = 'button';
+          name.className = 'search-hit-name';
+          name.title = hit.path;
+          const label = document.createElement('span');
+          label.textContent = baseName(hit.path);
+          name.appendChild(label);
+          // Said rather than implied: a file holding more matches than the row
+          // carries must not look like that was all of them.
+          if (hit.truncated) {
+            const more = document.createElement('span');
+            more.className = 'search-hit-more';
+            more.textContent = 'more matches';
+            name.appendChild(more);
+          }
+          // The file's own row opens its first match, which is what a reader
+          // who clicked the page's name rather than a line wanted.
+          name.addEventListener('click', () => openFile(hit.path, hit.matches[0].line));
+          group.appendChild(name);
+
+          for (const match of hit.matches) {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'search-match';
+            row.title = hit.path + ':' + match.line;
+            const at = document.createElement('span');
+            at.className = 'search-line';
+            at.textContent = match.line;
+            const preview = document.createElement('span');
+            preview.className = 'search-preview';
+            preview.textContent = match.text;
+            row.appendChild(at);
+            row.appendChild(preview);
+            row.addEventListener('click', () => openFile(hit.path, match.line));
+            group.appendChild(row);
+          }
+          searchResults.appendChild(group);
+        }
+      }
+
+      /**
+       * The listing, newest write first, with when that was in words under each
+       * name. This is the question a wiki reader opens the app with -- what is
+       * new in here -- and it needed no operation behind it: the walk already
+       * records each file's modification time for exactly this.
+       */
+      function renderRecent() {
+        recentList.textContent = '';
+        const listed = listedFiles();
+        const recent = listed.slice().sort((left, right) =>
+          right.modified - left.modified
+        );
+        if (vault.root === null) {
+          recentStatus.textContent = 'No vault open';
+        } else if (recent.length === 0) {
+          recentStatus.textContent = 'No files in this vault';
+        } else {
+          recentStatus.textContent = latestSentence(recent[0].modified);
+        }
+
+        if (recent.length === 0) {
+          const empty = document.createElement('li');
+          empty.className = 'file-empty';
+          empty.textContent = vault.root === null
+            ? 'Open a vault to see what changed in it.'
+            : 'This folder has no files yet.';
+          recentList.appendChild(empty);
+          return;
+        }
+
+        const openPaths = new Set(tabs.map((tab) => tab.path));
+        const active = activeTab();
+        for (const file of recent) {
+          const item = document.createElement('li');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'file-button';
+          if (active !== null && active.path === file.path) {
+            button.classList.add('is-active');
+            button.setAttribute('aria-current', 'true');
+          } else if (openPaths.has(file.path)) {
+            button.classList.add('is-open');
+          }
+          if (file.scope === 'asset') button.classList.add('is-asset');
+          button.title = file.path;
+          const name = document.createElement('span');
+          name.className = 'file-name';
+          name.textContent = listedName(file);
+          const when = document.createElement('span');
+          when.className = 'file-time';
+          when.textContent = relativeTime(file.modified);
+          // The exact date in the title, because "3 days ago" is the answer to
+          // "how long ago" and not to "when".
+          when.title = new Date(file.modified).toLocaleString();
+          button.appendChild(name);
+          button.appendChild(when);
+          button.addEventListener('click', () => openFile(file.path));
+          item.appendChild(button);
+          recentList.appendChild(item);
+        }
+      }
+
+      function latestSentence(modified) {
+        if (!modified) return 'No dates in this vault';
+        return 'Latest: ' + relativeTime(modified);
+      }
+
+      function relativeTime(stamp) {
+        // A file system that will not say when is not a reason to print NaN.
+        if (!stamp) return 'Unknown date';
+        const seconds = Math.round((Date.now() - stamp) / 1000);
+        if (seconds < 60) return 'Just now';
+        const minutes = Math.round(seconds / 60);
+        if (minutes < 60) return counted(minutes, 'minute') + ' ago';
+        const hours = Math.round(minutes / 60);
+        if (hours < 24) return counted(hours, 'hour') + ' ago';
+        const days = Math.round(hours / 24);
+        if (days < 31) return counted(days, 'day') + ' ago';
+        // Past a month "29 days ago" stops being useful, so the date itself
+        // takes over and this is no longer a guess.
+        return new Date(stamp).toLocaleDateString();
+      }
+
+      function counted(amount, noun) {
+        return amount + ' ' + noun + (amount === 1 ? '' : 's');
       }
 
       function showEditor() {
@@ -1738,12 +2350,20 @@ const pageTemplate = `<!DOCTYPE html>
         if (vault.root === null) {
           files = [];
           renderFiles();
+          // The matches were about the vault that just closed. Left on screen
+          // they would be rows that open a folder this app no longer has open.
+          runSearch();
           return;
         }
         const result = await call('listFiles');
         if (result === null) return;
         files = result;
         renderFiles();
+        // The same for every other listing: a new file, a reloaded vault, a
+        // vault that was edited on disk. A search result names a line in a
+        // particular version of a file, so keeping the old answers across any
+        // of those is a result pointing at text that has moved.
+        runSearch();
       }
 
       async function saveFile() {
@@ -1822,6 +2442,7 @@ const pageTemplate = `<!DOCTYPE html>
         vault = state;
         setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
+        setSidebarView(state.sidebarView, false);
         // Every switch, from one loop and one rule. The stored state is already
         // a boolean for all three; anything else means a caller sent a partial
         // state, and the switch's own default is the honest answer for that.
@@ -2136,6 +2757,18 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'next-tab', group: 'Tabs', label: 'Next tab', keys: 'Ctrl+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(1) },
         { id: 'previous-tab', group: 'Tabs', label: 'Previous tab', keys: 'Ctrl+Shift+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(-1) },
         { id: 'toggle-sidebar', group: 'View', label: 'Toggle vault files', keys: 'Ctrl+B', canRun: () => true, run: toggleSidebar },
+        // One menu item per view, from the same table the bar draws, so the two
+        // surfaces cannot offer different views -- and a check mark rather than
+        // a second, separate "which view" switch to keep in step with it.
+        ...PANES.map((view) => ({
+          id: 'view-' + view.key,
+          group: 'View',
+          label: view.label,
+          keys: '',
+          canRun: () => true,
+          isActive: () => vault.sidebarView === view.key,
+          run: () => setSidebarView(view.key, true),
+        })),
         // Three choices rather than three commands, so each one reports whether
         // it is the active one and the menu can show that.
         { id: 'theme-system', group: 'Appearance', label: 'Match the system', keys: '', canRun: () => true, isActive: () => vault.theme === 'system', run: () => setTheme('system', true) },
@@ -2392,6 +3025,7 @@ const pageTemplate = `<!DOCTYPE html>
         for (const toggle of sidebarToggles) {
           toggle.addEventListener('click', toggleSidebar);
         }
+        wireActivityBar();
         // The two layouts keep different states for the same control — a
         // collapsed column on a wide window, a closed drawer on a narrow one —
         // so crossing the breakpoint has to re-derive the labels. Without this
@@ -2423,6 +3057,15 @@ const pageTemplate = `<!DOCTYPE html>
         saveButton.addEventListener('click', saveFile);
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
+        searchQuery.addEventListener('input', scheduleSearch);
+        // Enter searches now rather than waiting out the debounce, which is the
+        // one case where the delay is the user's own.
+        searchQuery.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          clearTimeout(searchTimer);
+          runSearch();
+        });
         // The setting lives in the sidebar, next to the list it draws, as well
         // as the Appearance menu. Both controls drive the same state, so this
         // syncs the checkbox and refreshes the menu's own check mark.
@@ -2489,6 +3132,11 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       if (!window.bindings) el('transportBadge').hidden = false;
+      // The panes ship hidden and the bar's buttons ship unchecked, so the
+      // stored view has to be applied before anything is on screen rather than
+      // when the state arrives. If that call then fails, this is the answer
+      // that leaves a usable window rather than an empty one.
+      setSidebarView(vault.sidebarView, false);
       wire();
       init();
     })();

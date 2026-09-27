@@ -53,6 +53,19 @@ export interface WikiEditorHandle {
   forgetDocument(key: string): void;
   /** Cursor position as a character offset into `getValue()`. */
   getCursor(): number;
+  /**
+   * Put the caret at the start of a 1-based line and scroll it into view.
+   *
+   * A search result names a line, not an offset, and the difference is the
+   * whole cost of the jump: a caret plus one dispatch is everything this needs,
+   * and it is also what leaves the reader's next keystroke going where they
+   * were sent rather than replacing text. Selects nothing on purpose — a
+   * highlighted whole line invites exactly that.
+   *
+   * Out-of-range lines land on the nearest end rather than throwing, because
+   * the line number came from a scan of a file that may have been edited since.
+   */
+  goToLine(line: number): void;
   focus(): void;
 }
 
@@ -381,6 +394,14 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
       scrollTops.delete(target);
     },
     getCursor: () => view.state.selection.main.head,
+    goToLine: (line: number) => {
+      const doc = view.state.doc;
+      const target = Math.max(1, Math.min(Math.round(line), doc.lines));
+      view.dispatch({
+        selection: { anchor: doc.line(target).from },
+        scrollIntoView: true,
+      });
+    },
     focus: () => view.focus(),
   };
 }

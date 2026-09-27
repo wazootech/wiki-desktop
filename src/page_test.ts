@@ -9,14 +9,26 @@
 import { join } from "node:path";
 
 import {
+  ACTIVITY_BAR_WIDTH,
   DEFAULT_SIDEBAR_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  SIDEBAR_VIEWS,
 } from "./config.ts";
 import { page, pageForTheme } from "./page.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+function assertEqual(actual: unknown, expected: unknown, message: string) {
+  if (actual !== expected) {
+    throw new Error(
+      `${message}: expected ${JSON.stringify(expected)}, got ${
+        JSON.stringify(actual)
+      }`,
+    );
+  }
 }
 
 Deno.test("every element the script looks up exists in the markup", () => {
@@ -32,6 +44,250 @@ Deno.test("every element the script looks up exists in the markup", () => {
   assert(
     missing.length === 0,
     `the script looks up ids the markup does not define: ${missing.join(", ")}`,
+  );
+});
+
+Deno.test("every view has a button and a pane, and the pane is behind it", () => {
+  // The switcher's whole contract: a view is a pane, and the bar's buttons are
+  // how you get to it. A view in the table with no pane is a button that reveals
+  // nothing, and a pane with no button is a view nobody can reach — so the two
+  // lists are compared rather than trusted.
+  for (const view of SIDEBAR_VIEWS) {
+    assert(
+      page.includes(`data-view="${view}" id="pane-${view}"`) ||
+        page.includes(`id="pane-${view}" data-view="${view}"`),
+      `the ${view} view has a pane`,
+    );
+    assert(
+      page.includes(`id="activity-${view}"`),
+      `and a button on the bar`,
+    );
+    assert(
+      page.includes(`aria-controls="pane-${view}"`),
+      `the ${view} button says which pane it opens`,
+    );
+    // The bar, the View menu and the pane's own title have to call a view the
+    // same thing: three names for one view is three answers to "where am I?"
+    const menu = page.slice(page.indexOf("const commands = ["));
+    assert(
+      menu.includes(`...PANES.map((view) => ({`),
+      "the menu's entries come from the same table",
+    );
+  }
+  // The button's accessible name is the view's name and the tooltip says more,
+  // rather than both being the tooltip -- which is how a screen-reader user
+  // ended up hearing "Vault files" on the bar and "Explorer" in the menu for
+  // the same view.
+  for (
+    const button of page.matchAll(/<button class="activity-button"[\s\S]*?>/g)
+  ) {
+    const name = button[0].match(/aria-label="([^"]+)"/)?.[1];
+    const hint = button[0].match(/title="([^"]+)"/)?.[1];
+    assert(name !== undefined && hint !== undefined, "the button is named");
+    // The menu is drawn from the table the script was handed, so comparing the
+    // name against that injected list is comparing it against the menu's own
+    // source rather than against a copy of it.
+    assert(
+      page.includes(`"label":"${name}"`),
+      `the bar and the View menu both call this view "${name}"`,
+    );
+    assert(
+      hint !== name && hint.length > name.length,
+      `and the tooltip on "${name}" says more than the name does`,
+    );
+  }
+  const buttons = [...page.matchAll(/class="activity-button"/g)].length;
+  const panes = [...page.matchAll(/class="pane"/g)].length;
+  assertEqual(
+    `${buttons} buttons, ${panes} panes`,
+    `${SIDEBAR_VIEWS.length} buttons, ${SIDEBAR_VIEWS.length} panes`,
+    "one of each per view, and no others",
+  );
+
+  // Hidden in the markup, so a view is never on screen before the stored one
+  // has been applied, and a document with no script is an empty sidebar rather
+  // than a wrong one.
+  for (const pane of page.matchAll(/<section class="pane"[^>]*>/g)) {
+    assert(
+      pane[0].includes("hidden"),
+      `every pane ships hidden: ${pane[0]}`,
+    );
+  }
+  // The panes share a stack, and the switcher finds them by data-view rather
+  // than by id, so a pane added to the table cannot be left unaddressable.
+  assert(
+    /const sidebarPanes = document\.querySelectorAll\('\.pane'\)/.test(page),
+    "the switcher finds the panes by their class",
+  );
+  assert(
+    /for \(const pane of sidebarPanes\) pane\.hidden = pane\.dataset\.view !== next;/
+      .test(page),
+    "and shows exactly the one that was asked for",
+  );
+});
+
+Deno.test("the view is a stored setting, and the menu offers the same list", () => {
+  assert(
+    /call\('setSidebarView', \[next\]\)/.test(page),
+    "choosing a view is written to the app config",
+  );
+  assert(
+    /setSidebarView\(state\.sidebarView, false\)/.test(page),
+    "and the stored one is applied, without being written straight back",
+  );
+  // One list for the bar, the panes and the menu, generated from the same
+  // table: a menu that could offer a view the bar had no button for would be a
+  // command that switches nothing.
+  assert(
+    /\.\.\.PANES\.map\(\(view\) => \(\{\s*id: 'view-' \+ view\.key,/.test(page),
+    "the View menu has one entry per view, from the same table",
+  );
+  assert(
+    /isActive: \(\) => vault\.sidebarView === view\.key,/.test(page),
+    "and each one says whether it is the view on screen",
+  );
+  // A view the page cannot draw falls back to the file list rather than
+  // leaving the sidebar with every pane hidden, which is what hiding the other
+  // panes by name would do with an unknown one.
+  assert(
+    /function knownView\(view\)/.test(page) &&
+      /PANES\.some\(\(entry\) => entry\.key === view\)/.test(page),
+    "an unknown view falls back to the file list",
+  );
+});
+
+Deno.test("the sidebar's chrome belongs to a view, not to the sidebar", () => {
+  // The load-bearing coupling the switcher is for. Filter, the three switches
+  // and New file all act on a listing, and "95 files" means nothing in a search
+  // view -- so the toolbar and the footer are inside a pane, and there is no
+  // sidebar-level pair left for a second view to have to be smuggled past.
+  assert(
+    page.includes('class="view-tools" id="viewTools"') &&
+      page.includes('class="view-status"'),
+    "each pane draws its own toolbar and its own footer",
+  );
+  assert(
+    (page.match(/class="view-status"/g) ?? []).length ===
+      SIDEBAR_VIEWS.length,
+    "one footer per view",
+  );
+  assert(
+    !page.includes('class="sidebar-status"') &&
+      !page.includes('class="file-tools"'),
+    "and the sidebar-level ones are gone, not merely renamed",
+  );
+  // The listing is inside the Explorer pane rather than beside it, which is
+  // what makes "a new view is a new pane" true rather than aspirational.
+  const explorer = page.slice(
+    page.indexOf('id="pane-explorer"'),
+    page.indexOf('id="pane-search"'),
+  );
+  assert(
+    explorer.includes('id="fileList"') &&
+      explorer.includes('id="viewTools"') &&
+      explorer.includes('id="fileCount"'),
+    "the file list, its toolbar and its count all live in the Explorer pane",
+  );
+  // A search result names a line in one version of one file, so the answers are
+  // re-derived every time the listing moves. Without this, closing a vault left
+  // rows on screen that open a folder the app no longer has open, and creating
+  // a file left results pointing at text that had shifted under them.
+  assert(
+    /async function loadFiles\(\)[\s\S]*?runSearch\(\);[\s\S]*?return;[\s\S]*?await call\('listFiles'\)[\s\S]*?runSearch\(\);/
+      .test(page),
+    "both a closed vault and a reloaded listing re-derive the results",
+  );
+
+  // The resizer, the drawer and the brand are the sidebar's, and the issue
+  // called those the part that needs no change: they are outside every pane.
+  const panes = page.slice(page.indexOf('<div class="panes"'));
+  assert(
+    panes.includes('id="sidebarResizer"'),
+    "the resize handle stays with the sidebar rather than joining a view",
+  );
+  assert(
+    page.indexOf('id="sidebarResizer"') >
+        page.indexOf('id="panes"') ||
+      page.indexOf('id="sidebarResizer"') < page.indexOf('<div class="panes"'),
+    "and sits beside the panes, not inside one",
+  );
+  // Recently changed needs no toolbar at all, which is the claim that the
+  // chrome is per-view rather than per-sidebar: a view that wants none has none.
+  const recent = page.slice(
+    page.indexOf('id="pane-recent"'),
+    page.indexOf('id="sidebarResizer"'),
+  );
+  assert(
+    !recent.includes("view-tools"),
+    "a view with no toolbar of its own has none",
+  );
+});
+
+Deno.test("the width clamp spends the activity bar before the editor does", () => {
+  // The bar is inside the sidebar's width, so a clamp that does not know about
+  // it would let a 520px sidebar sit in a window with 660px of editor and
+  // 360px of nothing -- which is the floor the whole clamp exists to hold.
+  assert(
+    new RegExp(
+      `window\\.innerWidth - WORKSPACE_FLOOR - ACTIVITY_BAR_WIDTH`,
+    ).test(page),
+    "the editor's floor is measured after the bar's width",
+  );
+  assert(
+    new RegExp(`const ACTIVITY_BAR_WIDTH = ${ACTIVITY_BAR_WIDTH};`).test(page),
+    "and the bar is the width the stylesheet draws it at",
+  );
+  assert(
+    new RegExp(`--activity-bar-width: ${ACTIVITY_BAR_WIDTH}px`).test(
+      page.slice(0, page.indexOf("</style>")),
+    ),
+    "one number for both, rather than one written twice",
+  );
+  // Dragging measures the sidebar's own left edge, and the bar did not move the
+  // sidebar's left edge -- so the existing measurement is still the right one
+  // and did not have to change.
+  assert(
+    /const left = sidebar\.getBoundingClientRect\(\)\.left;/.test(page),
+    "the drag still measures the sidebar's own edge",
+  );
+});
+
+Deno.test("a search result opens its file at the line it named", () => {
+  // The reason a result can be clicked at all: the operation returns a line,
+  // and the line is the point. Opening the file and dropping the reader at line
+  // one would make every result a small errand.
+  assert(
+    /openFile\(hit\.path, match\.line\)/.test(page),
+    "a matching line opens that file at that line",
+  );
+  assert(
+    /openFile\(hit\.path, hit\.matches\[0\]\.line\)/.test(page),
+    "and a file's own row opens its first match",
+  );
+  assert(
+    /if \(typeof line === 'number' && line > 0\) editorApi\?\.\w+\(line\);/
+      .test(page),
+    "the jump follows the open rather than leading it",
+  );
+  // Grouped by file, because a hit in a wiki is "this page, these lines".
+  assert(
+    /className = 'search-hit'/.test(page) && page.includes("search-hit-name"),
+    "results are grouped under the file they are in",
+  );
+  assert(
+    /if \(hit\.truncated\)/.test(page) &&
+      page.includes("more matches"),
+    "a file with more matches than it shows says so",
+  );
+  // And the view refreshes on arrival rather than keeping a stale answer, which
+  // is the only way results cannot describe a file since saved over.
+  assert(
+    /if \(next === 'search'\) runSearch\(\);/.test(page),
+    "arriving at the search view runs it again",
+  );
+  assert(
+    /if \(token !== searchToken\) return;/.test(page),
+    "and a slow earlier answer cannot land on a newer question",
   );
 });
 
@@ -56,6 +312,23 @@ Deno.test("the tab strip's classes are all styled", () => {
     "menu-item",
     "menu-item-label",
     "menu-keys",
+    "activity-bar",
+    "activity-button",
+    "activity-tabs",
+    "activity-brand",
+    "sidebar-pane",
+    "pane-title",
+    "view-tools",
+    "view-status",
+    "search-results",
+    "search-hit",
+    "search-hit-name",
+    "search-hit-more",
+    "search-match",
+    "search-line",
+    "search-preview",
+    "search-empty",
+    "file-time",
   ];
   const unstyled = classes.filter((name) =>
     !page.includes(`.${name}`) ||
@@ -555,11 +828,11 @@ Deno.test("the vault's one button is named for the state it acts on", () => {
   // from it has nothing to act on: it was a filter over nothing and a disabled
   // create button, the part of closing a vault that had not been finished.
   assert(
-    /<div class="file-tools" id="fileTools">/.test(page),
-    "the file list's toolbar is something the page can hide",
+    /<div class="view-tools" id="viewTools">/.test(page),
+    "the Explorer view's toolbar is something the page can hide",
   );
   assert(
-    /fileTools\.hidden = !open;/.test(page),
+    /viewTools\.hidden = !open;/.test(page),
     "and it goes when the vault it acts on does",
   );
 });
@@ -700,11 +973,11 @@ Deno.test("every list switch is reachable from the list it changes", () => {
   // sidebar's toolbar has, so the row wraps. Grouping keeps them together: left
   // free they split across lines one checkbox each.
   assert(
-    /\.file-tools-checks \{[^}]*display: flex/.test(page),
+    /\.view-tools-checks \{[^}]*display: flex/.test(page),
     "the checkboxes wrap as a group rather than one per line",
   );
   assert(
-    /\.file-tools \{ flex-wrap: wrap/.test(page),
+    /\.view-tools \{ flex-wrap: wrap/.test(page),
     "and the toolbar is allowed to wrap at all",
   );
 });
@@ -730,7 +1003,7 @@ Deno.test("what each switch changes is still its own", () => {
   // the stored preference survives a vault with nothing to list — reading the
   // checkbox is what made this one per-session in all but name.
   assert(
-    /const listed = hasAssets && vault\.showAssets/.test(page),
+    /if \(hasAssetFiles\(\) && vault\.showAssets\) return files;/.test(page),
     "the list of files reads showAssets from the state",
   );
   assert(
@@ -920,8 +1193,8 @@ Deno.test("the top bar labels one command and icons another", () => {
   // It only fits beside the filter because the input yields room: fixed at
   // width:100% the button is pushed out of the row.
   assert(
-    /\.file-tools\s*\{[^}]*display:\s*flex/.test(style),
-    "the file list's toolbar is a flex row",
+    /\.view-tools\s*\{[^}]*display:\s*flex/.test(style),
+    "a view's toolbar is a flex row",
   );
   assert(
     /\.filter\s*\{[^}]*flex:\s*1/.test(style),
@@ -1064,8 +1337,8 @@ Deno.test("the brand row and the tab bar share one height", () => {
   // The same pairing at the bottom edge, where the two rows also have to agree
   // on a height or their border-tops land on different pixels.
   assert(
-    /\.sidebar-status\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
-    "the sidebar status row takes the shared status height",
+    /\.view-status\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
+    "a view's status row takes the shared status height",
   );
   assert(
     /\.statusbar\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
@@ -1077,6 +1350,13 @@ Deno.test("the brand row and the tab bar share one height", () => {
   assert(
     /\.brand,\s*\.tabbar\s*\{[^}]*height:\s*auto/.test(narrow),
     "the drawer layout lets both rows grow again",
+  );
+  // The activity bar took the mark out of the brand row, and the mark's slot is
+  // the only thing in the bar that has to line up with the tab bar across the
+  // seam -- so it is held to the same token rather than sized by eye.
+  assert(
+    /\.activity-brand\s*\{[^}]*height:\s*var\(--topbar-height\)/.test(style),
+    "the activity bar's top row takes the shared top bar height",
   );
 });
 

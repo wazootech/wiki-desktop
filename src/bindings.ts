@@ -2,6 +2,7 @@ import { basename } from "node:path";
 
 import {
   clampSidebarWidth,
+  coerceSidebarView,
   coerceTheme,
   homeDirectory,
   LIST_VIEW_DEFAULTS,
@@ -12,6 +13,7 @@ import {
   listViewValue,
   loadConfig,
   setterFor,
+  type SidebarView,
   type ThemePreference,
   updateConfig,
   withRecentVault,
@@ -23,6 +25,8 @@ import {
   type DirectoryListing,
   listVaultFiles,
   readVaultFile,
+  type SearchHit,
+  searchVaultFiles,
   VaultError,
   type VaultFile,
   type VaultFileContents,
@@ -40,6 +44,8 @@ export interface VaultStateBase {
   sidebarCollapsed: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
+  /** Which sidebar view was showing, from the activity bar's list. */
+  sidebarView: SidebarView;
   /** Light/dark appearance the user last chose, `system` if they never did. */
   theme: ThemePreference;
 }
@@ -72,12 +78,22 @@ export type WikiBindings =
     createFile(path: string, content?: string): Promise<VaultFileContents>;
     /** List subfolders of `path` for the in-app vault picker. */
     browse(path: string | null): Promise<DirectoryListing>;
+    /**
+     * Every line of every listed file containing `query`, grouped by file.
+     *
+     * The whole of the search backend, and one operation rather than several
+     * because there is nothing to keep between calls: the listing is already
+     * loaded, so a search is a scan that returns matches.
+     */
+    search(query: string): Promise<SearchHit[]>;
     openVault(path: string): Promise<VaultState>;
     closeVault(): Promise<VaultState>;
     /** Remember whether the sidebar is collapsed, so it survives a restart. */
     setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
     /** Remember the sidebar column's width, so it survives a restart. */
     setSidebarWidth(width: number): Promise<VaultState>;
+    /** Remember which view the sidebar is showing, so it survives a restart. */
+    setSidebarView(view: string): Promise<VaultState>;
     /** Remember the appearance, so it survives a restart. */
     setTheme(theme: string): Promise<VaultState>;
   }
@@ -122,6 +138,9 @@ export function createVaultApi(): VaultApi {
     browse: guard(async (path: string | null) =>
       await browseDirectory(path ?? homeDirectory())
     ),
+    search: guard(async (query: string) =>
+      await searchVaultFiles(await requireVaultRoot(), query)
+    ),
     openVault: guard(openVault),
     closeVault: guard(async () => {
       await updateConfig({ vaultRoot: null });
@@ -136,6 +155,13 @@ export function createVaultApi(): VaultApi {
       // Clamped here as well as in the webview: this is a trust boundary, and
       // a stored width outside the bounds would distort every future launch.
       await updateConfig({ sidebarWidth: clampSidebarWidth(width) });
+      return await readState();
+    }),
+    setSidebarView: guard(async (view: string) => {
+      // Coerced for the same reason the theme is: whatever the page sends
+      // outlives this session, and a view the page cannot draw would leave the
+      // sidebar showing nothing at all.
+      await updateConfig({ sidebarView: coerceSidebarView(view) });
       return await readState();
     }),
     setTheme: guard(async (theme: string) => {
@@ -223,6 +249,7 @@ async function readState(): Promise<VaultState> {
     sidebarCollapsed: config.sidebarCollapsed,
     ...listViewsOf(config),
     sidebarWidth: config.sidebarWidth,
+    sidebarView: config.sidebarView,
     theme: config.theme,
   };
   if (!config.vaultRoot) {

@@ -103,11 +103,11 @@ pre-paint path here is the real one, not a model of it.
 | File                      | Role                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.ts`             | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.                                                                                                                                                                                                          |
-| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                                                                                                                                                                                                                      |
+| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — the activity bar and its panes (Explorer, Search, Recently changed), tab strip, editor, vault picker.                                                                                                                                                                                    |
 | `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                                                                                                                                                                                                                    |
-| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                                                                                                                                                                                                                   |
+| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation and the whole-text search behind the Search view. Every path from the webview passes through here.                                                                                                                                                                  |
 | `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.                                                                                                                                                                                                     |
-| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance, and the file list's three switches as one table).                                                                                                                                                         |
+| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state, width and selected view, appearance, and the file list's three switches as one table).                                                                                                                                          |
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
 | `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                                                  |
 | `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                                                                                                                                                                                                                     |
@@ -120,6 +120,27 @@ pre-paint path here is the real one, not a model of it.
 - **Vault** — a folder the user picks. Its absolute path is stored in the app
   config, so the app reopens where you left off. Nothing is written except files
   you explicitly save.
+- **The sidebar switches between views** — a 48px activity bar down the left
+  chooses what the pane beside it shows, and each pane brings its own toolbar,
+  listing and footer. The resizer, the drawer behaviour and the brand stay with
+  the sidebar, and the selected view is stored beside the width and the
+  collapsed flag. Two consequences worth knowing: the bar is inside the
+  sidebar's width, so the minimum column had to grow by the bar's width and the
+  width clamp subtracts it before the editor's floor; and at drawer width the
+  bar is the only way to change view while the drawer is up, which is fine
+  because its buttons are inside the drawer and so never hit the dismissing
+  scrim.
+- **Three views, and the third was chosen over source control** — Explorer (the
+  file list, unchanged), Search, and Recently changed. Search is one new
+  operation, `searchVaultFiles`, that walks the listing, reads the text files
+  and returns matches grouped by file; a NUL in the opening bytes means "not
+  text" and skips the file, and the `MAX_EDITABLE_BYTES` and `MAX_VAULT_FILES`
+  bounds already on the walk are what keep it to milliseconds on a wiki-sized
+  vault. Recently changed is a sort of the listing by modification time, so it
+  needed no operation at all — the walk now records each file's time. Source
+  control was not built: `.git` is deliberately invisible to the app, a vault is
+  usually not a repository root, and reading git means either shipping it as a
+  runtime dependency or reimplementing it.
 - **The vault's own config says what a page is** — `wiki.yml` (or `wiki.yaml`,
   `wiki.json`) is read before the walk and gives every listed file a scope:
   `input` under `wiki.input` (the wiki's pages), `asset` under `wiki.assets`

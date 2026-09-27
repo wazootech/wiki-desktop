@@ -45,6 +45,16 @@ export interface VaultFile {
    * config to say otherwise).
    */
   scope: VaultScope;
+  /**
+   * Last modification time in milliseconds since the epoch, or 0 when the
+   * filesystem will not say.
+   *
+   * The walk asks for it rather than the view that needs it. A stat per listed
+   * file is the price, and it is paid once per listing, while a view that wanted
+   * the times on its own would have to walk the vault a second time and carry a
+   * second copy of every rule about what is listed.
+   */
+  modified: number;
 }
 
 /** The line ending a file uses on disk. The editor only ever holds LF. */
@@ -339,8 +349,167 @@ async function walk(
         entry.name.endsWith(extension)
       ),
       scope: scopeOf(path, config),
+      modified: await modifiedAt(full),
     });
   }
+}
+
+/** When a file was last written, or 0 when the filesystem will not say. */
+async function modifiedAt(file: string): Promise<number> {
+  try {
+    return (await Deno.stat(file)).mtime?.getTime() ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * How many files a search reports at all, and how many matches of one file it
+ * reports.
+ *
+ * Both are answers about the size of the question, not about the files: a query
+ * that matches a word on every page of a large vault has thousands of honest
+ * matches, and rendering them all is a freeze rather than an answer. The result
+ * says so — a file with more matches than it carries reports `truncated`, so
+ * the view can say "more" instead of quietly implying that is all of them.
+ */
+export const MAX_SEARCH_FILES = 200;
+export const MAX_SEARCH_MATCHES = 20;
+
+/** Characters of a matching line kept for the preview under the file's name. */
+const SEARCH_PREVIEW_CHARS = 160;
+
+/**
+ * Enough of a file to tell text from a picture without reading a whole image
+ * into memory. A NUL byte is the same signal every other tool uses, and it
+ * appears in the first block of anything binary.
+ */
+const BINARY_PROBE_CHARS = 8192;
+
+/** One line that matched, and where it is. */
+export interface SearchMatch {
+  /** 1-based, the way the editor and the status bar both count lines. */
+  line: number;
+  /** The line trimmed and clipped, for the preview. */
+  text: string;
+}
+
+/** Every match a search found in one file. */
+export interface SearchHit {
+  path: string;
+  name: string;
+  scope: VaultScope;
+  matches: SearchMatch[];
+  /** True when the file holds more matches than `matches` carries. */
+  truncated: boolean;
+}
+
+export interface SearchOptions {
+  /** Most files to report at all. */
+  maxFiles?: number;
+  /** Most matches to report per file. */
+  maxMatchesPerFile?: number;
+}
+
+/**
+ * Find every line of every listed file that contains `query`.
+ *
+ * There is no index and no background process, and that is a decision rather
+ * than an omission: the listing is already in the process, the pages are already
+ * in memory's reach, and a wiki's worth of prose is small — a few hundred
+ * kilobytes — so the whole vault is a scan of the same files the editor reads
+ * to open them. What would make this expensive is not the text, and so the
+ * bounds are the ones the listing already has: it walks the same tree, under
+ * the same ignore rules, and a file too large for the editor to hold is not a
+ * file to search either.
+ *
+ * Matching is a case-insensitive substring, which is what the file list's own
+ * filter does. Anything more — words, regular expressions, whole phrases — is a
+ * different question with a different answer for every user, and none of it is
+ * needed to find a word in a page.
+ */
+export async function searchVaultFiles(
+  root: string,
+  query: string,
+  options: SearchOptions = {},
+): Promise<SearchHit[]> {
+  const needle = typeof query === "string" ? query.trim().toLowerCase() : "";
+  if (needle === "") return [];
+  const realRoot = await assertVaultRoot(root);
+  const maxFiles = options.maxFiles ?? MAX_SEARCH_FILES;
+  const maxMatches = options.maxMatchesPerFile ?? MAX_SEARCH_MATCHES;
+  const hits: SearchHit[] = [];
+  for (const file of await listVaultFiles(realRoot)) {
+    if (hits.length >= maxFiles) break;
+    const text = await readTextForSearch(realRoot, file.path);
+    if (text === null) continue;
+    const found = matchLines(text, needle, maxMatches);
+    if (found.matches.length === 0) continue;
+    hits.push({
+      path: file.path,
+      name: file.name,
+      scope: file.scope,
+      matches: found.matches,
+      truncated: found.truncated,
+    });
+  }
+  return hits;
+}
+
+/**
+ * The file as text, or null when it is not one to search: a picture, something
+ * too big for the editor, something the walk listed and the read cannot reach.
+ *
+ * Normalised to LF like every other read, so the line numbers a match reports
+ * are the line numbers the editor shows.
+ */
+async function readTextForSearch(
+  root: string,
+  path: string,
+): Promise<string | null> {
+  let file: string;
+  try {
+    file = await resolveVaultFile(root, path);
+    if ((await Deno.stat(file)).size > MAX_EDITABLE_BYTES) return null;
+  } catch {
+    return null;
+  }
+  let onDisk: string;
+  try {
+    onDisk = await Deno.readTextFile(file);
+  } catch {
+    return null;
+  }
+  if (onDisk.slice(0, BINARY_PROBE_CHARS).includes("\0")) return null;
+  return toEditorText(onDisk);
+}
+
+function matchLines(
+  text: string,
+  needle: string,
+  limit: number,
+): { matches: SearchMatch[]; truncated: boolean } {
+  const matches: SearchMatch[] = [];
+  let truncated = false;
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].toLowerCase().indexOf(needle) === -1) continue;
+    // Counted after the search rather than before it: a file whose matches all
+    // fit is not truncated, and one that has exactly `limit + 1` is.
+    if (matches.length >= limit) {
+      truncated = true;
+      break;
+    }
+    matches.push({ line: index + 1, text: previewOf(lines[index]) });
+  }
+  return { matches, truncated };
+}
+
+function previewOf(line: string): string {
+  const trimmed = line.trim();
+  return trimmed.length <= SEARCH_PREVIEW_CHARS
+    ? trimmed
+    : `${trimmed.slice(0, SEARCH_PREVIEW_CHARS)}…`;
 }
 
 async function describeFile(
