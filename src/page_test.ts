@@ -2017,7 +2017,7 @@ Deno.test("the changes pane can commit, and the tick is git's to give", () => {
   // in a repository, a repository with nothing pending, and one with changes.
   for (
     const sentence of [
-      "'This vault is not inside a git repository.'",
+      "'Not a git repository, so there is nothing to commit.'",
       "'Nothing pending. Every file is committed.'",
       "'Open a vault to commit to a repository.'",
     ]
@@ -2030,7 +2030,7 @@ Deno.test("the changes pane can commit, and the tick is git's to give", () => {
   // A truncated list that does not say it is truncated is a list lying about
   // what is staged.
   assert(
-    page.includes("' — showing the first '") &&
+    page.includes("'first ' + shown + ' of ' + gitPendingTotal + ' changed'") &&
       page.includes("gitPendingTotal = result.total"),
     "and says how much of a long status it is not showing",
   );
@@ -2053,6 +2053,7 @@ Deno.test("the commit box is one box, drawn from one list of elements", () => {
     "amendButton",
     "pushButton",
     "remoteState",
+    "remoteStatus",
     "commitNote",
   ];
   for (const id of ids) {
@@ -2072,23 +2073,88 @@ Deno.test("the commit box is one box, drawn from one list of elements", () => {
       /id="pushButton"[^>]*disabled/.test(page),
     "and all three buttons start disabled rather than enabled-then-refused",
   );
-  // Amend takes the same message and the same ticks as Commit, so it belongs
-  // on the message's row rather than on a row of its own: a second row would
-  // be a way of making the reader look for the same gesture under a new name.
+  // The box reads as one column, top to bottom, and the order is part of that:
+  // state, then the field, then the two verbs, then the branch.
   const order = [
+    "commitState",
     "commitMessage",
     "amendButton",
     "commitButton",
     "remoteState",
     "pushButton",
+    "remoteStatus",
     "commitNote",
   ].map((id) => page.indexOf(`id="${id}"`));
   assert(
     order.every((at, index) =>
       at > 0 && (index === 0 || at > order[index - 1])
     ),
-    "the box reads as one gesture: message, Amend, Commit, then the branch line with its Push below them",
+    "the box reads top to bottom: state, field, Amend, Commit, branch, Push, branch status, note",
   );
+  // The field and the two buttons shared a row once, and at the default 230px
+  // sidebar that crushed the field to about fifteen pixels and ran the Commit
+  // label off the edge of the sidebar. A field is the one control in here that
+  // cannot be abbreviated, so it must not be a child of an action row.
+  assert(
+    !/<div class="commit-row[^"]*">\s*<label class="sr-only" for="commitMessage">/
+      .test(
+        page,
+      ) &&
+      !/class="commit-input"[^>]*style=/.test(page),
+    "the message field is not inside an action row, and nothing sizes it by hand",
+  );
+  // Every control in the box is 28px tall, so the field and the buttons share a
+  // baseline. The field was 26 while the buttons were 28, which is a two-pixel
+  // step across every commit in the app's UI.
+  assert(
+    /\.commit-input \{[^}]*height: 28px/.test(page) &&
+      /\.commit-button \{[^}]*height: 28px/.test(page),
+    "the field and the buttons are the same height",
+  );
+  // The branch name truncates rather than wrapping. Wrapped, it ran to eight
+  // lines in a 98px column and cost the History section its place; the status
+  // line underneath is where the sentence the reader acts on now lives.
+  assert(
+    /\.commit-branch \{[^}]*white-space: nowrap[^}]*text-overflow: ellipsis/
+      .test(
+        page,
+      ),
+    "the branch reference is one line with an ellipsis and a tooltip, not a paragraph",
+  );
+  // Controls that could never act are hidden rather than greyed out.
+  assert(
+    page.includes("'is-unavailable'") &&
+      /is-unavailable \.commit-amend[\s\S]*?is-unavailable \.commit-remote/
+        .test(
+          page,
+        ) &&
+      page.includes("'has-no-branch'"),
+    "a vault with no repository, or a detached HEAD, drops the row and the amend button rather than disabling them",
+  );
+  // Everything spends space only when it has something to say: an empty status
+  // line and an empty note both collapse, so a box at rest is four rows.
+  assert(
+    page.includes(".commit-branch-status:empty { display: none; }") &&
+      page.includes(".commit-note:empty { display: none; }"),
+    "a line with nothing in it costs nothing",
+  );
+  // The rhythm, in one place rather than scattered: 6px between the field and
+  // the buttons the reader reaches for next, 8px where the subject changes,
+  // 3px under a line of small text, 5px under a note.
+  for (
+    const [selector, gap] of [
+      [".commit-row", "gap: 6px"],
+      [".commit-actions", "margin-top: 6px"],
+      [".commit-remote", "margin-top: 8px"],
+      [".commit-branch-status", "margin-top: 3px"],
+      [".commit-note", "margin-top: 5px"],
+    ] as const
+  ) {
+    const rule = new RegExp(
+      `\\${selector} \\{[^}]*${gap.replace(" ", " ")}`,
+    ).exec(page);
+    assert(rule !== null, `${selector} keeps its place in the rhythm: ${gap}`);
+  }
 });
 
 Deno.test("the commit box can amend and push, and says when neither is a thing", () => {
@@ -2134,34 +2200,34 @@ Deno.test("the commit box can amend and push, and says when neither is a thing",
     "Amend is disabled once the last commit is on the remote, because replacing it is not an edit anybody else can see",
   );
   assert(
-    page.includes(
-      "'the last commit is already there, so it cannot be amended'",
-    ),
-    "and the branch line says which commit it is, rather than just greying the button out",
+    page.includes("'last commit already pushed'") &&
+      page.includes("so it cannot be replaced. Commit the file instead."),
+    "and the branch status says which commit it is, with the button's own reason in its tooltip, rather than just greying the button out",
   );
-  // Every way the push can be impossible is a sentence, because a disabled
-  // button with nothing next to it is a button the reader has to guess about.
+  // Every way the push can be impossible is a fragment the reader can act on,
+  // because a disabled button with nothing next to it is a button they have to
+  // guess about.
   for (
     const sentence of [
-      "'Not a repository, so there is no branch to push.'",
-      "'On a detached HEAD, which is not a branch to push.'",
-      "' has not been pushed anywhere yet.'",
-      "' commits to push'",
-      "'1 commit to push'",
-      "so pull before pushing",
+      "'1 behind · pull first'",
+      "behind · pull first'",
+      "'never pushed · nowhere to push to'",
+      "'detached HEAD'",
+      "'no branch to push from'",
     ]
   ) {
     assert(
       page.includes(sentence),
-      `the branch line can say "${sentence}", which is a different situation each time`,
+      `the branch status can say "${sentence}", which is a different situation each time`,
     );
   }
   // Being behind is not this app's problem to fix — it has no pull — so it says
   // so, rather than leaving the reader to find out by being refused.
   assert(
-    page.includes("' commits behind, so pull before pushing'") &&
-      page.includes("'1 commit behind, so pull before pushing'"),
-    "and it names pulling as the next step, in both the singular and the plural",
+    page.includes("'1 behind · pull first'") &&
+      page.includes(" behind · pull first'") &&
+      page.includes("'Pull first: the remote has '"),
+    "and it names pulling as the next step, in the line and in the button's own reason",
   );
   // What "up to date" means is git's answer, so the counts are asked for again
   // after a push rather than decremented here.

@@ -330,18 +330,21 @@ function paneMarkup(key: SidebarView): string {
         `<ul class="file-list" id="recentList" aria-label="Recently changed files"></ul>
                 <div class="commit-box" id="commitBox">
                   <div class="commit-state" id="commitState">Reading the vault's git status</div>
-                  <div class="commit-row">
-                    <label class="sr-only" for="commitMessage">Message for the ticked files</label>
-                    <input class="commit-input" id="commitMessage" type="text"
-                           placeholder="Message for the ticked files" autocomplete="off" spellcheck="true" />
-                    <button class="button commit-button" id="amendButton" type="button" disabled
+                  <label class="sr-only" for="commitMessage">Message for the ticked files</label>
+                  <input class="commit-input" id="commitMessage" type="text"
+                         placeholder="Commit message" autocomplete="off" spellcheck="true" />
+                  <div class="commit-row commit-actions">
+                    <button class="button button-secondary commit-button commit-amend" id="amendButton" type="button" disabled
+                            aria-describedby="remoteState"
                             title="Replace the last commit with these files and this message">Amend</button>
-                    <button class="button button-primary commit-button" id="commitButton" type="button" disabled>Commit</button>
+                    <button class="button button-primary commit-button commit-primary" id="commitButton" type="button" disabled>Commit</button>
                   </div>
                   <div class="commit-row commit-remote">
-                    <span class="commit-remote-state" id="remoteState">Reading where this branch stands</span>
-                    <button class="button commit-button" id="pushButton" type="button" disabled>Push</button>
+                    <span class="commit-branch" id="remoteState">Reading where this branch stands</span>
+                    <button class="button button-secondary commit-button" id="pushButton" type="button" disabled
+                            aria-describedby="remoteStatus">Push</button>
                   </div>
+                  <div class="commit-branch-status" id="remoteStatus" role="note"></div>
                   <div class="commit-note" id="commitNote" role="status"></div>
                 </div>`,
       )
@@ -963,44 +966,86 @@ const pageTemplate = `<!DOCTYPE html>
     .split-head { flex: none; }
     /*
      * The commit box at the foot of the changes section: what git has pending,
-     * a line to write the message on, and the button that acts on both.
+     * a line to write the message on, and the buttons that act on both.
      *
      * It sits below the list rather than above it because the list is what
      * the reader is reading and the box is what they do once they have decided.
      * It is pinned to the bottom of the section rather than scrolling with the
      * list, because a Commit button that scrolls out of reach halfway down a
      * long vault is a button nobody finds.
+     *
+     * One row each, top to bottom: state, field, actions, branch. The field
+     * used to share a row with both buttons, and at a 230px sidebar -- which is
+     * the default and not an edge case -- the three of them did not fit: the
+     * field was crushed to about fifteen pixels and the Commit label ran off
+     * the edge of the sidebar and was cut. A field is the one control here that
+     * cannot be abbreviated, so it takes the width and the buttons share what
+     * is left.
+     *
+     * The vertical rhythm: 6px between the field and the buttons, which the
+     * reader does in sequence; 8px where the box changes subject, before the
+     * branch row; 3px under a line of small text. Every control is 28px tall,
+     * so the field and the buttons share a baseline rather than stepping.
      */
     .commit-box {
-      flex: none; margin: 0; padding: 7px 8px 8px;
+      flex: none; margin: 0; padding: 8px 8px 9px;
       border-top: 1px solid var(--line); background: var(--surface-raised);
     }
     .commit-state {
-      margin-bottom: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.45;
+      margin-bottom: 6px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
     }
     .commit-state.is-error { color: var(--brand-text); }
-    .commit-row { display: flex; gap: 5px; }
+    .commit-row { display: flex; gap: 6px; align-items: center; }
     .commit-input {
-      flex: 1; min-width: 0; height: 26px; padding: 0 7px;
-      border: 1px solid var(--line); border-radius: 5px;
-      background: var(--surface-raised); color: var(--text-body);
+      display: block; width: 100%; min-width: 0; height: 28px; padding: 0 8px;
+      border: 1px solid var(--line); border-radius: 6px;
+      background: var(--panel); color: var(--text-body);
       font-family: inherit; font-size: 11.5px;
     }
     .commit-input:focus-visible { outline: 1px solid var(--brand-marker); outline-offset: -1px; }
-    /* The button keeps its own width so the input does not jump sideways every
-       time the label changes between "Commit" and "Commit 3 files". */
-    .commit-button { flex: none; min-width: 62px; }
-    /* Amend sits next to Commit rather than on its own row because it is the
-       same gesture with a different verb -- the same ticked files and the same
-       message line -- and putting it on a row of its own would be a way of
-       making the reader look for it. */
-    .commit-remote { margin-top: 5px; align-items: center; }
-    .commit-remote-state {
-      flex: 1; min-width: 0; color: var(--muted); font-size: 10.5px; line-height: 1.45;
+    .commit-actions { margin-top: 6px; }
+    /* Amend keeps the width its word needs and Commit takes the rest, so the
+       primary action is the large one and the two do not swap sizes as the
+       label changes between "Commit" and "Commit 12". Both clip to an
+       ellipsis rather than overflowing the box, which is what a min-width on
+       its own invites in a column this narrow. */
+    .commit-button {
+      flex: none; min-width: 0; height: 28px; padding: 0 9px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .commit-remote-state.is-error { color: var(--brand-text); }
+    /* Amend gives up width before Commit does: the primary verb is the one a
+       reader is reaching for, and a 46px floor keeps its own word from
+       disappearing entirely in a column this narrow. */
+    .commit-amend { flex: 0 1 auto; min-width: 46px; }
+    .commit-primary { flex: 1 1 auto; }
+    .commit-remote { margin-top: 8px; }
+    /* Reference rather than status: this names where Push would send the
+       branch, so it truncates instead of wrapping. Wrapped, it ran to eight
+       lines in a 98px column and pushed the History section off the bottom of
+       a 675px window. The full text is in the tooltip, and the status line
+       underneath carries the part that changes what the reader does. */
+    .commit-branch {
+      flex: 1; min-width: 0; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .commit-branch-status {
+      margin-top: 3px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+    }
+    .commit-branch-status:empty { display: none; }
+    .commit-branch-status.is-error { color: var(--brand-text); }
+    /* A vault that is not in a repository has no source control at all, so the
+       box says so once and drops the controls that could never act. A greyed
+       out Amend and a dead Push under a disabled field is three affordances
+       for a feature that is not there. */
+    .commit-box.is-unavailable .commit-amend,
+    .commit-box.is-unavailable .commit-remote,
+    .commit-box.is-unavailable .commit-branch-status { display: none; }
+    /* A detached HEAD is not a branch: there is nowhere for Push to go and no
+       branch name to show, so the row goes rather than saying so in the space
+       of two. */
+    .commit-box.has-no-branch .commit-remote { display: none; }
     .commit-note {
-      margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45;
+      margin-top: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
     }
     .commit-note:empty { display: none; }
     .commit-note.is-error { color: var(--brand-text); }
@@ -1605,7 +1650,9 @@ const pageTemplate = `<!DOCTYPE html>
       const amendButton = el('amendButton');
       const pushButton = el('pushButton');
       const remoteState = el('remoteState');
+      const remoteStatus = el('remoteStatus');
       const commitNote = el('commitNote');
+      const commitBox = el('commitBox');
       const recentHistory = el('recentHistory');
       const recentStatus = el('recentStatus');
       const recentSplit = el('recentSplit');
@@ -2739,12 +2786,20 @@ const pageTemplate = `<!DOCTYPE html>
           !committing &&
           !pushing;
         commitButton.disabled = !ready;
+        // The count is on the button without the noun: at the default sidebar
+        // width "Commit 1 file" does not fit beside Amend, and what the
+        // overflow did to it was cut the word off mid-label. The state line
+        // above says what the files are, so the button can say how many.
         commitButton.textContent = committing
           ? 'Committing'
           : paths.length > 0
-          ? 'Commit ' +
-            (paths.length === 1 ? '1 file' : paths.length + ' files')
+          ? 'Commit ' + paths.length
           : 'Commit';
+        commitButton.title = ready
+          ? 'Commit ' + paths.length +
+            (paths.length === 1 ? ' ticked file' : ' ticked files') +
+            ' with this message'
+          : 'Write a message, and tick a file, to commit';
         // An amend is a commit that replaces the last one, so it is ready on
         // exactly the same terms -- except when the last commit is already
         // somewhere else, where replacing it is not an edit anybody else can
@@ -2752,6 +2807,11 @@ const pageTemplate = `<!DOCTYPE html>
         // before the reader writes a message they cannot use.
         amendButton.disabled = !ready || (gitRemote !== null && gitRemote.published);
         amendButton.textContent = amending ? 'Amending' : 'Amend';
+        amendButton.title = amendButton.disabled && gitRemote !== null &&
+            gitRemote.published
+          ? 'The last commit is already on ' + gitRemote.upstream +
+            ', so it cannot be replaced. Commit the file instead.'
+          : 'Replace the last commit with these files and this message';
         pushButton.disabled = pushing ||
           committing ||
           gitRemote === null ||
@@ -2759,79 +2819,117 @@ const pageTemplate = `<!DOCTYPE html>
           !(gitRemote.ahead > 0);
         pushButton.textContent = pushing
           ? 'Pushing'
-          : gitRemote !== null && gitRemote.ahead > 1
+          : gitRemote !== null && gitRemote.ahead > 0
           ? 'Push ' + gitRemote.ahead
           : 'Push';
+        pushButton.title = pushButton.disabled && gitRemote !== null &&
+            gitRemote.behind > 0
+          ? 'Pull first: the remote has ' + gitRemote.behind +
+            (gitRemote.behind === 1 ? ' commit' : ' commits') + ' this does not.'
+          : 'Push ' + (gitRemote === null ? '' : gitRemote.branch) +
+            ' to ' + (gitRemote === null ? 'its remote' : gitRemote.upstream);
+
+        // A vault with no repository has no commit, no amend and no branch,
+        // so the box says that once and drops the controls that could never
+        // act. They are hidden rather than disabled because a greyed-out
+        // Amend beside a greyed-out Commit is two controls offering nothing.
+        commitBox.classList.toggle(
+          'is-unavailable',
+          vault.root === null || gitPending === null,
+        );
+        // A detached HEAD is not a branch: there is nowhere for Push to go and
+        // no branch name to show, so the row goes rather than saying so in the
+        // space of two.
+        commitBox.classList.toggle(
+          'has-no-branch',
+          gitRemote !== null && gitRemote.branch === null,
+        );
 
         if (vault.root === null) {
           commitState.textContent = 'Open a vault to commit to a repository.';
           commitState.classList.remove('is-error');
         } else if (gitPending === null) {
-          commitState.textContent = 'This vault is not inside a git repository.';
+          commitState.textContent = 'Not a git repository, so there is nothing to commit.';
           commitState.classList.remove('is-error');
         } else if (gitPending.size === 0) {
           commitState.textContent = 'Nothing pending. Every file is committed.';
           commitState.classList.remove('is-error');
         } else {
-          const total = gitPendingTotal;
+          // Two numbers, because they answer two questions: what git has, and
+          // what this commit would take. "3 changed" with two of them unticked
+          // would be true and useless.
           const shown = gitPending.size;
-          const files = shown === 1 ? '1 file pending' : shown + ' files pending';
-          commitState.textContent = total > shown
-            ? files + ' — showing the first ' + shown + ' of ' + total + '.'
-            : files + '.';
+          const counted = gitPendingTotal > shown
+            ? 'first ' + shown + ' of ' + gitPendingTotal + ' changed'
+            : (shown === 1 ? '1 changed' : shown + ' changed');
+          const chosen = paths.length === 0
+            ? 'none ticked'
+            : paths.length === shown && shown === gitPendingTotal
+            ? 'all ticked'
+            : paths.length + ' of ' + gitPendingTotal + ' ticked';
+          commitState.textContent = counted + ' · ' + chosen;
           commitState.classList.remove('is-error');
         }
-        remoteState.textContent = remoteSentence();
-        remoteState.classList.toggle('is-error', remoteIsError());
+        remoteState.textContent = remoteLabel();
+        remoteState.title = remoteState.textContent;
+        remoteStatus.textContent = remoteStatusLine();
+        remoteStatus.classList.toggle('is-error', remoteIsError());
         if (gitNote !== '') commitNote.textContent = gitNote;
         else commitNote.textContent = '';
         commitNote.classList.toggle('is-error', gitNoteIsError);
       }
 
       /**
-       * Where the branch stands, in one line, or why there is nothing to say.
+       * The branch and where it goes, in the fewest words that still name both.
        *
-       * Every branch of this is a sentence a reader can act on rather than a
-       * dash. "Behind" in particular is not this app's problem to fix -- it
-       * cannot pull -- so it says so, because a line that says "1 behind" and
+       * Reference rather than status, and truncated rather than wrapped: the
+       * full sentence this used to be ran to eight lines in a 98px column and
+       * cost the History section its place. The status line underneath carries
+       * what changes what the reader does, and the tooltip carries what the
+       * truncation cut.
+       */
+      function remoteLabel() {
+        if (vault.root === null || gitRemote === null) return '';
+        if (gitRemote.branch === null) return 'detached HEAD';
+        if (gitRemote.upstream === null) return gitRemote.branch;
+        return gitRemote.branch + ' → ' + gitRemote.upstream;
+      }
+
+      /**
+       * What about the branch the reader can act on, and nothing else.
+       *
+       * Fragments rather than sentences, because this is a line of 10.5px type
+       * beside two buttons and every word here costs a wrap. "Behind" in
+       * particular is not this app's problem to fix -- it cannot pull -- so it
+       * says what the next step is, because a line that says "1 behind" and
        * leaves the reader guessing whether Push will work is the sort of thing
        * that gets discovered by being refused.
+       *
+       * The order is the order of what stops the reader: behind stops a push,
+       * a missing upstream stops there being a push at all, and a published
+       * last commit stops an amend. What is merely true -- commits waiting to
+       * go -- is on the Push button already, so it is not repeated here, and
+       * the amend fragment says only the fact: the button above it is visibly
+       * off, and the reason in the tooltip is one line long.
        */
-      function remoteSentence() {
-        if (vault.root === null) return 'Open a vault to see its branch.';
-        if (gitRemote === null) {
-          return gitPending === null
-            ? 'Not a repository, so there is no branch to push.'
-            : 'Git could not be asked where this branch stands.';
+      function remoteStatusLine() {
+        if (vault.root === null || gitRemote === null) return '';
+        if (gitRemote.branch === null) return 'no branch to push from';
+        const parts = [];
+        if (gitRemote.behind > 0) {
+          parts.push(
+            gitRemote.behind === 1
+              ? '1 behind · pull first'
+              : gitRemote.behind + ' behind · pull first',
+          );
         }
-        if (gitRemote.branch === null) {
-          return 'On a detached HEAD, which is not a branch to push.';
-        }
-        const where = gitRemote.branch;
         if (gitRemote.upstream === null) {
-          return where + ' has not been pushed anywhere yet.';
-        }
-        const parts = [where + ' → ' + gitRemote.upstream];
-        if (gitRemote.ahead === null) {
-          parts.push('not fetched, so this app cannot tell what is waiting');
-        } else {
-          if (gitRemote.ahead > 0) {
-            parts.push(gitRemote.ahead === 1
-              ? '1 commit to push'
-              : gitRemote.ahead + ' commits to push');
-          }
-          if (gitRemote.behind > 0) {
-            // The app has no pull, so a reader told only that they are behind
-            // will press Push and be refused. Say the next step is elsewhere.
-            parts.push(gitRemote.behind === 1
-              ? '1 commit behind, so pull before pushing'
-              : gitRemote.behind + ' commits behind, so pull before pushing');
-          }
+          parts.push('never pushed · nowhere to push to');
         }
         if (gitRemote.published) {
-          parts.push('the last commit is already there, so it cannot be amended');
+          parts.push('last commit already pushed');
         }
-        return parts.join('; ') + '.';
+        return parts.join(' · ');
       }
 
       /**
