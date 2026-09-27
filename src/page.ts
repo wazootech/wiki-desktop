@@ -334,7 +334,13 @@ function paneMarkup(key: SidebarView): string {
                     <label class="sr-only" for="commitMessage">Message for the ticked files</label>
                     <input class="commit-input" id="commitMessage" type="text"
                            placeholder="Message for the ticked files" autocomplete="off" spellcheck="true" />
+                    <button class="button commit-button" id="amendButton" type="button" disabled
+                            title="Replace the last commit with these files and this message">Amend</button>
                     <button class="button button-primary commit-button" id="commitButton" type="button" disabled>Commit</button>
+                  </div>
+                  <div class="commit-row commit-remote">
+                    <span class="commit-remote-state" id="remoteState">Reading where this branch stands</span>
+                    <button class="button commit-button" id="pushButton" type="button" disabled>Push</button>
                   </div>
                   <div class="commit-note" id="commitNote" role="status"></div>
                 </div>`,
@@ -984,6 +990,15 @@ const pageTemplate = `<!DOCTYPE html>
     /* The button keeps its own width so the input does not jump sideways every
        time the label changes between "Commit" and "Commit 3 files". */
     .commit-button { flex: none; min-width: 62px; }
+    /* Amend sits next to Commit rather than on its own row because it is the
+       same gesture with a different verb -- the same ticked files and the same
+       message line -- and putting it on a row of its own would be a way of
+       making the reader look for it. */
+    .commit-remote { margin-top: 5px; align-items: center; }
+    .commit-remote-state {
+      flex: 1; min-width: 0; color: var(--muted); font-size: 10.5px; line-height: 1.45;
+    }
+    .commit-remote-state.is-error { color: var(--brand-text); }
     .commit-note {
       margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45;
     }
@@ -1587,6 +1602,9 @@ const pageTemplate = `<!DOCTYPE html>
       const commitState = el('commitState');
       const commitMessage = el('commitMessage');
       const commitButton = el('commitButton');
+      const amendButton = el('amendButton');
+      const pushButton = el('pushButton');
+      const remoteState = el('remoteState');
       const commitNote = el('commitNote');
       const recentHistory = el('recentHistory');
       const recentStatus = el('recentStatus');
@@ -2631,7 +2649,18 @@ const pageTemplate = `<!DOCTYPE html>
       let gitNote = '';
       let gitNoteIsError = false;
       let committing = false;
+      let amending = false;
+      let pushing = false;
       let gitToken = 0;
+      /*
+       * Where the branch stands against the remote, or null when there is no
+       * repository to ask. Every field inside it can be null for a different
+       * reason -- no branch, no upstream, no count -- and the box says which,
+       * because "nothing to push" and "we do not know whether there is anything
+       * to push" are not the same sentence and only the first one is an answer
+       * the button can act on.
+       */
+      let gitRemote = null;
 
       /**
        * Ask git what is pending, then redraw the list's ticks and the box.
@@ -2650,6 +2679,7 @@ const pageTemplate = `<!DOCTYPE html>
         if (vault.root === null) {
           gitPending = null;
           gitPendingTotal = 0;
+          gitRemote = null;
           ticked = new Set();
           updateCommitBox();
           return;
@@ -2663,6 +2693,7 @@ const pageTemplate = `<!DOCTYPE html>
           // nothing pending, and the note carries the difference.
           gitPending = null;
           gitPendingTotal = 0;
+          gitRemote = null;
           ticked = new Set();
           // A null answer is either "not a repository", which needs no note
           // because the state line already says it, or a call that failed,
@@ -2675,6 +2706,7 @@ const pageTemplate = `<!DOCTYPE html>
           result.changes.map((change) => [change.path, change]),
         );
         gitPendingTotal = result.total;
+        gitRemote = result.remote;
         // Ticks follow git: a path that no longer has a pending change cannot
         // stay ticked, because committing it would be committing nothing. A tick
         // the reader placed on a file that is still pending is left alone,
@@ -2697,10 +2729,15 @@ const pageTemplate = `<!DOCTYPE html>
       /** What the box says about the repository, above the message line. */
       function updateCommitBox() {
         const paths = [...ticked];
+        // One readiness for all three verbs. They take the same ticked files
+        // and the same message, so a box that let one of them through while
+        // the others were disabled would be saying the gesture is not ready
+        // and then doing it anyway.
         const ready = gitPending !== null &&
           paths.length > 0 &&
           commitMessage.value.trim() !== '' &&
-          !committing;
+          !committing &&
+          !pushing;
         commitButton.disabled = !ready;
         commitButton.textContent = committing
           ? 'Committing'
@@ -2708,6 +2745,23 @@ const pageTemplate = `<!DOCTYPE html>
           ? 'Commit ' +
             (paths.length === 1 ? '1 file' : paths.length + ' files')
           : 'Commit';
+        // An amend is a commit that replaces the last one, so it is ready on
+        // exactly the same terms -- except when the last commit is already
+        // somewhere else, where replacing it is not an edit anybody else can
+        // see. The backend refuses that too; this is the button admitting it
+        // before the reader writes a message they cannot use.
+        amendButton.disabled = !ready || (gitRemote !== null && gitRemote.published);
+        amendButton.textContent = amending ? 'Amending' : 'Amend';
+        pushButton.disabled = pushing ||
+          committing ||
+          gitRemote === null ||
+          gitRemote.upstream === null ||
+          !(gitRemote.ahead > 0);
+        pushButton.textContent = pushing
+          ? 'Pushing'
+          : gitRemote !== null && gitRemote.ahead > 1
+          ? 'Push ' + gitRemote.ahead
+          : 'Push';
 
         if (vault.root === null) {
           commitState.textContent = 'Open a vault to commit to a repository.';
@@ -2727,9 +2781,69 @@ const pageTemplate = `<!DOCTYPE html>
             : files + '.';
           commitState.classList.remove('is-error');
         }
+        remoteState.textContent = remoteSentence();
+        remoteState.classList.toggle('is-error', remoteIsError());
         if (gitNote !== '') commitNote.textContent = gitNote;
         else commitNote.textContent = '';
         commitNote.classList.toggle('is-error', gitNoteIsError);
+      }
+
+      /**
+       * Where the branch stands, in one line, or why there is nothing to say.
+       *
+       * Every branch of this is a sentence a reader can act on rather than a
+       * dash. "Behind" in particular is not this app's problem to fix -- it
+       * cannot pull -- so it says so, because a line that says "1 behind" and
+       * leaves the reader guessing whether Push will work is the sort of thing
+       * that gets discovered by being refused.
+       */
+      function remoteSentence() {
+        if (vault.root === null) return 'Open a vault to see its branch.';
+        if (gitRemote === null) {
+          return gitPending === null
+            ? 'Not a repository, so there is no branch to push.'
+            : 'Git could not be asked where this branch stands.';
+        }
+        if (gitRemote.branch === null) {
+          return 'On a detached HEAD, which is not a branch to push.';
+        }
+        const where = gitRemote.branch;
+        if (gitRemote.upstream === null) {
+          return where + ' has not been pushed anywhere yet.';
+        }
+        const parts = [where + ' → ' + gitRemote.upstream];
+        if (gitRemote.ahead === null) {
+          parts.push('not fetched, so this app cannot tell what is waiting');
+        } else {
+          if (gitRemote.ahead > 0) {
+            parts.push(gitRemote.ahead === 1
+              ? '1 commit to push'
+              : gitRemote.ahead + ' commits to push');
+          }
+          if (gitRemote.behind > 0) {
+            // The app has no pull, so a reader told only that they are behind
+            // will press Push and be refused. Say the next step is elsewhere.
+            parts.push(gitRemote.behind === 1
+              ? '1 commit behind, so pull before pushing'
+              : gitRemote.behind + ' commits behind, so pull before pushing');
+          }
+        }
+        if (gitRemote.published) {
+          parts.push('the last commit is already there, so it cannot be amended');
+        }
+        return parts.join('; ') + '.';
+      }
+
+      /**
+       * Whether the branch line is saying something went wrong.
+       *
+       * A detached HEAD and a missing upstream are both ordinary states, so
+       * neither is dressed up as a failure; only the case where git would not
+       * answer at all is, because that one is a real fault in the setup rather
+       * than a fact about the repository.
+       */
+      function remoteIsError() {
+        return gitRemote === null && gitPending !== null;
       }
 
       function setGitNote(text, isError) {
@@ -2771,15 +2885,113 @@ const pageTemplate = `<!DOCTYPE html>
         // to be committed again, and one that failed should leave them exactly
         // where they were, because they are still the thing to fix.
         commitMessage.value = '';
+        // "1 file" rather than "1 files": the button already counts properly,
+        // and a note that miscounts the commit it just made is the sort of
+        // thing a reader trusts about the next one.
+        const howMany = result.committed.length === 1
+          ? '1 file'
+          : result.committed.length + ' files';
         setGitNote(
           result.hash === ''
-            ? 'Committed ' + result.committed.length + ' files.'
-            : 'Committed ' + result.committed.length + ' files as ' +
-              result.hash + '.',
+            ? 'Committed ' + howMany + '.'
+            : 'Committed ' + howMany + ' as ' + result.hash + '.',
           false,
         );
         ticked = new Set();
         renderRecent();
+      }
+
+      /**
+       * Fold the ticked files into the last commit, with this message.
+       *
+       * The usual reason to amend is a subject line somebody would rather not
+       * live with, and the reader is standing in the pane with the files
+       * already ticked. Leaving to amend means leaving the app, and reaching
+       * for a terminal over a working tree this app has open, which is the
+       * arrangement where a message and a commit end up disagreeing.
+       *
+       * Refused when the last commit is already on the remote -- a disabled
+       * button above and a sentence from git's own history check behind it,
+       * because a button's disabled state is a hint and not a boundary. It
+       * replaces the previous message, which is the other thing worth knowing:
+       * the note says so after the fact rather than a confirmation first,
+       * since a second dialog in a pane this small is a worse place to put it.
+       */
+      async function amendTicked() {
+        if (committing || pushing) return;
+        const paths = [...ticked];
+        const message = commitMessage.value.trim();
+        if (paths.length === 0 || message === '') return;
+        committing = true;
+        amending = true;
+        setGitNote('Replacing the last commit with ' + paths.length + ' files.', false);
+        updateCommitBox();
+        const result = await call('amendFiles', [message, paths]);
+        committing = false;
+        amending = false;
+        if (result === null) {
+          setGitNote(
+            lastCallError === ''
+              ? 'The amend did not go through.'
+              : lastCallError,
+            true,
+          );
+          updateCommitBox();
+          return;
+        }
+        // Cleared for the same reason the commit box is: the words are in the
+        // commit now, and leaving them under the cursor invites a second
+        // commit with the same subject.
+        commitMessage.value = '';
+        setGitNote(
+          'Replaced the last commit' +
+            (result.hash === '' ? '.' : ' with ' + result.hash + '.'),
+          false,
+        );
+        ticked = new Set();
+        renderRecent();
+      }
+
+      /**
+       * Push this branch to the remote its configuration already names.
+       *
+       * No arguments go over, deliberately: the destination is read out of git
+       * on the other side rather than chosen here, so there is nothing for a
+       * mis-click to aim and nothing for anything else to aim either. There is
+       * no force either, which means a branch that is behind will be refused
+       * with git's reason rather than resolved -- the reader can pull, or say
+       * so, but this app does not throw somebody else's commit away.
+       *
+       * A second status is asked for afterwards rather than the counts being
+       * guessed at: what "up to date" means is git's answer, not ours.
+       */
+      async function pushTicked() {
+        if (committing || pushing) return;
+        if (gitRemote === null || gitRemote.upstream === null) return;
+        if (!(gitRemote.ahead > 0)) return;
+        const ahead = gitRemote.ahead;
+        pushing = true;
+        setGitNote(
+          'Pushing ' + ahead + (ahead === 1 ? ' commit' : ' commits') +
+            ' to ' + gitRemote.upstream + '.',
+          false,
+        );
+        updateCommitBox();
+        const result = await call('pushBranch', []);
+        pushing = false;
+        if (result === null) {
+          setGitNote(
+            lastCallError === '' ? 'The push did not go through.' : lastCallError,
+            true,
+          );
+          updateCommitBox();
+          return;
+        }
+        setGitNote('Pushed ' + result.branch + ' to ' + result.remote + '.', false);
+        // The counts in the branch line are the only thing that has changed and
+        // only git knows the new ones, so the status is asked for again rather
+        // than decremented here.
+        refreshGitStatus();
       }
 
       /**
@@ -3877,13 +4089,18 @@ const pageTemplate = `<!DOCTYPE html>
         // in the editor: the reader has finished writing it, and the button is
         // the only other thing to reach for. The button's own disabled state is
         // the check, so a line with nothing ticked and Enter does nothing
-        // rather than committing something unintended.
+        // rather than committing something unintended. It commits rather than
+        // amends, and that is the safe way round: a commit somebody did not
+        // mean is a second commit, an amend somebody did not mean is a commit
+        // that no longer exists.
         commitMessage.addEventListener('keydown', (event) => {
           if (event.key !== 'Enter') return;
           event.preventDefault();
           commitTicked();
         });
         commitButton.addEventListener('click', commitTicked);
+        amendButton.addEventListener('click', amendTicked);
+        pushButton.addEventListener('click', pushTicked);
         saveButton.addEventListener('click', saveFile);
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);

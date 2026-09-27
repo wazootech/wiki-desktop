@@ -153,6 +153,37 @@ pre-paint path here is the real one, not a model of it.
   paths go to the backend rather than a "commit everything" flag, so a commit
   from the pane can only ever contain what was ticked, and a file somebody else
   staged in another window is left where it was.
+- **The box can amend and push, and refuses to force either idea** — amend is
+  the same gesture as commit with a different verb, so it takes the same ticked
+  paths and the same message line and sits beside the Commit button rather than
+  on a row of its own. The usual reason to amend is a subject line somebody
+  would rather not live with, and the reader is already standing there with the
+  files ticked; leaving to amend means leaving the app, and reaching for a
+  terminal over a working tree this app has open. It is refused for exactly one
+  thing: a last commit the remote already has, because replacing that is not an
+  edit anybody else can see, it is a divergence. The button greys out and the
+  branch line says which commit it is; the backend refuses it again, because a
+  disabled button is a hint and not a boundary. A commit that is not pushed yet
+  is squarely amendable, which is the case that is actually common. Push takes
+  **no arguments at all**. The destination is read out of `branch.<name>.remote`
+  and `branch.<name>.merge` on the other side rather than chosen by the page, so
+  there is nothing for a mis-click to aim and nothing for anything else to aim
+  either; a branch with no upstream is refused rather than guessed at, because a
+  wiki's repository is as likely to be a colleague's personal one as anything
+  else. There is no `--force`, no `--all` and no refspec anybody typed, so a
+  branch that is behind is refused with git's own reason rather than resolved —
+  the pane says "1 commit behind, so pull before pushing" and names the step it
+  cannot take itself. What "up to date" means is git's answer, so the status is
+  asked for again after a push rather than decremented in the page.
+- **`GitStatus` carries where the branch stands, so the box need not guess** —
+  `remoteInfo` asks git for the branch, its upstream, the two counts and whether
+  HEAD is already an ancestor of the upstream, which is the question behind the
+  amend refusal. Every field can be null for a different reason — a detached
+  HEAD, a branch never pushed, an upstream this clone has not fetched — and the
+  pane says which, because "nothing to push" and "we cannot tell whether there
+  is anything to push" are different sentences and only the first is an answer
+  the button can act on. It rides along with the status rather than being its
+  own operation, because the two go out of date together.
 - **`src/git.ts` shells out to git, and is the only file that does** —
   reimplementing the index, the packs and the merge machinery is not a thing a
   wiki editor should carry, so the app asks git instead. The tasks therefore

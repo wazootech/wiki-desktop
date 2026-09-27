@@ -2043,10 +2043,18 @@ Deno.test("the changes pane can commit, and the tick is git's to give", () => {
 });
 
 Deno.test("the commit box is one box, drawn from one list of elements", () => {
-  // The four controls are looked up by id, so each one has to be written out
+  // The controls are looked up by id, so each one has to be written out
   // in the markup — the same rule the panes follow. And they are wired from
-  // those same four, rather than being queried again where they are used.
-  const ids = ["commitState", "commitMessage", "commitButton", "commitNote"];
+  // those same ids, rather than being queried again where they are used.
+  const ids = [
+    "commitState",
+    "commitMessage",
+    "commitButton",
+    "amendButton",
+    "pushButton",
+    "remoteState",
+    "commitNote",
+  ];
   for (const id of ids) {
     assert(
       page.includes(`id="${id}"`) && page.includes(`el('${id}')`),
@@ -2059,7 +2067,147 @@ Deno.test("the commit box is one box, drawn from one list of elements", () => {
   );
   assert(
     /id="commitMessage"[\s\S]{0,200}placeholder=/.test(page) &&
-      /id="commitButton"[^>]*disabled/.test(page),
-    "and the button starts disabled rather than enabled-then-refused",
+      /id="commitButton"[^>]*disabled/.test(page) &&
+      /id="amendButton"[^>]*disabled/.test(page) &&
+      /id="pushButton"[^>]*disabled/.test(page),
+    "and all three buttons start disabled rather than enabled-then-refused",
+  );
+  // Amend takes the same message and the same ticks as Commit, so it belongs
+  // on the message's row rather than on a row of its own: a second row would
+  // be a way of making the reader look for the same gesture under a new name.
+  const order = [
+    "commitMessage",
+    "amendButton",
+    "commitButton",
+    "remoteState",
+    "pushButton",
+    "commitNote",
+  ].map((id) => page.indexOf(`id="${id}"`));
+  assert(
+    order.every((at, index) =>
+      at > 0 && (index === 0 || at > order[index - 1])
+    ),
+    "the box reads as one gesture: message, Amend, Commit, then the branch line with its Push below them",
+  );
+});
+
+Deno.test("the commit box can amend and push, and says when neither is a thing", () => {
+  // Amend is the same gesture as Commit with a different verb, so it takes the
+  // same arguments — the ticked paths, not a flag that means "all of it".
+  assert(
+    page.includes("call('amendFiles', [message, paths])"),
+    "an amend carries the ticked paths over, exactly as a commit does",
+  );
+  // A push carries nothing at all. The destination is read out of git's own
+  // configuration on the other side, so there is nothing here to aim wrong and
+  // nothing for anything else to aim either.
+  assert(
+    page.includes("call('pushBranch', [])"),
+    "a push names no remote and no refspec, because the page does not choose them",
+  );
+  assert(
+    !/call\('pushBranch',\s*\[(?!\])/.test(page),
+    "and it cannot be given one, even by a future edit to this file",
+  );
+  // No force, anywhere in the page. A wiki's repository is as likely to be
+  // somebody else's, and this is the one place in the app where a wrong click
+  // would be irreversible for a reader who is not looking for it.
+  assert(
+    !page.includes("--force") && !page.includes("force-with-lease"),
+    "nothing in the page can turn a push into a forced one",
+  );
+  // One readiness for all three verbs, so the box cannot say the gesture is not
+  // ready and then do it anyway.
+  assert(
+    page.includes("!committing &&\n          !pushing;"),
+    "the message and the ticks gate Commit and Amend together, and a push in flight gates them too",
+  );
+  assert(
+    /pushButton\.disabled = pushing \|\|\s*committing \|\|/.test(page),
+    "the branch cannot be pushed while a commit, an amend or another push is in flight",
+  );
+  // The last commit being already published is the one amend has to refuse, and
+  // the button admits it before the reader writes a message they cannot use.
+  assert(
+    /amendButton\.disabled = !ready \|\| \(gitRemote !== null && gitRemote\.published\)/
+      .test(page),
+    "Amend is disabled once the last commit is on the remote, because replacing it is not an edit anybody else can see",
+  );
+  assert(
+    page.includes(
+      "'the last commit is already there, so it cannot be amended'",
+    ),
+    "and the branch line says which commit it is, rather than just greying the button out",
+  );
+  // Every way the push can be impossible is a sentence, because a disabled
+  // button with nothing next to it is a button the reader has to guess about.
+  for (
+    const sentence of [
+      "'Not a repository, so there is no branch to push.'",
+      "'On a detached HEAD, which is not a branch to push.'",
+      "' has not been pushed anywhere yet.'",
+      "' commits to push'",
+      "'1 commit to push'",
+      "so pull before pushing",
+    ]
+  ) {
+    assert(
+      page.includes(sentence),
+      `the branch line can say "${sentence}", which is a different situation each time`,
+    );
+  }
+  // Being behind is not this app's problem to fix — it has no pull — so it says
+  // so, rather than leaving the reader to find out by being refused.
+  assert(
+    page.includes("' commits behind, so pull before pushing'") &&
+      page.includes("'1 commit behind, so pull before pushing'"),
+    "and it names pulling as the next step, in both the singular and the plural",
+  );
+  // What "up to date" means is git's answer, so the counts are asked for again
+  // after a push rather than decremented here.
+  assert(
+    /async function pushTicked\(\)[\s\S]*?refreshGitStatus\(\);/.test(page),
+    "a push re-reads the status instead of subtracting one from a number it guessed at",
+  );
+  // Enter commits, never amends. A commit somebody did not mean is a second
+  // commit; an amend somebody did not mean is a commit that no longer exists.
+  const enter = /commitMessage\.addEventListener\('keydown',[\s\S]*?\n\s*\}\);/
+    .exec(
+      page,
+    );
+  assert(enter !== null, "the message line has a keydown handler");
+  assert(
+    enter![0].includes("commitTicked()") &&
+      !enter![0].includes("amendTicked()"),
+    "Enter in the message line commits and does not amend",
+  );
+  // Both actions refuse the same empty message and empty selection as the
+  // commit, before a call goes out at all.
+  for (const action of ["amendTicked", "pushTicked"]) {
+    const body = new RegExp(
+      `async function ${action}\\(\\)[\\s\\S]*?\\n      \\}`,
+    ).exec(page);
+    assert(body !== null, `${action} exists`);
+    assert(
+      body![0].includes("if (committing || pushing) return;"),
+      `${action} will not start while another operation is in flight`,
+    );
+  }
+  assert(
+    /async function amendTicked\(\)[\s\S]*?if \(paths\.length === 0 \|\| message === ''\) return;/
+      .test(page),
+    "and amend refuses an empty message and an empty selection before it calls anything",
+  );
+  // A note for the reader either way, because a silent failure here is a
+  // commit that appears to have happened.
+  assert(
+    page.includes("'The amend did not go through.'") &&
+      page.includes("'The push did not go through.'"),
+    "both say so in the box when the call comes back empty",
+  );
+  assert(
+    page.includes("'Replaced the last commit'") &&
+      page.includes("'Pushed ' + result.branch + ' to ' + result.remote + '.'"),
+    "and say what they did when it worked, naming the branch for a push",
   );
 });
