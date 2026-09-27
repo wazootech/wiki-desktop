@@ -670,8 +670,22 @@ const pageTemplate = `<!DOCTYPE html>
     .activity-brand {
       display: grid; place-items: center;
       width: 100%; height: var(--topbar-height); flex-shrink: 0;
-      border-bottom: 1px solid var(--line);
+      padding: 0; border: 0; border-bottom: 1px solid var(--line);
+      background: transparent; color: inherit; cursor: pointer;
     }
+    /*
+     * The mark is the sidebar's toggle, and it is the top of the bar it hides.
+     *
+     * A button rather than a div with a listener, because the mark is the one
+     * control in this app that has to be reachable without a pointer: a div is
+     * not focusable and is not in the tab order, and a sidebar that can only be
+     * closed by clicking is a sidebar some readers cannot close. Carrying the
+     * sidebar-toggle class rather than a handler of its own is what keeps one
+     * rule deciding what every toggle says, which is the same reason the tab
+     * bar's copy is that class too.
+     */
+    .activity-brand:hover { background: var(--surface-hover); }
+    .activity-brand:focus-visible { outline: 1px solid var(--brand-marker); outline-offset: -1px; }
     .activity-button {
       position: relative;
       display: grid; place-items: center;
@@ -752,7 +766,7 @@ const pageTemplate = `<!DOCTYPE html>
     .app.is-collapsed .tabbar .sidebar-toggle { display: inline-flex; }
     /* The rows' text is taller than the button, so centring would put the two
        copies a fraction of a pixel apart; pin both to the padding edge. */
-    .brand .sidebar-toggle, .tabbar .sidebar-toggle { align-self: flex-start; }
+    .tabbar .sidebar-toggle { align-self: flex-start; }
     /*
      * The official Wazoo mark, inline so the page stays one string with no
      * asset route. Used bare and unrecoloured: the brand guide forbids
@@ -764,7 +778,8 @@ const pageTemplate = `<!DOCTYPE html>
      * The mark, which the activity bar owns the top slot of. It was the first
      * thing in the brand row and is now the corner of the strip, so the wordmark
      * beside it has the row to itself -- which is what the brand block "had room
-     * to give up" means in practice.
+     * to give up" means in practice. A span rather than a div because its new
+     * home is a button, and a button's content is phrasing content only.
      */
     .brand-mark { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; }
     .brand-mark svg { width: 100%; height: 100%; }
@@ -1280,8 +1295,8 @@ const pageTemplate = `<!DOCTYPE html>
   <main class="app" id="app">
     <aside class="sidebar">
       <nav class="activity-bar" aria-label="Sidebar views">
-        <div class="activity-brand">
-          <div class="brand-mark" aria-hidden="true">
+        <button class="activity-brand sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">
+          <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0.0 0.0 520.0 520.0" fill="none" xmlns="http://www.w3.org/2000/svg">
             <clipPath id="wazooMarkClip">
               <path d="m0 0l520.0 0l0 520.0l-520.0 0l0 -520.0z" clip-rule="nonzero" />
@@ -1296,8 +1311,8 @@ const pageTemplate = `<!DOCTYPE html>
               <path fill="#ff9800" fill-rule="evenodd" d="m505.64868 305.6166l0 0c-0.12124634 67.46524 -109.278656 122.224335 -244.35449 122.581085c-135.0758 0.3567505 -245.3866 -53.822754 -246.93633 -121.28354l245.63737 -1.4076538z" />
             </g>
           </svg>
-          </div>
-        </div>
+          </span>
+        </button>
         <div role="tablist" id="activityBar" aria-orientation="vertical" aria-label="Views">
         ${PANES.map(activityButton).join("\n        ")}
         </div>
@@ -1305,7 +1320,6 @@ const pageTemplate = `<!DOCTYPE html>
 
       <div class="sidebar-pane">
       <div class="brand">
-        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">${ICONS.sidebarToggle}</button>
         <div>
           <div class="brand-name">Wazoo Wiki</div>
           <div class="brand-subtitle">Desktop editor</div>

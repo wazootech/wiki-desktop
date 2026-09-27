@@ -410,9 +410,10 @@ function readTokens(css: string): Set<string> {
 }
 
 Deno.test("collapsing never strands the only way to reopen", () => {
-  // The toggle in the brand row disappears with the sidebar, so the tabbar
+  // The mark at the top of the activity bar is the sidebar's toggle, and it
+  // disappears with the sidebar along with everything else in it, so the tabbar
   // must reveal its own when collapsed — and in the drawer layout too, where
-  // the brand row is parked off-screen.
+  // the whole sidebar is parked off-screen.
   const style = page.slice(0, page.indexOf("</style>"));
   const narrow = style.slice(style.indexOf("@media (max-width: 640px)"));
 
@@ -427,12 +428,23 @@ Deno.test("collapsing never strands the only way to reopen", () => {
     /\.tabbar\s+\.sidebar-toggle\s*\{[^}]*display:\s*inline-flex/.test(narrow),
     "the drawer layout shows a toggle too",
   );
+  // One per layout state, and counted by the class that decides what a toggle
+  // does rather than by the button family's styling, because the sidebar's is
+  // now the brand mark and not a member of that family.
   assert(
-    (page.match(
-      /class="button button-secondary icon-button sidebar-toggle"/g,
-    ) ?? [])
-      .length === 2,
+    (page.match(/class="[^"]*\bsidebar-toggle\b[^"]*"/g) ?? []).length === 2,
     "there is one toggle per layout state",
+  );
+  assert(
+    /<button class="activity-brand sidebar-toggle"/.test(page),
+    "and the sidebar's is the mark at the top of the activity bar",
+  );
+  // It is a button rather than a div with a listener on it, because a div is
+  // not focusable and is not in the tab order: a sidebar that can only be
+  // closed by clicking is one some readers cannot close at all.
+  assert(
+    !/<div class="activity-brand/.test(page),
+    "and it is reachable from the keyboard",
   );
   // The tooltip is the one of the two labels a mouse user reads, and the two
   // toggles shipped with opposite wording — each right for the layout it
@@ -466,13 +478,17 @@ Deno.test("no two icon-only buttons draw the same glyph", () => {
   // app menu were, both ☰. The toggle draws a panel, the bar's reload is an
   // arrow, the file list's create button is a +, the menu keeps ☰, and the
   // vault's own button is a folder.
+  //
+  // The brand mark is not in this list, and should not be added to it: it is a
+  // logo at the top of the activity bar rather than a glyph in the band of
+  // chrome these share, so it has nothing to be confused with.
   const iconButtons = [
     ...page.matchAll(/<button ([^>]*)>([\s\S]*?)<\/button>/g),
   ]
     .map(([, attrs, inner]) => ({ attrs, inner: inner.trim() }))
     .filter(({ attrs }) => /\bicon-button\b/.test(attrs));
 
-  assert(iconButtons.length === 6, "the app has six icon-only buttons");
+  assert(iconButtons.length === 5, "the app has five icon-only buttons");
   const by = (pattern: RegExp) =>
     iconButtons.filter(({ attrs }) => pattern.test(attrs));
   const toggles = by(/\bsidebar-toggle\b/);
@@ -481,15 +497,9 @@ Deno.test("no two icon-only buttons draw the same glyph", () => {
   const reloads = by(/id="reloadButton"/);
   const opens = by(/id="openVaultButton"/);
   assert(
-    toggles.length === 2 && menus.length === 1 && creates.length === 1 &&
+    toggles.length === 1 && menus.length === 1 && creates.length === 1 &&
       reloads.length === 1 && opens.length === 1,
-    "one app menu, one create button, one reload, one toggle per state, and one button for the vault",
-  );
-  // The two toggles are never on screen together, so only a shared source keeps
-  // them identical when one is edited.
-  assert(
-    toggles[0].inner === toggles[1].inner,
-    "the two toggles draw different icons",
+    "one app menu, one create button, one reload, one toggle, and one button for the vault",
   );
   assert(toggles[0].inner.startsWith("<svg"), "the toggle draws a panel");
   const glyphs = [
