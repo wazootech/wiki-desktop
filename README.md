@@ -141,6 +141,26 @@ pre-paint path here is the real one, not a model of it.
   control was not built: `.git` is deliberately invisible to the app, a vault is
   usually not a repository root, and reading git means either shipping it as a
   runtime dependency or reimplementing it.
+- **The changes view is two panes, because a source control panel is two
+  things** — a source control panel answers "what changed" and "what changed
+  when" at once, and one pane can only be one of those. So the view is split:
+  **Changes** (the listing, newest write first, with the time under each name)
+  above a draggable divider, and **History** (the same writes as days, newest
+  day first, on a rail) below it. Each header folds its own section and carries
+  its own count, so a folded section is still sizeable without being opened, and
+  the divider keeps the sidebar resizer's contract — arrows to nudge, Shift for
+  a bigger nudge, Home and End for the ends, double-click to even them out. The
+  split is a ratio rather than a height, because the pane's height belongs to
+  the window, and it is not remembered: a split set once for one session is not
+  a preference.
+- **The history is days, not commits** — `activityByDay` in `src/vault.ts`
+  buckets the listing under each file's local midnight, dropping a file the
+  filesystem could not date rather than filing it under the epoch. It is one
+  function, tested there, reached through the `vaultActivity` operation, because
+  the page is a string that cannot import it and a second copy of the rule would
+  be a second answer to "what day is this" with only one of them under test.
+  There is no commit graph, for the same reason there is no source control: the
+  only history a wiki reader has is when each file was last written.
 - **The vault's own config says what a page is** — `wiki.yml` (or `wiki.yaml`,
   `wiki.json`) is read before the walk and gives every listed file a scope:
   `input` under `wiki.input` (the wiki's pages), `asset` under `wiki.assets`

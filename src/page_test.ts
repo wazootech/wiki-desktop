@@ -1792,3 +1792,99 @@ Deno.test("every global the entrypoint calls is defined by the page", async () =
     }`,
   );
 });
+
+Deno.test("the changes view is two panes with a divider between them", () => {
+  // The panel is a source control panel, and a source control panel is two
+  // things at once: what changed, and the history it changed in. One pane can
+  // only be one of those, so the split is the feature rather than a detail of
+  // it -- and the divider has to sit between the two, not above or below them.
+  const split = page.slice(
+    page.indexOf('id="recentSplit"'),
+    page.indexOf('id="sidebarResizer"'),
+  );
+  assert(
+    split.includes('id="changesPane"') && split.includes('id="historyPane"'),
+    "the view has a changes pane and a history pane",
+  );
+  assert(
+    split.indexOf('id="changesPane"') < split.indexOf('id="recentDivider"') &&
+      split.indexOf('id="recentDivider"') < split.indexOf('id="historyPane"'),
+    "and the divider is between them",
+  );
+  assert(
+    split.includes('role="separator"') &&
+      split.includes('aria-orientation="horizontal"'),
+    "the divider says it is a horizontal separator, as it is",
+  );
+  assert(
+    split.includes('aria-controls="changesBody"') &&
+      split.includes('aria-controls="historyBody"'),
+    "each pane's header says which body it folds",
+  );
+  // A section with a header and no way to fold it is a header that lies about
+  // being a control, so the fold is wired for both and not just the first.
+  assert(
+    page.includes("{ pane: changesPane, toggle: changesToggle") &&
+      page.includes("{ pane: historyPane, toggle: historyToggle"),
+    "both sections are wired, not just the top one",
+  );
+  assert(
+    page.includes("changesCount.textContent = String(recent.length)") &&
+      page.includes("historyCount.textContent = String(days.length)"),
+    "each header's badge counts its own section",
+  );
+});
+
+Deno.test("the split is a bounded ratio, and a divider the keyboard can move", () => {
+  // A split remembered in pixels is a split sized for the window it was set
+  // in, and a divider nobody can move without a mouse is a layout the reader
+  // has to live with. Both were true of the sidebar's own resizer, which is
+  // why this one keeps that contract instead of inventing another.
+  assert(
+    page.includes("const MIN_SPLIT_SHARE") &&
+      page.includes("const MAX_SPLIT_SHARE") &&
+      page.includes("const DEFAULT_SPLIT_SHARE"),
+    "the split has ends and a middle",
+  );
+  assert(
+    /Math\.min\(\s*MAX_SPLIT_SHARE,\s*Math\.max\(MIN_SPLIT_SHARE/.test(page),
+    "and a drag is clamped to them, so neither section can be squeezed away",
+  );
+  assert(
+    page.includes("changesPane.style.flexGrow") &&
+      page.includes("historyPane.style.flexGrow"),
+    "the two are a share of the pane rather than a height in pixels",
+  );
+  const wiring = page.slice(
+    page.indexOf("function wireSplit()"),
+    page.indexOf("function toggleSection("),
+  );
+  for (const key of ["ArrowUp", "ArrowDown", "Home", "End", "dblclick"]) {
+    assert(
+      wiring.includes(key),
+      `the divider answers ${key}, like the sidebar's own handle`,
+    );
+  }
+});
+
+Deno.test("the history is drawn from the one place a day is decided", () => {
+  // src/vault.ts decides which day a write belongs to, and it is tested there.
+  // A second copy of that rule inside the page string would be a second answer
+  // to "what day is this", and only one of them would be under test.
+  assert(
+    page.includes("call('vaultActivity', [])"),
+    "the history asks the backend for its days",
+  );
+  assert(
+    !page.includes("setHours(0, 0, 0, 0)"),
+    "and does not bucket the listing a second time here",
+  );
+  // An empty history is a state the pane has to be able to draw: a closed vault
+  // and a folder with nothing dated in it are different sentences, and both
+  // are reachable without anything going wrong.
+  assert(
+    page.includes("'Open a vault to see its history.'") &&
+      page.includes("'Nothing in this vault has a date yet.'"),
+    "and says which of the two empty histories it is",
+  );
+});

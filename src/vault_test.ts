@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 import {
+  activityByDay,
   browseDirectory,
   createVaultFile,
   detectNewlineStyle,
@@ -12,6 +13,7 @@ import {
   searchVaultFiles,
   toEditorText,
   VaultError,
+  VaultFile,
   writeVaultFile,
 } from "./vault.ts";
 
@@ -505,3 +507,82 @@ Deno.test("a search over a vault that is not there is the caller's problem", asy
     );
   });
 });
+
+Deno.test("activityByDay files the listing under the day each file was written", () => {
+  // The panel's second pane is a history, and the only history a wiki reader
+  // has is when each file was last written: a day is a bucket, not a commit.
+  const at = (day: number, hour: number, minute = 0) =>
+    new Date(2026, 8, day, hour, minute).getTime();
+  const days = activityByDay([
+    file("oldest.md", at(10, 9)),
+    file("today-second.md", at(12, 16)),
+    file("yesterday-night.md", at(11, 23, 59)),
+    file("today-first.md", at(12, 8)),
+  ]);
+
+  assertEqual(
+    days.map((day) => day.files.map((entry) => entry.path)).flat().join(", "),
+    "today-second.md, today-first.md, yesterday-night.md, oldest.md",
+    "the newest write leads, days and files within them alike",
+  );
+  assertEqual(
+    days.length,
+    3,
+    "three writes on three days are three days of history",
+  );
+  assertEqual(
+    new Date(days[0].day).getHours(),
+    0,
+    "a day is bucketed at its local midnight, so Today is a whole day",
+  );
+});
+
+Deno.test("activityByDay keeps a file with no date out of the history", () => {
+  // A filesystem that will not say when is still a file in the listing, but it
+  // has no day to file it under, and inventing one would put it on a day it
+  // was never written.
+  const days = activityByDay([
+    { ...file("undated.md", 0), modified: 0 },
+    file("dated.md", new Date(2026, 8, 12, 10).getTime()),
+  ]);
+
+  assertEqual(
+    days.flatMap((day) => day.files.map((entry) => entry.path)).join(", "),
+    "dated.md",
+    "only the file that knows its own day is in the history",
+  );
+});
+
+Deno.test("activityByDay over an empty listing is an empty history", () => {
+  assertEqual(activityByDay([]).length, 0, "no files, no days");
+});
+
+Deno.test("activityByDay splits a day at local midnight, not at 24 hours", () => {
+  // The bug this rules out: bucketing on the raw timestamp, or dividing by
+  // 86400000, which files 23:59 and the next 00:01 under the same day whenever
+  // the clocks are not UTC -- a history that claims two nights were one.
+  const lateNight = new Date(2026, 8, 12, 23, 59, 30).getTime();
+  const smallHours = new Date(2026, 8, 13, 0, 1, 30).getTime();
+  const days = activityByDay([
+    file("late.md", lateNight),
+    file("early.md", smallHours),
+  ]);
+
+  assertEqual(days.length, 2, "two minutes apart is still two days apart");
+  assertEqual(
+    days[1].files[0].path,
+    "late.md",
+    "and the earlier write is the earlier day",
+  );
+});
+
+/** A listed file, with only the fields the history reads. */
+function file(path: string, modified: number): VaultFile {
+  return {
+    path,
+    name: path.slice(path.lastIndexOf("/") + 1),
+    isMarkdown: true,
+    scope: "input",
+    modified,
+  };
+}

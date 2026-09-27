@@ -215,6 +215,58 @@ function compareVaultFiles(left: VaultFile, right: VaultFile): number {
   return left.path.localeCompare(right.path, undefined, { numeric: true });
 }
 
+/** One day of writes, and what was written on it. */
+export interface ActivityDay {
+  /**
+   * Local midnight of the day, as a timestamp.
+   *
+   * Midnight local rather than midnight UTC, because "what changed today" is a
+   * question about the reader's own wall clock. A UTC bucket puts a write at
+   * 23:59 on the wrong day for most of the world, and the two neighbouring days
+   * of the panel are then both wrong in the same direction.
+   */
+  day: number;
+  /** The files written that day, newest write first. */
+  files: VaultFile[];
+}
+
+/**
+ * The listing as a history: writes grouped under the day they happened, newest
+ * day first and newest file first within each day.
+ *
+ * This is what the sidebar's history pane draws, and it is the whole of what a
+ * wiki reader can know about the past. There is no commit graph here because
+ * the app has never read one: a vault is a folder of files, and the only
+ * history it keeps is the time each file was last written. Grouping that by
+ * day answers the question a reader opens the app with -- what moved, and
+ * when -- without a second walk of the vault and without a git dependency the
+ * rest of the app does not have.
+ *
+ * A file the filesystem could not date (`modified` of 0) is left out rather
+ * than filed under the epoch: a day it was never written is worse than no day
+ * at all.
+ */
+export function activityByDay(files: readonly VaultFile[]): ActivityDay[] {
+  const days = new Map<number, VaultFile[]>();
+  for (const file of files) {
+    if (!file.modified) continue;
+    const day = new Date(file.modified);
+    day.setHours(0, 0, 0, 0);
+    const bucket = days.get(day.getTime());
+    if (bucket === undefined) {
+      days.set(day.getTime(), [file]);
+    } else {
+      bucket.push(file);
+    }
+  }
+  return [...days.entries()]
+    .map(([day, dayFiles]) => ({
+      day,
+      files: dayFiles.sort((left, right) => right.modified - left.modified),
+    }))
+    .sort((left, right) => right.day - left.day);
+}
+
 export async function readVaultFile(
   root: string,
   path: string,

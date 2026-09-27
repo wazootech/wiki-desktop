@@ -149,6 +149,13 @@ const ICONS = {
   /** Sized for the 18px tab-close box rather than the 28px button default. */
   closeTab: chromeIcon('<path d="M18 6 6 18" /><path d="m6 6 12 12" />', 12),
   disclosure: chromeIcon('<path d="m9 18 6-6-6-6" />', 12),
+  /**
+   * A section header's own disclosure. It points down, which is the state a
+   * section spends most of its life in, and the CSS turns it sideways when the
+   * section is collapsed -- so the rotation is one rule rather than two icons
+   * that have to be kept in step.
+   */
+  sectionChevron: chromeIcon('<path d="m6 9 6 6 6-6" />', 12),
   activeCheck: chromeIcon('<path d="M20 6 9 17l-5-5" />', 11),
   /**
    * The sidebar's own way in, and the only place the folder is drawn: opening
@@ -300,17 +307,74 @@ function paneMarkup(key: SidebarView): string {
             </div>`,
     );
   }
-  // Recently changed. No toolbar at all, and no new operation behind it: the
-  // listing already carries each file's modification time, so this pane is a
-  // sort of what the app has already loaded.
+  // Recently changed, as two panes: the files themselves, and the history of
+  // the days they were written on. No toolbar on either, and only one new
+  // operation behind the pair -- the listing already carries each file's
+  // modification time, so both panes are two readings of what the app has
+  // already loaded. The divider between them is draggable, because a vault
+  // with a long tail of old files wants the history a thumb's width and no
+  // more, and because a split the reader cannot move is a layout they have to
+  // live with rather than one they chose.
   return paneSection(
     view,
     `${paneTitle(view)}
-            <ul class="file-list" id="recentList" aria-label="Recently changed files"></ul>
+            <div class="split" id="recentSplit">
+              ${
+      splitSection(
+        "changes",
+        "Changes",
+        "Files written most recently",
+        '<ul class="file-list" id="recentList" aria-label="Recently changed files"></ul>',
+      )
+    }
+              <div class="pane-divider" id="recentDivider" role="separator" aria-orientation="horizontal"
+                   aria-label="Resize the changes and history panes" aria-controls="changesBody"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="70"
+                   title="Drag to resize, double-click to even them out" tabindex="0"></div>
+              ${
+      splitSection(
+        "history",
+        "History",
+        "Writes grouped by day",
+        '<ol class="activity" id="recentHistory" aria-label="Files changed by day"></ol>',
+      )
+    }
+            </div>
             <div class="view-status">
               <span id="recentStatus">No vault open</span>
             </div>`,
   );
+}
+
+/**
+ * One collapsible section of a split pane: a header that says what the section
+ * holds and how much of it there is, and the body that scrolls.
+ *
+ * Drawn from a key and a name rather than written out twice, so the changes and
+ * history sections cannot drift into looking like two different controls -- and
+ * so the count badge is in the header because that is the only place a reader
+ * can size a section without opening it.
+ *
+ * The body is markup rather than script-built, because the list inside it is an
+ * element the script looks up by id: a view that filled its own list would be
+ * one more place for a null to hide.
+ */
+function splitSection(
+  key: string,
+  label: string,
+  hint: string,
+  body: string,
+): string {
+  return `<section class="split-pane" id="${key}Pane" aria-label="${label}">
+                <div class="split-head">
+                  <button class="split-toggle" id="${key}Toggle" type="button" aria-expanded="true"
+                          aria-controls="${key}Body" title="${hint}">
+                    ${ICONS.sectionChevron}<span class="split-name">${label}</span>
+                    <span class="split-count" id="${key}Count">0</span>
+                  </button>
+                </div>
+                <div class="split-body" id="${key}Body">${body}</div>
+              </section>`;
 }
 
 /**
@@ -844,6 +908,89 @@ const pageTemplate = `<!DOCTYPE html>
     .file-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
 
     /*
+     * A pane split in two: the sections above and below a divider, each with
+     * its own header, its own count, and its own scroll. The heights are set
+     * from the script as a flex ratio rather than as pixels, so the pair still
+     * adds up when the sidebar is resized underneath them and when the pane is
+     * taller or shorter than it was.
+     */
+    .split { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+    .split-pane { display: flex; min-height: 0; flex-direction: column; }
+    #changesPane { flex: 7 1 0; }
+    #historyPane { flex: 3 1 0; }
+    .split-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    /* Collapsed means folded to its header, so the section it shares the column
+       with gets the space. */
+    .split-pane.is-collapsed { flex: 0 0 auto; }
+    .split-pane.is-collapsed .split-body { display: none; }
+
+    .split-head { flex: none; }
+    .split-toggle {
+      display: flex; align-items: center; gap: 4px; width: 100%;
+      padding: 5px 8px; border: 0; background: transparent;
+      color: var(--text-body); font-size: 11px; font-weight: 700; text-align: left;
+    }
+    .split-toggle:hover { background: var(--surface-hover); }
+    .split-toggle .icon { flex: none; color: var(--muted); }
+    /* One rule turns the chevron sideways, so there is no second icon to keep
+       in step with the first. */
+    .split-toggle[aria-expanded="false"] .icon { transform: rotate(-90deg); }
+    .split-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* The count is what lets a section be sized without being opened, so it is
+       the one piece of the header that is never truncated. */
+    .split-count {
+      flex: none; min-width: 16px; padding: 0 5px; border-radius: 999px;
+      background: var(--surface-hover); color: var(--muted);
+      font-size: 9.5px; font-weight: 600; line-height: 14px; text-align: center;
+    }
+
+    /*
+     * The divider between the two sections. A real 7px target around a hairline,
+     * because a 1px handle is a handle nobody can find, and it takes the
+     * sidebar resizer's keyboard contract wholesale: it is a separator, it is
+     * focusable, the arrows move it a step and Shift a bigger one, and Home and
+     * End take it to either end.
+     */
+    .pane-divider {
+      flex: none; height: 7px; margin: 0 -7px; cursor: row-resize;
+      background: transparent; touch-action: none;
+    }
+    .pane-divider::after {
+      display: block; height: 1px; margin: 3px 7px;
+      background: var(--line); content: "";
+    }
+    .pane-divider:hover::after, .pane-divider.is-dragging::after { background: var(--brand-marker); }
+    .pane-divider:focus-visible { outline: 1px solid var(--brand-marker); outline-offset: -1px; }
+
+    /*
+     * The history: one entry per day, on a rail, the way a commit graph reads.
+     * The rail is a border on the day column rather than a drawn element per
+     * entry, so it is continuous for free and a day with no files never leaves
+     * a gap in it.
+     */
+    .activity { flex: 1; min-height: 0; margin: 0; padding: 2px 7px 8px; overflow-y: auto; list-style: none; scrollbar-width: thin; }
+    .activity-day { position: relative; padding: 3px 0 3px 15px; }
+    /* The rail: the first day starts it, the last one stops it, and every day in
+       between runs one continuous line. */
+    .activity-day::before {
+      position: absolute; top: 0; bottom: 0; left: 4px; width: 1px;
+      background: var(--line); content: "";
+    }
+    .activity-day:first-child::before { top: 9px; }
+    .activity-day:last-child::before { bottom: auto; height: 9px; }
+    .activity-day:only-child::before { display: none; }
+    /* The commit dot, over the rail. */
+    .activity-day::after {
+      position: absolute; top: 7px; left: 1px; width: 7px; height: 7px;
+      border: 2px solid var(--surface-raised); border-radius: 50%;
+      background: var(--brand-marker); box-sizing: border-box; content: "";
+    }
+    .activity-day:first-child::after { background: var(--brand-text); }
+    .activity-when { display: block; color: var(--text-body); font-size: 10.5px; font-weight: 700; }
+    .activity-files { margin: 1px 0 0; padding: 0; list-style: none; }
+    .activity-files .file-button { padding: 2px 6px; font-size: 11px; }
+
+    /*
      * A view's footer, inside the pane for the same reason as its toolbar. It
      * was one row for the whole sidebar, and its one piece of content — "95
      * files" — means nothing in a search view, so each pane now carries its own
@@ -1361,7 +1508,24 @@ const pageTemplate = `<!DOCTYPE html>
       const searchResults = el('searchResults');
       const searchStatus = el('searchStatus');
       const recentList = el('recentList');
+      const recentHistory = el('recentHistory');
       const recentStatus = el('recentStatus');
+      const recentSplit = el('recentSplit');
+      const recentDivider = el('recentDivider');
+      const changesPane = el('changesPane');
+      const changesToggle = el('changesToggle');
+      const changesCount = el('changesCount');
+      const historyPane = el('historyPane');
+      const historyToggle = el('historyToggle');
+      const historyCount = el('historyCount');
+      // The two sections as one list, because folding one and counting one are
+      // the same two lines each and the divider's arithmetic is a third. The ids
+      // are written out above rather than built from a key on purpose: that is
+      // what lets the page tests check every one of them against the markup.
+      const splitSections = [
+        { pane: changesPane, toggle: changesToggle, count: changesCount },
+        { pane: historyPane, toggle: historyToggle, count: historyCount },
+      ];
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
       // The three switches, each paired with the elements it owns. One list
@@ -1415,6 +1579,31 @@ const pageTemplate = `<!DOCTYPE html>
       // Below this width the sidebar is a drawer rather than a column, so the
       // same button means "slide it in" instead of "collapse the column".
       const narrowWindow = window.matchMedia('(max-width: 640px)');
+
+      /*
+       * The split between the changes list and the history below it, as the
+       * share of the pane the first one takes.
+       *
+       * A ratio rather than a height because the pane belongs to the window: a
+       * height chosen on a tall window is most of a short one. The bounds are
+       * the two ends of that bargain -- a section squeezed to nothing is a
+       * section that was not really offered, and one left with the lot is a
+       * split that is not one.
+       */
+      const DEFAULT_SPLIT_SHARE = 0.7;
+      const MIN_SPLIT_SHARE = 0.2;
+      const MAX_SPLIT_SHARE = 0.8;
+      /** Below this, the pane cannot be divided at all and the split holds still. */
+      const MIN_SPLIT_PANE_HEIGHT = 72;
+
+      /*
+       * Which history answer is the current one.
+       *
+       * The same guard the search view uses, for the same reason: asking the
+       * backend for the days is a round trip, and a slow earlier answer landing
+       * on a newer one is how a list ends up drawn twice.
+       */
+      let historyToken = 0;
 
       // The editor keeps each open document's own state, so the page only has
       // to name which one is on screen. Everything it needs is this handle:
@@ -2248,9 +2437,14 @@ const pageTemplate = `<!DOCTYPE html>
        * name. This is the question a wiki reader opens the app with -- what is
        * new in here -- and it needed no operation behind it: the walk already
        * records each file's modification time for exactly this.
+       *
+       * Both sections are redrawn on arrival rather than kept, and the history
+       * asks the backend for its days rather than bucketing the listing here:
+       * which day a write belongs to is decided once, in src/vault.ts, where it
+       * is tested, and a second copy of that rule in this string would be one
+       * more thing to keep in step.
        */
       function renderRecent() {
-        recentList.textContent = '';
         const listed = listedFiles();
         const recent = listed.slice().sort((left, right) =>
           right.modified - left.modified
@@ -2262,7 +2456,20 @@ const pageTemplate = `<!DOCTYPE html>
         } else {
           recentStatus.textContent = latestSentence(recent[0].modified);
         }
+        changesCount.textContent = String(recent.length);
+        renderChanges(recent);
+        renderHistory();
+      }
 
+      /**
+       * The changes section: the listing itself, newest write first.
+       *
+       * Split out of {@link renderRecent} only so the two sections can be
+       * redrawn without each other -- saving a file moves one list and leaves
+       * the other's days alone until the next arrival.
+       */
+      function renderChanges(recent) {
+        recentList.textContent = '';
         if (recent.length === 0) {
           const empty = document.createElement('li');
           empty.className = 'file-empty';
@@ -2303,6 +2510,230 @@ const pageTemplate = `<!DOCTYPE html>
           item.appendChild(button);
           recentList.appendChild(item);
         }
+      }
+
+      /**
+       * The other half of the split: the same writes as days, newest day
+       * first, on a rail.
+       *
+       * It is drawn from the vaultActivity operation, so the empty state has
+       * to be handled here as well as the full one: a closed vault, or a folder
+       * the walk could not date a single file in, is a history with nothing in
+       * it, and the section says which of the two it is rather than showing an
+       * empty rail.
+       */
+      async function renderHistory() {
+        const token = (historyToken += 1);
+        recentHistory.textContent = '';
+        const days = vault.root === null
+          ? []
+          : await call('vaultActivity', []);
+        // The scan is a round trip, so two arrivals can be in flight at once --
+        // switching to this view and the listing landing together. Without this
+        // the slower one lands on top of the newer one and the rail grows a
+        // second copy of every day, under a badge still counting one set.
+        if (token !== historyToken) return;
+        historyCount.textContent = String(days.length);
+        if (days.length === 0) {
+          const empty = document.createElement('li');
+          empty.className = 'file-empty';
+          empty.textContent = vault.root === null
+            ? 'Open a vault to see its history.'
+            : 'Nothing in this vault has a date yet.';
+          recentHistory.appendChild(empty);
+          return;
+        }
+        for (const day of days) {
+          const item = document.createElement('li');
+          item.className = 'activity-day';
+          const when = document.createElement('span');
+          when.className = 'activity-when';
+          when.textContent = dayLabel(day.day);
+          when.title = new Date(day.day).toLocaleDateString();
+          const files = document.createElement('ul');
+          files.className = 'activity-files';
+          for (const file of day.files) {
+            files.appendChild(historyRow(file));
+          }
+          item.appendChild(when);
+          item.appendChild(files);
+          recentHistory.appendChild(item);
+        }
+      }
+
+      /**
+       * One file in the history. The same open action as the changes list, and
+       * the same active and open marks, so a file reads the same in both
+       * sections -- otherwise the history would be a second, quieter truth
+       * about which document is on screen.
+       */
+      function historyRow(file) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'file-button';
+        const active = activeTab();
+        if (active !== null && active.path === file.path) {
+          button.classList.add('is-active');
+          button.setAttribute('aria-current', 'true');
+        } else if (tabs.some((tab) => tab.path === file.path)) {
+          button.classList.add('is-open');
+        }
+        if (file.scope === 'asset') button.classList.add('is-asset');
+        button.title = file.path;
+        const name = document.createElement('span');
+        name.className = 'file-name';
+        name.textContent = listedName(file);
+        button.appendChild(name);
+        button.addEventListener('click', () => openFile(file.path));
+        item.appendChild(button);
+        return item;
+      }
+
+      /**
+       * A day's name, in the words a reader would use for it.
+       *
+       * Today and yesterday are named rather than dated, because a history's
+       * first two entries are the ones being read and "Today" is the answer to
+       * "is any of this mine?". Past that it is the weekday and the date, and
+       * past a week the weekday stops earning its space.
+       */
+      function dayLabel(day) {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+          .getTime();
+        const days = Math.round((today - day) / 86400000);
+        if (days <= 0) return 'Today';
+        if (days === 1) return 'Yesterday';
+        const date = new Date(day);
+        if (days < 7) {
+          return date.toLocaleDateString(undefined, { weekday: 'long' });
+        }
+        return date.toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric',
+        });
+      }
+
+      /**
+       * Move the divider between the two sections, and fold or open either of
+       * them.
+       *
+       * The divider keeps the sidebar resizer's contract rather than inventing
+       * one: a pointer drag that holds capture for its length, arrows to nudge
+       * it, Shift for a bigger nudge, Home and End for the ends, and a
+       * double-click to even the two out. It is a separator, so that is what it
+       * says it is.
+       *
+       * The split is a ratio rather than a height, because the pane's height
+       * belongs to the window: a height remembered from a tall window would be
+       * most of a short one. And it is not remembered at all -- a split the
+       * reader set once for one session is not a preference, and the one
+       * setting it would add is a setting with nothing to be right about.
+       */
+      function wireSplit() {
+        /** The two sections, as a share of the pane, clamped to what fits. */
+        function setSplit(ratio) {
+          const pane = recentSplit.getBoundingClientRect().height;
+          // A pane too short to divide leaves the ratio alone rather than
+          // setting a negative height, which is how a split ends up with one
+          // section pushed off the top of the window.
+          if (pane < MIN_SPLIT_PANE_HEIGHT * 2) return;
+          const share = Math.min(
+            MAX_SPLIT_SHARE,
+            Math.max(MIN_SPLIT_SHARE, ratio),
+          );
+          changesPane.style.flexGrow = String(share * 10);
+          historyPane.style.flexGrow = String((1 - share) * 10);
+          recentDivider.setAttribute(
+            'aria-valuenow',
+            String(Math.round(share * 100)),
+          );
+        }
+
+        /** Where the divider sits now, as the same share setSplit takes. */
+        function splitRatio() {
+          const top = changesPane.getBoundingClientRect().height;
+          const bottom = historyPane.getBoundingClientRect().height;
+          const total = top + bottom;
+          return total === 0 ? DEFAULT_SPLIT_SHARE : top / total;
+        }
+
+        for (const section of splitSections) {
+          section.toggle.addEventListener('click', () =>
+            toggleSection(section)
+          );
+        }
+
+        let dragging = false;
+        function endDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          recentDivider.classList.remove('is-dragging');
+          if (recentDivider.hasPointerCapture(event.pointerId)) {
+            recentDivider.releasePointerCapture(event.pointerId);
+          }
+        }
+
+        recentDivider.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          dragging = true;
+          recentDivider.focus();
+          // The drag would otherwise select the text it passes over.
+          event.preventDefault();
+          recentDivider.classList.add('is-dragging');
+          try {
+            recentDivider.setPointerCapture(event.pointerId);
+          } catch {
+            // A synthetic pointer has no active id to capture. The drag still
+            // works while the pointer is over the handle, which is what keeps
+            // this driveable from a test or a script.
+          }
+        });
+
+        recentDivider.addEventListener('pointermove', (event) => {
+          if (!dragging) return;
+          const top = recentSplit.getBoundingClientRect().top;
+          const height = recentSplit.getBoundingClientRect().height;
+          setSplit((event.clientY - top) / height);
+        });
+
+        recentDivider.addEventListener('pointerup', endDrag);
+        recentDivider.addEventListener('pointercancel', endDrag);
+
+        recentDivider.addEventListener('dblclick', () => {
+          setSplit(DEFAULT_SPLIT_SHARE);
+        });
+
+        recentDivider.addEventListener('keydown', (event) => {
+          const step = event.shiftKey ? 0.1 : 0.02;
+          if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            setSplit(
+              splitRatio() + (event.key === 'ArrowDown' ? step : -step),
+            );
+          } else if (event.key === 'Home' || event.key === 'End') {
+            event.preventDefault();
+            setSplit(event.key === 'Home' ? MIN_SPLIT_SHARE : MAX_SPLIT_SHARE);
+          }
+        });
+      }
+
+      /**
+       * Fold a section to its header, or open it again.
+       *
+       * The badge stays put when the section is folded, which is the whole
+       * point of having one: a collapsed history still says how many days are
+       * in it, so folding it is a way of reading the list and not a way of
+       * losing it.
+       */
+      function toggleSection(section) {
+        const folded = section.toggle.getAttribute('aria-expanded') === 'true';
+        section.toggle.setAttribute('aria-expanded', String(!folded));
+        section.pane.classList.toggle('is-collapsed', folded);
+        recentDivider.hidden = splitSections.every((entry) =>
+          entry.pane.classList.contains('is-collapsed')
+        );
       }
 
       function latestSentence(modified) {
@@ -3026,6 +3457,7 @@ const pageTemplate = `<!DOCTYPE html>
           toggle.addEventListener('click', toggleSidebar);
         }
         wireActivityBar();
+        wireSplit();
         // The two layouts keep different states for the same control — a
         // collapsed column on a wide window, a closed drawer on a narrow one —
         // so crossing the breakpoint has to re-derive the labels. Without this

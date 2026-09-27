@@ -19,6 +19,8 @@ import {
   withRecentVault,
 } from "./config.ts";
 import {
+  activityByDay,
+  type ActivityDay,
   assertVaultRoot,
   browseDirectory,
   createVaultFile,
@@ -86,6 +88,15 @@ export type WikiBindings =
      * loaded, so a search is a scan that returns matches.
      */
     search(query: string): Promise<SearchHit[]>;
+    /**
+     * The listing as a history: writes grouped under the day they happened.
+     *
+     * Its own operation because the day a write belongs to is decided once, in
+     * src/vault.ts, and the page is a string that cannot import it. Reading it
+     * here is the same trade the search view makes: the pane asks for what it
+     * draws rather than re-deriving it from a listing it happens to hold.
+     */
+    vaultActivity(): Promise<ActivityDay[]>;
     openVault(path: string): Promise<VaultState>;
     closeVault(): Promise<VaultState>;
     /** Remember whether the sidebar is collapsed, so it survives a restart. */
@@ -140,6 +151,9 @@ export function createVaultApi(): VaultApi {
     ),
     search: guard(async (query: string) =>
       await searchVaultFiles(await requireVaultRoot(), query)
+    ),
+    vaultActivity: guard(async () =>
+      activityByDay(await listVaultFiles(await requireVaultRoot()))
     ),
     openVault: guard(openVault),
     closeVault: guard(async () => {
