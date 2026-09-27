@@ -1448,6 +1448,15 @@ Deno.test("both entrypoints bake the stored appearance in", async () => {
       !/new Response\(page[,)]/.test(source),
       `${file} still serves the bare page`,
     );
+    // The webview keeps a profile directory next to the binary, so a document
+    // served without no-store survives a rebuild and a launch can paint the
+    // last build's stylesheet. That is not hypothetical: one build's cache held
+    // 62 copies of the palette the app had already moved off, which is a very
+    // confusing way to find out a change did not take.
+    assert(
+      /"cache-control":\s*"no-store"/.test(source),
+      `${file} serves the document without no-store, so a stale document can outlive a build`,
+    );
   }
 });
 

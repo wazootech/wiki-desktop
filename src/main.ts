@@ -18,9 +18,20 @@ Deno.serve(async (request) => {
   // The stored appearance is baked into the document so the window's first
   // paint is already in the right mode: waiting for the bindings would show the
   // wrong one, and a dark desktop would get a white flash on every launch.
+  //
+  // no-store because this document is the app, not a page on the web, and the
+  // webview keeps a profile directory next to the binary. Without it the
+  // WebView2 cache holds the document across rebuilds, and a launch after a
+  // palette change keeps painting the palette the last build had: 62 copies of
+  // a superseded stylesheet were sitting in one build's cache directory. The
+  // browser transport in src/dev_server.ts already sent this header; only the
+  // desktop entrypoint did not.
   const config = await loadConfig();
   return new Response(pageForTheme(config.theme), {
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
   });
 });
 
