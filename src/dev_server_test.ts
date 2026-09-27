@@ -192,6 +192,30 @@ Deno.test("the dev server drives the whole vault flow over HTTP", async () => {
       /not inside a git repository/.test(refused.body.message),
       "and the message names the reason, which is a different one from a failure",
     );
+    // Amend and push take the same road, and both refuse before git runs: the
+    // point of them is that they reach further, so the guard in front of them
+    // had better be the same one.
+    const amended = await call("amendFiles", "a message", ["page.md"]);
+    assertEqual(
+      amended.status,
+      400,
+      "an amend outside a repository is refused",
+    );
+    assert(
+      /not inside a git repository/.test(amended.body.message),
+      "and says the same thing, rather than inventing a git failure",
+    );
+    const pushed = await call("pushBranch");
+    assertEqual(pushed.status, 400, "a push outside a repository is refused");
+    assert(
+      /not inside a git repository/.test(pushed.body.message),
+      "and so does the push, which reaches somebody else's machine",
+    );
+    assertEqual(
+      (await call("pushBranch", "somewhere else")).status,
+      400,
+      "a push takes no arguments, and one that arrives is refused rather than ignored",
+    );
 
     // The editor arrives over this transport as well, so the browser target
     // and the desktop window run the same page against the same bundle.

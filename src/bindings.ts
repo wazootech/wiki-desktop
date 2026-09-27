@@ -20,10 +20,13 @@ import {
   withRecentVault,
 } from "./config.ts";
 import {
+  amendFiles,
   commitFiles,
   type CommitResult,
   type GitStatus,
   gitStatus,
+  pushBranch,
+  type PushResult,
 } from "./git.ts";
 import {
   activityByDay,
@@ -121,6 +124,22 @@ export type WikiBindings =
      * changes pane can only ever contain what the reader ticked.
      */
     commitFiles(message: string, paths: string[]): Promise<CommitResult>;
+    /**
+     * Fold the given files into the last commit, replacing it.
+     *
+     * The same path rule as commitFiles, plus git's own: a last commit the
+     * remote already has is refused rather than replaced, because replacing it
+     * is not an edit anyone else can see.
+     */
+    amendFiles(message: string, paths: string[]): Promise<CommitResult>;
+    /**
+     * Push the vault's branch to the remote its configuration already names.
+     *
+     * No arguments on purpose. The destination is read out of git rather than
+     * taken from the page, so there is nothing for a reader to aim wrong and
+     * nothing for anything else to aim either.
+     */
+    pushBranch(): Promise<PushResult>;
     openVault(path: string): Promise<VaultState>;
     closeVault(): Promise<VaultState>;
     /** Remember whether the sidebar is collapsed, so it survives a restart. */
@@ -191,6 +210,10 @@ export function createVaultApi(): VaultApi {
     commitFiles: guard(async (message: string, paths: string[]) =>
       await commitFiles(await requireVaultRoot(), message, paths)
     ),
+    amendFiles: guard(async (message: string, paths: string[]) =>
+      await amendFiles(await requireVaultRoot(), message, paths)
+    ),
+    pushBranch: guard(async () => await pushBranch(await requireVaultRoot())),
     openVault: guard(openVault),
     closeVault: guard(async () => {
       await updateConfig({ vaultRoot: null });
