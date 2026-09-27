@@ -764,7 +764,29 @@ Deno.test("the vault header's menu is the command list, not a second copy", asyn
   );
   assert(
     !/Deno\.Command|reveal|openExternal/i.test(bindings),
-    "the binding layer launches no process to do it",
+    "the binding layer launches no process of its own to do it",
+  );
+  // src/git.ts is the app's one caller of Deno.Command, and it is the reason
+  // the tasks carry --allow-run at all. If a second caller turns up, the
+  // permission the app was built without is quietly wider than the reason for
+  // it, and this is the test that says so.
+  const sources = ["bindings.ts", "config.ts", "vault.ts", "wiki_config.ts"];
+  const callers: string[] = [];
+  for (const name of sources) {
+    const text = await Deno.readTextFile(join(import.meta.dirname!, name));
+    if (/Deno\.Command/.test(text)) callers.push(name);
+  }
+  assertEqual(
+    callers.join(", "),
+    "",
+    "and nothing outside src/git.ts runs a process",
+  );
+  const git = await Deno.readTextFile(join(import.meta.dirname!, "git.ts"));
+  const launchers = git.match(/new Deno\.Command\("[^"]+"/g) ?? [];
+  assertEqual(
+    launchers.join(", "),
+    'new Deno.Command("git"',
+    "so the one launcher in the tree runs git, and nothing else",
   );
   // With no vault open the menu has nothing to act on, and a menu of one
   // greyed-out item is a worse answer than no menu.
@@ -1961,5 +1983,83 @@ Deno.test("the history is drawn from the one place a day is decided", () => {
     page.includes("'Open a vault to see its history.'") &&
       page.includes("'Nothing in this vault has a date yet.'"),
     "and says which of the two empty histories it is",
+  );
+});
+
+Deno.test("the changes pane can commit, and the tick is git's to give", () => {
+  // The list says when a file was written; git says whether there is anything
+  // to commit about it. Those are different questions and only the second one
+  // can be answered by the walk, so the tick waits for git rather than being
+  // drawn from the listing — otherwise the box offers to commit a file whose
+  // contents are identical to the last commit's.
+  assert(
+    page.includes("call('vaultStatus', [])"),
+    "the pane asks the backend what git has pending",
+  );
+  assert(
+    page.includes("call('commitFiles', [message, paths])"),
+    "and hands the ticked paths over rather than a commit-everything flag",
+  );
+  // A disabled button is a hint and not a boundary, so the backend has to
+  // refuse the same two things again: no message, and nothing ticked.
+  assert(
+    page.includes("message === ''") && page.includes("paths.length === 0"),
+    "the page refuses an empty message and an empty selection",
+  );
+  // Enter from the message line, for the same reason Enter saves in the editor.
+  assert(
+    /commitMessage\.addEventListener\('keydown'[\s\S]*?commitTicked\(\)/.test(
+      page,
+    ),
+    "Enter in the message line commits",
+  );
+  // The state line is where the three honest answers live: a vault that is not
+  // in a repository, a repository with nothing pending, and one with changes.
+  for (
+    const sentence of [
+      "'This vault is not inside a git repository.'",
+      "'Nothing pending. Every file is committed.'",
+      "'Open a vault to commit to a repository.'",
+    ]
+  ) {
+    assert(
+      page.includes(sentence),
+      `the box says "${sentence}" when that is the answer`,
+    );
+  }
+  // A truncated list that does not say it is truncated is a list lying about
+  // what is staged.
+  assert(
+    page.includes("' — showing the first '") &&
+      page.includes("gitPendingTotal = result.total"),
+    "and says how much of a long status it is not showing",
+  );
+  // Success clears the message, failure keeps it: the words are either done
+  // with or still the thing to fix.
+  assert(
+    page.includes("commitMessage.value = '';"),
+    "a commit that worked does not leave its own words under the cursor",
+  );
+});
+
+Deno.test("the commit box is one box, drawn from one list of elements", () => {
+  // The four controls are looked up by id, so each one has to be written out
+  // in the markup — the same rule the panes follow. And they are wired from
+  // those same four, rather than being queried again where they are used.
+  const ids = ["commitState", "commitMessage", "commitButton", "commitNote"];
+  for (const id of ids) {
+    assert(
+      page.includes(`id="${id}"`) && page.includes(`el('${id}')`),
+      `${id} is in the markup and looked up from it`,
+    );
+  }
+  assert(
+    /<label class="sr-only" for="commitMessage">/.test(page),
+    "the message line is labelled, not just given a placeholder",
+  );
+  assert(
+    /id="commitMessage"[\s\S]{0,200}placeholder=/.test(page) &&
+      /id="commitButton"[^>]*disabled/.test(page),
+    "and the button starts disabled rather than enabled-then-refused",
   );
 });

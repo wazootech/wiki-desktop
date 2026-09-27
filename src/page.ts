@@ -327,7 +327,17 @@ function paneMarkup(key: SidebarView): string {
         "changes",
         "Changes",
         "Files written most recently",
-        '<ul class="file-list" id="recentList" aria-label="Recently changed files"></ul>',
+        `<ul class="file-list" id="recentList" aria-label="Recently changed files"></ul>
+                <div class="commit-box" id="commitBox">
+                  <div class="commit-state" id="commitState">Reading the vault's git status</div>
+                  <div class="commit-row">
+                    <label class="sr-only" for="commitMessage">Message for the ticked files</label>
+                    <input class="commit-input" id="commitMessage" type="text"
+                           placeholder="Message for the ticked files" autocomplete="off" spellcheck="true" />
+                    <button class="button button-primary commit-button" id="commitButton" type="button" disabled>Commit</button>
+                  </div>
+                  <div class="commit-note" id="commitNote" role="status"></div>
+                </div>`,
       )
     }
               <div class="pane-divider" id="recentDivider" role="separator" aria-orientation="horizontal"
@@ -945,6 +955,53 @@ const pageTemplate = `<!DOCTYPE html>
     .split-pane.is-collapsed .split-body { display: none; }
 
     .split-head { flex: none; }
+    /*
+     * The commit box at the foot of the changes section: what git has pending,
+     * a line to write the message on, and the button that acts on both.
+     *
+     * It sits below the list rather than above it because the list is what
+     * the reader is reading and the box is what they do once they have decided.
+     * It is pinned to the bottom of the section rather than scrolling with the
+     * list, because a Commit button that scrolls out of reach halfway down a
+     * long vault is a button nobody finds.
+     */
+    .commit-box {
+      flex: none; margin: 0; padding: 7px 8px 8px;
+      border-top: 1px solid var(--line); background: var(--surface-raised);
+    }
+    .commit-state {
+      margin-bottom: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.45;
+    }
+    .commit-state.is-error { color: var(--brand-text); }
+    .commit-row { display: flex; gap: 5px; }
+    .commit-input {
+      flex: 1; min-width: 0; height: 26px; padding: 0 7px;
+      border: 1px solid var(--line); border-radius: 5px;
+      background: var(--surface-raised); color: var(--text-body);
+      font-family: inherit; font-size: 11.5px;
+    }
+    .commit-input:focus-visible { outline: 1px solid var(--brand-marker); outline-offset: -1px; }
+    /* The button keeps its own width so the input does not jump sideways every
+       time the label changes between "Commit" and "Commit 3 files". */
+    .commit-button { flex: none; min-width: 62px; }
+    .commit-note {
+      margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45;
+    }
+    .commit-note:empty { display: none; }
+    .commit-note.is-error { color: var(--brand-text); }
+    /*
+     * A row the reader can tick. The checkbox is a real input rather than a
+     * drawn box so the keyboard, the focus ring and the platform's own
+     * high-contrast rendering all come with it, and it is a label wrapping the
+     * input so the row's file name is its accessible name for free.
+     */
+    .change-check {
+      display: grid; place-items: center; flex: none;
+      width: 22px; align-self: stretch; cursor: pointer;
+    }
+    .change-check input { margin: 0; cursor: pointer; }
+    .file-list > li:has(.change-check) { display: flex; align-items: stretch; }
+    .file-list > li:has(.change-check) .file-button { flex: 1; min-width: 0; }
     .split-toggle {
       display: flex; align-items: center; gap: 4px; width: 100%;
       padding: 5px 8px; border: 0; background: transparent;
@@ -1527,6 +1584,10 @@ const pageTemplate = `<!DOCTYPE html>
       const searchResults = el('searchResults');
       const searchStatus = el('searchStatus');
       const recentList = el('recentList');
+      const commitState = el('commitState');
+      const commitMessage = el('commitMessage');
+      const commitButton = el('commitButton');
+      const commitNote = el('commitNote');
       const recentHistory = el('recentHistory');
       const recentStatus = el('recentStatus');
       const recentSplit = el('recentSplit');
@@ -1757,12 +1818,26 @@ const pageTemplate = `<!DOCTYPE html>
           // outright, so the one check that runs in the real webview could not
           // see it either. Found by calling one binding three ways in the real
           // desktop runtime; both a direct call and a spread work.
-          return await bridge[name](...(args || []));
+          const result = await bridge[name](...(args || []));
+          lastCallError = '';
+          return result;
         } catch (error) {
-          showToast((error && error.message) || 'Something went wrong.');
+          lastCallError = (error && error.message) || 'Something went wrong.';
+          showToast(lastCallError);
           return null;
         }
       }
+
+      /**
+       * Why the last call failed, kept so a pane can say it in place.
+       *
+       * A toast is the right answer for something that just went wrong on its
+       * own, and the wrong one for a failure the reader is about to try again:
+       * the commit box needs to carry the reason next to the button, because
+       * a git that refuses for an unconfigured author is a sentence about what
+       * to do next, and a toast that has already faded is not.
+       */
+      let lastCallError = '';
 
       /* Sidebar: collapsing a column on wide windows, a drawer on narrow ones */
 
@@ -2506,10 +2581,7 @@ const pageTemplate = `<!DOCTYPE html>
        * more thing to keep in step.
        */
       function renderRecent() {
-        const listed = listedFiles();
-        const recent = listed.slice().sort((left, right) =>
-          right.modified - left.modified
-        );
+        const recent = recentFiles();
         if (vault.root === null) {
           recentStatus.textContent = 'No vault open';
         } else if (recent.length === 0) {
@@ -2520,6 +2592,194 @@ const pageTemplate = `<!DOCTYPE html>
         changesCount.textContent = String(recent.length);
         renderChanges(recent);
         renderHistory();
+        // The ticks are git's answer rather than the listing's, and the working
+        // tree moves without the app hearing about it, so this is asked for
+        // every time the pane is drawn rather than once at launch.
+        refreshGitStatus();
+      }
+
+      /**
+       * The listing as this view wants it: newest write first.
+       *
+       * One function rather than a sort at each of the two places that need
+       * it, because the list is drawn twice — once by the pane, and once more
+       * by a status arriving — and a second sort is a second answer to which
+       * file is "most recent".
+       */
+      function recentFiles() {
+        return listedFiles().slice().sort((left, right) =>
+          right.modified - left.modified
+        );
+      }
+
+      /*
+       * What git has pending for this vault, and what the reader has ticked.
+       *
+       * gitPending is null until the first status lands, and null again
+       * whenever the answer is "this folder is not a repository" -- which is
+       * not the same as an empty map, because a vault outside a repository and
+       * a repository with nothing to commit are two different sentences and
+       * the pane has to be able to say which one it is.
+       *
+       * ticked is per session and never stored: it is a decision about files
+       * that are changing underneath it, and a stored tick would be a stored
+       * claim about a working tree that no longer exists.
+       */
+      let gitPending = null;
+      let ticked = new Set();
+      let gitPendingTotal = 0;
+      let gitNote = '';
+      let gitNoteIsError = false;
+      let committing = false;
+      let gitToken = 0;
+
+      /**
+       * Ask git what is pending, then redraw the list's ticks and the box.
+       *
+       * Token-guarded for the same reason the history is: opening the pane and
+       * a save landing together can put two statuses in flight, and the slower
+       * one would otherwise draw its answer under a list that has already moved
+       * on. Only the newest answer is allowed to write.
+       *
+       * A failure is a sentence in the box rather than an exception: a vault
+       * with no git installed, or a git that will not answer, is an ordinary
+       * state for a reader to be in, and the rest of the pane still works.
+       */
+      async function refreshGitStatus() {
+        const token = (gitToken += 1);
+        if (vault.root === null) {
+          gitPending = null;
+          gitPendingTotal = 0;
+          ticked = new Set();
+          updateCommitBox();
+          return;
+        }
+        const result = await call('vaultStatus', []);
+        if (token !== gitToken) return;
+        if (result === null) {
+          // Null is also how a failed call comes back, so the distinction is
+          // made by whether anything was pending a moment ago: a folder that
+          // has never been a repository and a git that just failed both leave
+          // nothing pending, and the note carries the difference.
+          gitPending = null;
+          gitPendingTotal = 0;
+          ticked = new Set();
+          // A null answer is either "not a repository", which needs no note
+          // because the state line already says it, or a call that failed,
+          // which does. The two are told apart by the message being there.
+          setGitNote(lastCallError, lastCallError !== '');
+          updateCommitBox();
+          return;
+        }
+        gitPending = new Map(
+          result.changes.map((change) => [change.path, change]),
+        );
+        gitPendingTotal = result.total;
+        // Ticks follow git: a path that no longer has a pending change cannot
+        // stay ticked, because committing it would be committing nothing. A tick
+        // the reader placed on a file that is still pending is left alone,
+        // because that is a decision they made and re-deciding it for them
+        // would be the app second-guessing a person on every refresh.
+        for (const path of [...ticked]) {
+          if (!gitPending.has(path)) ticked.delete(path);
+        }
+        // Everything git has pending starts ticked. Unticking is the decision
+        // and ticking is the absence of one, which is the right way round: the
+        // reader still has to write a message and press the button, and a box
+        // that has to be ticked once per file before anything can happen is a
+        // box nobody reaches. A tick the reader placed stays placed as long as
+        // the file is still pending, because that is a decision they made.
+        for (const path of gitPending.keys()) ticked.add(path);
+        updateCommitBox();
+        renderChanges(recentFiles());
+      }
+
+      /** What the box says about the repository, above the message line. */
+      function updateCommitBox() {
+        const paths = [...ticked];
+        const ready = gitPending !== null &&
+          paths.length > 0 &&
+          commitMessage.value.trim() !== '' &&
+          !committing;
+        commitButton.disabled = !ready;
+        commitButton.textContent = committing
+          ? 'Committing'
+          : paths.length > 0
+          ? 'Commit ' +
+            (paths.length === 1 ? '1 file' : paths.length + ' files')
+          : 'Commit';
+
+        if (vault.root === null) {
+          commitState.textContent = 'Open a vault to commit to a repository.';
+          commitState.classList.remove('is-error');
+        } else if (gitPending === null) {
+          commitState.textContent = 'This vault is not inside a git repository.';
+          commitState.classList.remove('is-error');
+        } else if (gitPending.size === 0) {
+          commitState.textContent = 'Nothing pending. Every file is committed.';
+          commitState.classList.remove('is-error');
+        } else {
+          const total = gitPendingTotal;
+          const shown = gitPending.size;
+          const files = shown === 1 ? '1 file pending' : shown + ' files pending';
+          commitState.textContent = total > shown
+            ? files + ' — showing the first ' + shown + ' of ' + total + '.'
+            : files + '.';
+          commitState.classList.remove('is-error');
+        }
+        if (gitNote !== '') commitNote.textContent = gitNote;
+        else commitNote.textContent = '';
+        commitNote.classList.toggle('is-error', gitNoteIsError);
+      }
+
+      function setGitNote(text, isError) {
+        gitNote = text;
+        gitNoteIsError = isError;
+      }
+
+      /**
+       * Commit the ticked files with what the message line says.
+       *
+       * The paths go over rather than a "commit everything" flag, because that
+       * is the whole promise the checkbox makes: a commit from here can only
+       * contain what the reader ticked. The button is disabled until there is
+       * both a message and a tick, and the message is checked again in the
+       * backend, because a disabled button is a hint and not a boundary.
+       */
+      async function commitTicked() {
+        if (committing) return;
+        const paths = [...ticked];
+        const message = commitMessage.value.trim();
+        if (paths.length === 0 || message === '') return;
+        committing = true;
+        setGitNote('Committing ' + paths.length + ' files.', false);
+        updateCommitBox();
+        const result = await call('commitFiles', [message, paths]);
+        committing = false;
+        if (result === null) {
+          setGitNote(
+            lastCallError === ''
+              ? 'The commit did not go through.'
+              : lastCallError,
+            true,
+          );
+          updateCommitBox();
+          return;
+        }
+        // The message line is emptied on success and kept on failure. A commit
+        // that worked should not leave its own words under the cursor waiting
+        // to be committed again, and one that failed should leave them exactly
+        // where they were, because they are still the thing to fix.
+        commitMessage.value = '';
+        setGitNote(
+          result.hash === ''
+            ? 'Committed ' + result.committed.length + ' files.'
+            : 'Committed ' + result.committed.length + ' files as ' +
+              result.hash + '.',
+          false,
+        );
+        ticked = new Set();
+        renderRecent();
       }
 
       /**
@@ -2528,6 +2788,13 @@ const pageTemplate = `<!DOCTYPE html>
        * Split out of {@link renderRecent} only so the two sections can be
        * redrawn without each other -- saving a file moves one list and leaves
        * the other's days alone until the next arrival.
+       *
+       * The tick on each row is git's answer, not the listing's: a file the
+       * reader wrote thirty seconds ago may be identical to the one in the
+       * last commit, and offering to commit it would be offering to write an
+       * empty commit. So the list keeps saying what it says -- when the file
+       * was written -- and only the files git has something pending for get a
+       * box at all.
        */
       function renderChanges(recent) {
         recentList.textContent = '';
@@ -2545,6 +2812,14 @@ const pageTemplate = `<!DOCTYPE html>
         const active = activeTab();
         for (const file of recent) {
           const item = document.createElement('li');
+          // The tick is drawn only where git has something pending, rather than
+          // on every row. A box beside a file with no pending change is a box
+          // that cannot do anything, and a list of 135 of them buries the two
+          // that can. Its absence is the answer: that file has nothing to
+          // commit.
+          if (gitPending !== null && gitPending.has(file.path)) {
+            item.appendChild(changeTick(file.path));
+          }
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'file-button';
@@ -2571,6 +2846,52 @@ const pageTemplate = `<!DOCTYPE html>
           item.appendChild(button);
           recentList.appendChild(item);
         }
+      }
+
+      /**
+       * The checkbox on one row of the changes list.
+       *
+       * A label wrapping a real input rather than a drawn box, so the row's
+       * name is the accessible name, the platform's own focus ring and
+       * high-contrast rendering come with it, and a click on the box does not
+       * have to be reimplemented. The label is what makes the whole 22px
+       * column a target, which is the difference between ticking a list and
+       * aiming at it.
+       */
+      function changeTick(path) {
+        const label = document.createElement('label');
+        label.className = 'change-check';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = ticked.has(path);
+        const change = gitPending.get(path);
+        // git's own two-letter code in the tooltip, so the tick says why it is
+        // there. The list is the vault's files and git's codes are a different
+        // vocabulary; this is where the two meet.
+        label.title = change.status.replace(/ /g, '') + ': ' + gitMeaning(change);
+        label.setAttribute(
+          'aria-label',
+          'Commit ' + path + ' (' + gitMeaning(change) + ')',
+        );
+        input.addEventListener('change', () => {
+          if (input.checked) ticked.add(path);
+          else ticked.delete(path);
+          updateCommitBox();
+        });
+        label.appendChild(input);
+        return label;
+      }
+
+      /** What one of git's status codes means, in the app's own words. */
+      function gitMeaning(change) {
+        const code = change.status.trim();
+        if (code === '??') return 'new file, not added yet';
+        if (code === 'A') return 'added to the index';
+        if (code === 'M') return 'edited';
+        if (code === 'D') return 'deleted';
+        if (code === 'R') return 'renamed';
+        if (code === 'C') return 'copied';
+        return change.staged ? 'staged' : 'edited on disk';
       }
 
       /**
@@ -3551,6 +3872,18 @@ const pageTemplate = `<!DOCTYPE html>
         });
         newFileButton.addEventListener('click', createFile);
         emptyNewFileButton.addEventListener('click', createFile);
+        commitMessage.addEventListener('input', updateCommitBox);
+        // Enter commits from the message line, for the same reason Enter saves
+        // in the editor: the reader has finished writing it, and the button is
+        // the only other thing to reach for. The button's own disabled state is
+        // the check, so a line with nothing ticked and Enter does nothing
+        // rather than committing something unintended.
+        commitMessage.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          commitTicked();
+        });
+        commitButton.addEventListener('click', commitTicked);
         saveButton.addEventListener('click', saveFile);
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);

@@ -28,7 +28,7 @@ deno task check        # type-check (uses --desktop for the Deno.BrowserWindow t
 deno task test         # unit tests
 deno task check:appearance  # drives both palettes in the real desktop webview
 
-WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env
+WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env --allow-run=git
                        # adds one opt-in test: every page in that vault has to
                        # survive read → editor → save with its bytes intact
 
@@ -137,10 +137,39 @@ pre-paint path here is the real one, not a model of it.
   text" and skips the file, and the `MAX_EDITABLE_BYTES` and `MAX_VAULT_FILES`
   bounds already on the walk are what keep it to milliseconds on a wiki-sized
   vault. Recently changed is a sort of the listing by modification time, so it
-  needed no operation at all — the walk now records each file's time. Source
-  control was not built: `.git` is deliberately invisible to the app, a vault is
-  usually not a repository root, and reading git means either shipping it as a
-  runtime dependency or reimplementing it.
+  needed no operation at all — the walk now records each file's time. A fourth
+  view for source control was considered and left out: it would have to be a
+  second inventory of the vault's files, and a reader who wants commits wants a
+  commit log, which is the thing this app still does not have. What the changes
+  view does instead is let a reader commit, which is the half of source control
+  a wiki editor actually reaches for.
+- **The changes view can commit, and the tick on a row is git's to give** — the
+  list says when a file was written, which the walk already knows, and git says
+  whether there is anything to commit about it, which only git knows. So a row
+  gets a checkbox only where git reports a pending change, and a checkbox beside
+  a file with nothing pending would be one that cannot do anything. Each pending
+  file starts ticked, because unticking is the decision and ticking is the
+  absence of one; the reader still writes a message and presses the button. The
+  paths go to the backend rather than a "commit everything" flag, so a commit
+  from the pane can only ever contain what was ticked, and a file somebody else
+  staged in another window is left where it was.
+- **`src/git.ts` shells out to git, and is the only file that does** —
+  reimplementing the index, the packs and the merge machinery is not a thing a
+  wiki editor should carry, so the app asks git instead. The tasks therefore
+  grant `--allow-run=git` and nothing else, which is a narrower permission than
+  the `--allow-run` this app was built without: a test asserts the binding layer
+  itself launches no process, and git is the one caller of `Deno.Command` in the
+  tree. `git` is also the app's first dependency on a program being _installed_,
+  so "git is not on the PATH" and "this folder is not a repository" are two
+  different sentences and neither stops the rest of the app — the second is the
+  normal state of most vaults. Two things about the arrangement are deliberate
+  rather than incidental. Every path is checked by `normalizeVaultPath` before
+  it is used and lands after a `--`, so a wiki file called `-n.md` is a file and
+  a file whose name is a shell command is a name. And the commit uses the
+  _pathspec_ form of `git commit`, not `git add` followed by a bare commit: it
+  builds the commit from HEAD plus the named files and leaves the index alone,
+  so a commit from here cannot sweep up something another window staged, and
+  cannot be surprised by the order the two operations happened in.
 - **The changes view is two panes, because a source control panel is two
   things** — a source control panel answers "what changed" and "what changed
   when" at once, and one pane can only be one of those. So the view is split:
@@ -152,10 +181,10 @@ pre-paint path here is the real one, not a model of it.
   a bigger nudge, Home and End for the ends, double-click to even them out. The
   split is a ratio rather than a height, because the pane's height belongs to
   the window, and it is remembered: the share is stored in the app config beside
-  the sidebar width and put back before the first paint of the next launch.
-  It used not to be, on the grounds that a split set once is not a preference —
-  but the reader who dragged the history down to a rail did it because of what
-  they were reading, and they will be reading the same vault tomorrow.
+  the sidebar width and put back before the first paint of the next launch. It
+  used not to be, on the grounds that a split set once is not a preference — but
+  the reader who dragged the history down to a rail did it because of what they
+  were reading, and they will be reading the same vault tomorrow.
 - **The history is days, not commits** — `activityByDay` in `src/vault.ts`
   buckets the listing under each file's local midnight, dropping a file the
   filesystem could not date rather than filing it under the epoch. It is one
@@ -212,7 +241,8 @@ pre-paint path here is the real one, not a model of it.
 - **Bindings** — `win.bind(name, handler)` exposes Deno functions to the webview
   as `bindings.name(args)`. They run in-process (no socket IPC) and inherit the
   runtime's permissions, so the tasks start Deno with
-  `--allow-read --allow-write --allow-env`.
+  `--allow-read --allow-write --allow-env` and, for the one operation that
+  shells out to git, `--allow-run=git`.
 
   **The page calls them with a spread, never `.apply`.** One function reaches
   every operation: `bridge[name](...(args || []))`. The desktop runtime hands
@@ -349,11 +379,11 @@ pre-paint path here is the real one, not a model of it.
 
   **Reveal in Explorer is deliberately not there.** `deno desktop` has no
   file-manager API — `Deno.BrowserWindow` offers `bind`, `executeJs` and menus,
-  and nothing else — so it would mean a `Deno.Command` and `--allow-run` on the
-  desktop tasks, for a permission the app is otherwise built without on purpose.
-  Copying the path is the part a user can act on from the clipboard, so that is
-  what shipped; a test asserts the binding layer launches no process, so the
-  decision cannot be quietly reversed.
+  and nothing else — so it would mean a `Deno.Command` and a wider `--allow-run`
+  on the desktop tasks than the one scoped to git. Copying the path is the part
+  a user can act on from the clipboard, so that is what shipped; a test asserts
+  the binding layer launches no process of its own, so the decision cannot be
+  quietly reversed by a second caller appearing there.
 - **The vault header carries one action, and the rest are menu entries** — it
   was a row of two full-width labelled buttons stacked under the vault's name,
   so the sidebar's first read was `Open vault…` directly beneath a vault that
@@ -430,10 +460,10 @@ pre-paint path here is the real one, not a model of it.
   the document that is showing and the page decides what to do, because the page
   is a classic script with no import to hand and is the part that knows the
   vault. A target outside the vault opens the folder browser at the folder it
-  named. External links go to `window.open`: the app runs without `--allow-run`,
-  and handing a URL to the OS would mean granting a permission to every task so
-  it could shell out per platform. In the desktop webview that opens a window
-  rather than the system browser.
+  named. External links go to `window.open`: the app grants `--allow-run` for
+  git alone, and handing a URL to the OS would mean a permission every task
+  carries so it can shell out per platform. In the desktop webview that opens a
+  window rather than the system browser.
 - **Line endings** — the editor's document holds LF only, and the file keeps the
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a
