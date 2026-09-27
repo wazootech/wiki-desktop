@@ -3,18 +3,22 @@ import { join } from "node:path";
 import {
   ACTIVITY_BAR_WIDTH,
   clampSidebarWidth,
+  clampSplitRatio,
   coerceSidebarView,
   coerceTheme,
   configDir,
   DEFAULT_CONFIG,
   DEFAULT_SIDEBAR_VIEW,
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_SPLIT_RATIO,
   DEFAULT_THEME,
   homeDirectory,
   LIST_VIEW_DEFAULTS,
   type ListViewKey,
   listViewValue,
   loadConfig,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_VIEWS,
@@ -74,6 +78,41 @@ Deno.test("clampSidebarWidth keeps a stored width inside the layout's range", ()
     clampSidebarWidth(Number.NaN),
     DEFAULT_SIDEBAR_WIDTH,
     "a missing or corrupt width falls back to the default",
+  );
+});
+
+Deno.test("clampSplitRatio keeps a stored share inside the divider's range", () => {
+  // The same argument as the width, for the same reason: the stored ratio
+  // outlives the session that produced it, and a share outside the ends the
+  // divider is drawn with is a split the user could not have dragged into place
+  // and could not drag back out of.
+  assertEqual(
+    clampSplitRatio(0.35),
+    0.35,
+    "a share in range is kept, and not rounded, because the drag was",
+  );
+  assertEqual(
+    clampSplitRatio(0),
+    MIN_SPLIT_RATIO,
+    "a split with nothing above the divider is raised to the bottom end",
+  );
+  assertEqual(
+    clampSplitRatio(1),
+    MAX_SPLIT_RATIO,
+    "and one with nothing below it is lowered to the top end",
+  );
+  assertEqual(
+    clampSplitRatio(Number.NaN),
+    DEFAULT_SPLIT_RATIO,
+    "a missing or corrupt share falls back to the default",
+  );
+  // The bounds are the divider's, so a setting file edited by hand cannot
+  // widen them: a stored 0.9 is a split whose history pane is a rule and a
+  // header, which is not a split.
+  assertEqual(
+    clampSplitRatio(MAX_SPLIT_RATIO + 0.1),
+    MAX_SPLIT_RATIO,
+    "a share past the top end is pulled back to it",
   );
 });
 

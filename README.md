@@ -151,8 +151,11 @@ pre-paint path here is the real one, not a model of it.
   the divider keeps the sidebar resizer's contract — arrows to nudge, Shift for
   a bigger nudge, Home and End for the ends, double-click to even them out. The
   split is a ratio rather than a height, because the pane's height belongs to
-  the window, and it is not remembered: a split set once for one session is not
-  a preference.
+  the window, and it is remembered: the share is stored in the app config beside
+  the sidebar width and put back before the first paint of the next launch.
+  It used not to be, on the grounds that a split set once is not a preference —
+  but the reader who dragged the history down to a rail did it because of what
+  they were reading, and they will be reading the same vault tomorrow.
 - **The history is days, not commits** — `activityByDay` in `src/vault.ts`
   buckets the listing under each file's local midnight, dropping a file the
   filesystem could not date rather than filing it under the epoch. It is one

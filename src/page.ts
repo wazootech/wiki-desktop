@@ -2,10 +2,13 @@ import {
   ACTIVITY_BAR_WIDTH,
   DEFAULT_SIDEBAR_VIEW,
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_SPLIT_RATIO,
   DEFAULT_THEME,
   LIST_VIEW_DEFAULTS,
   type ListViewKey,
   type ListViewSetter,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
   setterFor,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
@@ -329,7 +332,9 @@ function paneMarkup(key: SidebarView): string {
     }
               <div class="pane-divider" id="recentDivider" role="separator" aria-orientation="horizontal"
                    aria-label="Resize the changes and history panes" aria-controls="changesBody"
-                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="70"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="${
+      Math.round(DEFAULT_SPLIT_RATIO * 100)
+    }"
                    title="Drag to resize, double-click to even them out" tabindex="0"></div>
               ${
       splitSection(
@@ -1602,13 +1607,54 @@ const pageTemplate = `<!DOCTYPE html>
        * height chosen on a tall window is most of a short one. The bounds are
        * the two ends of that bargain -- a section squeezed to nothing is a
        * section that was not really offered, and one left with the lot is a
-       * split that is not one.
+       * split that is not one. They are imported from the settings file rather
+       * than written here, because the same three numbers are what the stored
+       * ratio is clamped to on the other side of the transport.
+       *
+       * The split is remembered. It used not to be, on the grounds that a split
+       * set once for one session is not a preference -- but the reader who
+       * dragged the history down to a rail did that because of what they were
+       * reading, and they will be reading the same vault tomorrow. A divider
+       * that forgets is a divider dragged once per launch.
        */
-      const DEFAULT_SPLIT_SHARE = 0.7;
-      const MIN_SPLIT_SHARE = 0.2;
-      const MAX_SPLIT_SHARE = 0.8;
       /** Below this, the pane cannot be divided at all and the split holds still. */
       const MIN_SPLIT_PANE_HEIGHT = 72;
+
+      /** Clamp a stored or dragged share to the ends the divider can reach. */
+      function clampSplitRatio(ratio) {
+        // A value the transport never sent must not reach a flexGrow as NaN,
+        // which would drop both sections to their content height.
+        const wanted = Number.isFinite(ratio) ? ratio : ${DEFAULT_SPLIT_RATIO};
+        return Math.min(
+          ${MAX_SPLIT_RATIO},
+          Math.max(${MIN_SPLIT_RATIO}, wanted),
+        );
+      }
+
+      /**
+       * Put the split where this share says, and say where that ended up.
+       *
+       * Separate from the divider's own handler because the stored share
+       * arrives with the launch state, before anything has been dragged:
+       * applying it is a redraw, not an event, and it has no reason to wait
+       * for a pointer to find out what height the window turned out to be.
+       */
+      function applySplit(ratio) {
+        // Rounded to a thousandth before anything else sees it, and returned
+        // rounded rather than raw, because that is the share that gets stored.
+        // Adding 0.1 to 0.7 in binary lands just under it, so an unrounded
+        // share would put 0.30000000000000004 in the settings file and drift a
+        // little further on every nudge.
+        const share = Math.round(clampSplitRatio(ratio) * 1000) / 1000;
+        const grow = Math.round(share * 100) / 10;
+        changesPane.style.flexGrow = String(grow);
+        historyPane.style.flexGrow = String(10 - grow);
+        recentDivider.setAttribute(
+          'aria-valuenow',
+          String(Math.round(share * 100)),
+        );
+        return share;
+      }
 
       /*
        * Which history answer is the current one.
@@ -1656,6 +1702,7 @@ const pageTemplate = `<!DOCTYPE html>
         sidebarCollapsed: false,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
         sidebarView: '${DEFAULT_SIDEBAR_VIEW}',
+        splitRatio: ${DEFAULT_SPLIT_RATIO},
         theme: '${DEFAULT_THEME}',
       };
       // Before the stored state arrives, every switch is worth its default, so
@@ -2647,22 +2694,17 @@ const pageTemplate = `<!DOCTYPE html>
        */
       function wireSplit() {
         /** The two sections, as a share of the pane, clamped to what fits. */
-        function setSplit(ratio) {
+        function setSplit(ratio, persist) {
           const pane = recentSplit.getBoundingClientRect().height;
           // A pane too short to divide leaves the ratio alone rather than
           // setting a negative height, which is how a split ends up with one
           // section pushed off the top of the window.
           if (pane < MIN_SPLIT_PANE_HEIGHT * 2) return;
-          const share = Math.min(
-            MAX_SPLIT_SHARE,
-            Math.max(MIN_SPLIT_SHARE, ratio),
-          );
-          changesPane.style.flexGrow = String(share * 10);
-          historyPane.style.flexGrow = String((1 - share) * 10);
-          recentDivider.setAttribute(
-            'aria-valuenow',
-            String(Math.round(share * 100)),
-          );
+          vault.splitRatio = applySplit(ratio);
+          // Stored once the gesture is over, not once per pointermove: a drag
+          // across a tall pane is hundreds of moves, and the setting is a
+          // decision the reader makes by letting go.
+          if (persist) call('setSplitRatio', [vault.splitRatio]);
         }
 
         /** Where the divider sits now, as the same share setSplit takes. */
@@ -2670,7 +2712,7 @@ const pageTemplate = `<!DOCTYPE html>
           const top = changesPane.getBoundingClientRect().height;
           const bottom = historyPane.getBoundingClientRect().height;
           const total = top + bottom;
-          return total === 0 ? DEFAULT_SPLIT_SHARE : top / total;
+          return total === 0 ? ${DEFAULT_SPLIT_RATIO} : top / total;
         }
 
         for (const section of splitSections) {
@@ -2687,6 +2729,7 @@ const pageTemplate = `<!DOCTYPE html>
           if (recentDivider.hasPointerCapture(event.pointerId)) {
             recentDivider.releasePointerCapture(event.pointerId);
           }
+          setSplit(splitRatio(), true);
         }
 
         recentDivider.addEventListener('pointerdown', (event) => {
@@ -2716,7 +2759,7 @@ const pageTemplate = `<!DOCTYPE html>
         recentDivider.addEventListener('pointercancel', endDrag);
 
         recentDivider.addEventListener('dblclick', () => {
-          setSplit(DEFAULT_SPLIT_SHARE);
+          setSplit(${DEFAULT_SPLIT_RATIO}, true);
         });
 
         recentDivider.addEventListener('keydown', (event) => {
@@ -2725,10 +2768,14 @@ const pageTemplate = `<!DOCTYPE html>
             event.preventDefault();
             setSplit(
               splitRatio() + (event.key === 'ArrowDown' ? step : -step),
+              true,
             );
           } else if (event.key === 'Home' || event.key === 'End') {
             event.preventDefault();
-            setSplit(event.key === 'Home' ? MIN_SPLIT_SHARE : MAX_SPLIT_SHARE);
+            setSplit(
+              event.key === 'Home' ? ${MIN_SPLIT_RATIO} : ${MAX_SPLIT_RATIO},
+              true,
+            );
           }
         });
       }
@@ -2896,6 +2943,10 @@ const pageTemplate = `<!DOCTYPE html>
           view.input.checked = typeof stored === 'boolean' ? stored : view.default;
         }
         applySidebarWidth();
+        // The split comes back with the state, so the divider is where the
+        // reader left it before the first paint of this session rather than
+        // snapping to the default under their hands.
+        vault.splitRatio = applySplit(vault.splitRatio);
         renderVault();
         renderFiles();
         showPlaceholder();

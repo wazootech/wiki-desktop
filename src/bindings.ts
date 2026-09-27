@@ -2,6 +2,7 @@ import { basename } from "node:path";
 
 import {
   clampSidebarWidth,
+  clampSplitRatio,
   coerceSidebarView,
   coerceTheme,
   homeDirectory,
@@ -48,6 +49,8 @@ export interface VaultStateBase {
   sidebarWidth: number;
   /** Which sidebar view was showing, from the activity bar's list. */
   sidebarView: SidebarView;
+  /** The changes pane's share of the changes/history split, 0.2 to 0.8. */
+  splitRatio: number;
   /** Light/dark appearance the user last chose, `system` if they never did. */
   theme: ThemePreference;
 }
@@ -105,6 +108,14 @@ export type WikiBindings =
     setSidebarWidth(width: number): Promise<VaultState>;
     /** Remember which view the sidebar is showing, so it survives a restart. */
     setSidebarView(view: string): Promise<VaultState>;
+    /**
+     * Remember where the changes/history split sits, so it survives a restart.
+     *
+     * Clamped for the same reason the width is: the page is a caller like any
+     * other, and a stored ratio outside the ends the divider can be dragged to
+     * is a split the user could not have put there and could not undo.
+     */
+    setSplitRatio(ratio: number): Promise<VaultState>;
     /** Remember the appearance, so it survives a restart. */
     setTheme(theme: string): Promise<VaultState>;
   }
@@ -176,6 +187,10 @@ export function createVaultApi(): VaultApi {
       // outlives this session, and a view the page cannot draw would leave the
       // sidebar showing nothing at all.
       await updateConfig({ sidebarView: coerceSidebarView(view) });
+      return await readState();
+    }),
+    setSplitRatio: guard(async (ratio: number) => {
+      await updateConfig({ splitRatio: clampSplitRatio(Number(ratio)) });
       return await readState();
     }),
     setTheme: guard(async (theme: string) => {
@@ -264,6 +279,7 @@ async function readState(): Promise<VaultState> {
     ...listViewsOf(config),
     sidebarWidth: config.sidebarWidth,
     sidebarView: config.sidebarView,
+    splitRatio: config.splitRatio,
     theme: config.theme,
   };
   if (!config.vaultRoot) {

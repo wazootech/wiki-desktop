@@ -34,6 +34,24 @@ export const DEFAULT_SIDEBAR_WIDTH = 250;
 export const ACTIVITY_BAR_WIDTH = 48;
 
 /**
+ * Where the changes/history split sits, as the changes pane's share of the
+ * height, and the ends it can be dragged to.
+ *
+ * A share rather than a height, because the split's height belongs to the
+ * window: a height chosen on a tall window is most of a short one, and would
+ * need re-clamping for every window the user ever opens it in. The two bounds
+ * are the bargain: a section squeezed to nothing was not really offered, and
+ * one left with the lot is not a split.
+ *
+ * Exported for the same reason the sidebar's bounds are. The page drags with
+ * them and this file stores with them, and a stored ratio the drag could not
+ * produce would be a ratio no user had ever chosen.
+ */
+export const DEFAULT_SPLIT_RATIO = 0.7;
+export const MIN_SPLIT_RATIO = 0.2;
+export const MAX_SPLIT_RATIO = 0.8;
+
+/**
  * How the app picks between the light and dark palettes. `system` defers to the
  * operating system, which is what the desktop runtime and every browser report
  * through prefers-color-scheme, so it is the default: the app matches the rest
@@ -176,6 +194,15 @@ export interface AppSettings {
    * stays the answer to which file is open.
    */
   sidebarView: SidebarView;
+  /**
+   * The changes pane's share of the changes/history split, restored on the
+   * next launch.
+   *
+   * Stored next to the width because it is the same kind of thing: a place in
+   * the window the reader dragged into place and would otherwise have to drag
+   * into place again on every launch.
+   */
+  splitRatio: number;
   /** Light/dark appearance: `system` follows the OS, or the user pinned one. */
   theme: ThemePreference;
 }
@@ -195,6 +222,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   sidebarCollapsed: false,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   sidebarView: DEFAULT_SIDEBAR_VIEW,
+  splitRatio: DEFAULT_SPLIT_RATIO,
   theme: DEFAULT_THEME,
   ...LIST_VIEW_DEFAULTS,
 };
@@ -254,6 +282,19 @@ export function coerceTheme(value: unknown): ThemePreference {
       (THEME_PREFERENCES as readonly string[]).includes(value)
     ? value as ThemePreference
     : DEFAULT_THEME;
+}
+
+/**
+ * Clamp a stored or dragged split ratio into the ends the divider can reach.
+ *
+ * Clamped on the way in as well as on the way to the page, for the same reason
+ * the width is: whatever the page sends outlives this session, and a stored
+ * ratio outside these ends would leave a section at a size the drag cannot
+ * return it to.
+ */
+export function clampSplitRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return DEFAULT_SPLIT_RATIO;
+  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio));
 }
 
 /** Clamp a stored or dragged sidebar width into the range the layout allows. */
@@ -416,6 +457,7 @@ function sanitize(value: unknown): AppConfig {
     ...sanitizeListViews(record),
     sidebarWidth: clampSidebarWidth(Number(record.sidebarWidth)),
     sidebarView: coerceSidebarView(record.sidebarView),
+    splitRatio: clampSplitRatio(Number(record.splitRatio)),
     theme: coerceTheme(record.theme),
   };
 }

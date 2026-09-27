@@ -11,6 +11,9 @@ import { join } from "node:path";
 import {
   ACTIVITY_BAR_WIDTH,
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_SPLIT_RATIO,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_VIEWS,
@@ -1845,19 +1848,41 @@ Deno.test("the changes view is two panes with a divider between them", () => {
   );
 });
 
-Deno.test("the split is a bounded ratio, and a divider the keyboard can move", () => {
+Deno.test("the split is a bounded ratio, and a divider the keyboard can move", async () => {
   // A split remembered in pixels is a split sized for the window it was set
   // in, and a divider nobody can move without a mouse is a layout the reader
   // has to live with. Both were true of the sidebar's own resizer, which is
   // why this one keeps that contract instead of inventing another.
   assert(
-    page.includes("const MIN_SPLIT_SHARE") &&
-      page.includes("const MAX_SPLIT_SHARE") &&
-      page.includes("const DEFAULT_SPLIT_SHARE"),
+    MIN_SPLIT_RATIO < DEFAULT_SPLIT_RATIO &&
+      DEFAULT_SPLIT_RATIO < MAX_SPLIT_RATIO,
     "the split has ends and a middle",
   );
+  // The bounds live in the settings file, and the page draws with them rather
+  // than with numbers of its own. A second copy here would be a range the
+  // stored ratio is clamped to that the divider cannot be dragged to. The
+  // rendered page has the numbers in it, so the source is what says where they
+  // came from.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "page.ts"),
+  );
   assert(
-    /Math\.min\(\s*MAX_SPLIT_SHARE,\s*Math\.max\(MIN_SPLIT_SHARE/.test(page),
+    source.includes("${MAX_SPLIT_RATIO}") &&
+      source.includes("${MIN_SPLIT_RATIO}") &&
+      source.includes("${DEFAULT_SPLIT_RATIO}"),
+    "and the page spends the shared bounds, not its own",
+  );
+  assert(
+    !source.includes("SPLIT_SHARE"),
+    "and has no second copy of them to drift",
+  );
+  assert(
+    page.includes(`aria-valuenow="${Math.round(DEFAULT_SPLIT_RATIO * 100)}"`),
+    "and the divider opens where the stored middle says it does",
+  );
+  assert(
+    /function clampSplitRatio\([\s\S]*?Math\.min\(\s*\$\{MAX_SPLIT_RATIO\},\s*Math\.max\(\$\{MIN_SPLIT_RATIO\}/
+      .test(source),
     "and a drag is clamped to them, so neither section can be squeezed away",
   );
   assert(
@@ -1875,6 +1900,46 @@ Deno.test("the split is a bounded ratio, and a divider the keyboard can move", (
       `the divider answers ${key}, like the sidebar's own handle`,
     );
   }
+});
+
+Deno.test("the split is remembered, like the sidebar's width", () => {
+  // The ratio is the same kind of thing as the width: a place in the window the
+  // reader dragged into position. It used to be kept for the session only, on
+  // the grounds that a split set once is not a preference -- but the reader who
+  // dragged the history down to a rail did it because of what they were
+  // reading, and they will be reading the same vault tomorrow.
+  assert(
+    page.includes("call('setSplitRatio', [vault.splitRatio])"),
+    "letting go of the divider stores where it was left",
+  );
+  // What is stored is what is drawn, to a thousandth: an unrounded share
+  // drifts a little further on every nudge and puts 0.30000000000000004 in the
+  // settings file.
+  assert(
+    /function applyRatio|function applySplit[\s\S]*?Math\.round\(clampSplitRatio\(ratio\) \* 1000\) \/ 1000[\s\S]*?return share;/
+      .test(page),
+    "and the stored share is the rounded one the divider is drawn at",
+  );
+  assert(
+    page.includes("vault.splitRatio = applySplit(vault.splitRatio)"),
+    "and the stored share is put back before the first paint of the session",
+  );
+  // Once per gesture, not once per pointermove: a drag down a tall pane is
+  // hundreds of moves and the setting is a decision the reader makes by
+  // letting go.
+  const drag = page.slice(
+    page.indexOf("addEventListener('pointermove'"),
+    page.indexOf("addEventListener('pointerup'"),
+  );
+  assert(
+    drag.length > 0 && !drag.includes("setSplitRatio") &&
+      !/setSplit\([^)]*true\)/.test(drag),
+    "a drag stores its ending rather than every pixel it passed over",
+  );
+  assert(
+    /function endDrag[\s\S]*?setSplit\(splitRatio\(\), true\)/.test(page),
+    "and it is the letting go that does it",
+  );
 });
 
 Deno.test("the history is drawn from the one place a day is decided", () => {
