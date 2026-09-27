@@ -134,6 +134,22 @@ pre-paint path here is the real one, not a model of it.
   stay openable. A missing, unparseable, or non-mapping config produces exactly
   the listing there was before — a broken config must not be able to hide a
   vault's files.
+- **Colours come from `wazoo.dev/DESIGN.md`, not from this file** — the two
+  palettes in `src/page.ts` are that file's twelve tokens spread over the roles
+  the app needs: Eggshell and Ink for light, Void and Surface for dark, Sunset
+  Orange for anything the user can act on, and the spec's purple only behind
+  selected text. The values are copied rather than read, because a clone of this
+  repository does not bring that file along and a build that failed without it
+  would be worse than a copy; `src/page_test.ts` is what notices the copy going
+  stale. Three places depart from a literal reading, each for a reason the
+  comment beside it gives: where the spec names one value for a role this app
+  needs several of, the extras are neutral steps between the values it does
+  name, which is what keeps the greys warm; the light palette's word-carrying
+  accent is a darkened orange, because Sunset Orange on Eggshell is 2.1:1 and
+  dark can keep the brand's own value at 9:1; and the text on a brand-coloured
+  control is Ink rather than white, which is 7.3:1 against 2.3:1. The native
+  checkboxes take `accent-color` from the brand too, since it is the one part of
+  a platform control the palette does not otherwise reach.
 - **Bindings** — `win.bind(name, handler)` exposes Deno functions to the webview
   as `bindings.name(args)`. They run in-process (no socket IPC) and inherit the
   runtime's permissions, so the tasks start Deno with

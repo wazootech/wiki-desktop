@@ -170,7 +170,7 @@ const pageTemplate = `<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f5f7fb" />
+  <meta name="theme-color" content="#f7f2e8" />
   <title>Wazoo Wiki</title>
   <style>
     /*
@@ -181,51 +181,68 @@ const pageTemplate = `<!DOCTYPE html>
      * the OS — before the first paint, and again whenever the OS flips. Each
      * palette is written once, so they cannot drift apart, and a rename of the
      * attribute is a failure rather than a silently unstyled window.
+     *
+     * The colours are wazoo.dev/DESIGN.md's, not this file's: Eggshell and Ink
+     * for light, Void and Surface for dark, Sunset Orange for anything the user
+     * can act on, and the spec's purple only behind selected text. That file is
+     * not read at build time — a clone of this repository does not bring it
+     * along — so the twelve documented tokens are copied here and
+     * src/page_test.ts is what notices the copy going stale. Where the spec
+     * gives one value for a role this app needs several of, the extras are
+     * neutral steps between the values it does give, which is what keeps the
+     * greys warm instead of drifting back to the cold ones this replaced.
      */
     :root {
       color-scheme: light;
-      --canvas: #f5f7fb;
-      --panel: #ffffff;
-      --panel-muted: #f8f9fc;
-      --line: #e4e8f0;
-      --line-strong: #cdd3df;
-      --surface-hover: #f4f5fb;
-      --surface-raised: #fbfcff;
-      --text: #1b2434;
-      --text-soft: #5d6779;
-      --text-faint: #9aa4b6;
-      --text-label: #3c465a;
-      --text-body: #2d3749;
-      --text-editor: #273247;
-      --dot: #b9c1cf;
-      --muted: #748096;
-      --brand: #5b4de8;
-      --brand-dark: #473bc7;
-      --brand-text: #473bc7;
-      --brand-soft: #efedff;
-      --brand-marker: #7b6ce0;
-      --on-brand: #ffffff;
-      --brand-shadow: rgba(91, 77, 232, 0.2);
-      --kbd-bg: #f6f7fa;
-      --kbd-line: #dfe3eb;
-      --warn-text: #9a6a12;
+      --canvas: #f7f2e8;
+      --panel: #fffdf8;
+      --panel-muted: #f2ede2;
+      --line: #e2dacb;
+      --line-strong: #cdc2ae;
+      --surface-hover: #efe9dc;
+      --surface-raised: #fbf7ef;
+      --text: #1f1b14;
+      --text-soft: #4b4332;
+      --text-faint: #7c7c7c;
+      --text-label: #1f1b14;
+      --text-body: #2e2820;
+      --text-editor: #241f18;
+      --dot: #c4b9a4;
+      --muted: #6b6355;
+      --brand: #ff8c00;
+      --brand-dark: #f57c00;
+      /* Not the brand's own value: Sunset Orange on Eggshell is 2.1:1, which is
+         a fill and a marker but never text. The accent that carries words is a
+         darkened orange at 5:1, for the same reason the dark palette can keep
+         the brand's value and this one cannot. */
+      --brand-text: #a65000;
+      --brand-soft: #fdebd2;
+      --brand-marker: #ffaa00;
+      /* Ink on Sunset Orange is 7.3:1. White on it would be 2.3:1, so the text
+         on a brand-coloured button is the spec's light-mode ink either way. */
+      --on-brand: #1f1b14;
+      --brand-shadow: rgba(255, 140, 0, 0.24);
+      --kbd-bg: #f2ede2;
+      --kbd-line: #e2dacb;
+      --warn-text: #8a5a00;
       --success: #17845b;
-      --warning: #eb9f27;
-      --selection-soft: rgba(91, 77, 232, 0.22);
+      --warning: #c77700;
+      /* The one role the spec's purple has: selected text. */
+      --selection-soft: rgba(132, 108, 228, 0.22);
       /* Syntax, read by the editor bundle's highlight style. */
-      --syntax-heading: #23304f;
-      --syntax-link: #4b3fd0;
+      --syntax-heading: #1f1b14;
+      --syntax-link: #a65000;
       --syntax-code: #7a4a12;
-      --syntax-marker: #7d8799;
-      --syntax-muted: #5f6b7d;
-      --syntax-keyword: #8b2fbf;
+      --syntax-marker: #8a8172;
+      --syntax-muted: #6b6355;
+      --syntax-keyword: #9b2f6f;
       --syntax-string: #17724f;
       --syntax-number: #a8540a;
       --syntax-type: #2f6f9f;
-      --overlay: rgba(27, 36, 52, 0.38);
-      --focus-ring: rgba(91, 77, 232, 0.24);
-      --toast-bg: #ffffff;
-      --shadow: 0 18px 45px rgba(33, 43, 72, 0.08);
+      --overlay: rgba(31, 27, 20, 0.38);
+      --focus-ring: rgba(255, 140, 0, 0.45);
+      --toast-bg: #fffdf8;
+      --shadow: 0 18px 45px rgba(31, 27, 20, 0.1);
       --sidebar-width: ${DEFAULT_SIDEBAR_WIDTH}px;
       /* The brand row and the tab bar share this height so the divider under
          them is one continuous line across the window, not two steps. The
@@ -236,44 +253,49 @@ const pageTemplate = `<!DOCTYPE html>
 
     :root[data-theme="dark"] {
       color-scheme: dark;
-      --canvas: #13151b;
-      --panel: #1a1d25;
-      --panel-muted: #20232c;
-      --line: #2b2f3a;
-      --line-strong: #3b4152;
-      --surface-hover: #252935;
-      --surface-raised: #232733;
-      --text: #e6e9f2;
-      --text-soft: #a7b0c2;
-      --text-faint: #8590a6;
-      --text-label: #c4cad8;
-      --text-body: #c9cfdb;
-      --text-editor: #dfe4ef;
-      --dot: #4b5364;
-      --muted: #8b95a9;
-      --brand: #6a5cf0;
-      --brand-dark: #7d70ff;
-      --brand-text: #b3a9ff;
-      --brand-soft: #2a2740;
-      --brand-marker: #6f63e8;
-      --kbd-bg: #232733;
-      --kbd-line: #3b4152;
-      --warn-text: #e8b566;
+      /* Void and Surface, from the same file, and dark is the spec's default
+         rather than this app's afterthought. */
+      --canvas: #040404;
+      --panel: #0f0f0f;
+      --panel-muted: #131313;
+      --line: #262626;
+      --line-strong: #333333;
+      --surface-hover: #1a1a1a;
+      --surface-raised: #161616;
+      --text: #b0b0b1;
+      --text-soft: #9a9a9b;
+      --text-faint: #7c7c7c;
+      --text-label: #d4d4d5;
+      --text-body: #b0b0b1;
+      --text-editor: #c8c8c9;
+      --dot: #3a3a3a;
+      --muted: #7c7c7c;
+      --brand: #ff8c00;
+      --brand-dark: #f57c00;
+      /* On void the brand's own value is 9:1, so here it can carry words. */
+      --brand-text: #ff8c00;
+      --brand-soft: rgba(255, 140, 0, 0.16);
+      --brand-marker: #ffaa00;
+      --on-brand: #1f1b14;
+      --brand-shadow: rgba(255, 140, 0, 0.2);
+      --kbd-bg: #141414;
+      --kbd-line: #2a2a2a;
+      --warn-text: #ffb74d;
       --success: #35c08c;
-      --warning: #e0a63c;
-      --selection-soft: rgba(139, 129, 255, 0.28);
-      --syntax-heading: #cdd6f0;
-      --syntax-link: #a99fff;
+      --warning: #ffaa00;
+      --selection-soft: rgba(132, 108, 228, 0.32);
+      --syntax-heading: #ffffff;
+      --syntax-link: #ffb74d;
       --syntax-code: #e8bd87;
-      --syntax-marker: #8590a6;
-      --syntax-muted: #939db1;
-      --syntax-keyword: #dfa6ff;
+      --syntax-marker: #8a8a8b;
+      --syntax-muted: #939396;
+      --syntax-keyword: #f0a6c8;
       --syntax-string: #8fd9ad;
       --syntax-number: #ffc27a;
       --syntax-type: #8fc7ff;
-      --overlay: rgba(3, 5, 10, 0.62);
-      --focus-ring: rgba(139, 129, 255, 0.4);
-      --toast-bg: #232733;
+      --overlay: rgba(0, 0, 0, 0.66);
+      --focus-ring: rgba(255, 140, 0, 0.45);
+      --toast-bg: #161616;
       --shadow: 0 18px 45px rgba(0, 0, 0, 0.5);
     }
 
@@ -476,7 +498,10 @@ const pageTemplate = `<!DOCTYPE html>
       display: flex; align-items: center; gap: 4px; flex-shrink: 0;
       color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer;
     }
-    .assets-toggle input { margin: 0; }
+    /* accent-color is the one piece of a native control the palette does not
+       reach on its own: left alone, the three switches are the platform's blue
+       in an otherwise orange window. */
+    .assets-toggle input { margin: 0; accent-color: var(--brand); }
     /*
      * Three labelled checkboxes plus the filter plus a button is more than a
      * 200px sidebar's toolbar has, so it is allowed to wrap: a second line
