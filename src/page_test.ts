@@ -1116,6 +1116,102 @@ function styleSheet(): string {
   );
 }
 
+/** One palette block's declarations, keyed by custom property name. */
+function palette(selector: string): Map<string, string> {
+  const sheet = styleSheet();
+  const from = sheet.indexOf(selector);
+  assert(from !== -1, `src/page.ts declares ${selector}`);
+  const body = sheet.slice(from).match(/\{([^}]*)\}/)![1];
+  return new Map(
+    [...body.matchAll(/(--[a-z-]+):\s*([^;]+);/g)].map((match) => [
+      match[1],
+      match[2].trim(),
+    ]),
+  );
+}
+
+Deno.test("the palette is wazoo.dev's, and its purple is only selection", () => {
+  // wazoo.dev/DESIGN.md, which this repository cannot read at build time: a
+  // clone of wiki-desktop does not bring that file along, and a build that
+  // failed when it was missing would be worse than a copy. So the values live in
+  // src/page.ts and this test is the only thing that notices the copy going
+  // stale — which is the point, because a palette nobody checks drifts back
+  // towards whatever was there before within a few edits.
+  const light = palette(":root {");
+  const dark = palette(':root[data-theme="dark"] {');
+
+  // The brand, in both modes: Sunset Orange for anything actionable, Highlight
+  // for the marker that shows state, Ink for the text sitting on top of it.
+  for (const [mode, tokens] of Object.entries({ light, dark })) {
+    for (
+      const [name, value] of Object.entries({
+        "--brand": "#ff8c00",
+        "--brand-dark": "#f57c00",
+        "--brand-marker": "#ffaa00",
+        "--on-brand": "#1f1b14",
+      })
+    ) {
+      assert(
+        tokens.get(name) === value,
+        `${mode} ${name} is the design system's ${value}, not ${
+          tokens.get(name)
+        }`,
+      );
+    }
+  }
+
+  // The backgrounds the spec names, one per mode: Eggshell and Ink for light,
+  // Void and Surface for dark. Dark being the spec's default is the reason the
+  // dark canvas is a true #040404 rather than the near-black it was.
+  assert(light.get("--canvas") === "#f7f2e8", "light paints Eggshell");
+  assert(light.get("--text") === "#1f1b14", "light text is Ink");
+  assert(dark.get("--canvas") === "#040404", "dark paints Void");
+  assert(dark.get("--panel") === "#0f0f0f", "dark panels are Surface");
+  assert(dark.get("--text") === "#b0b0b1", "dark text is the spec's grey");
+
+  // One deliberate departure, and it is a legibility one. Sunset Orange on
+  // Eggshell is 2.1:1 — a fill and a marker, never text — so the light palette's
+  // word-carrying accent is a darkened orange at 5:1. Dark can keep the brand's
+  // own value because orange on void is 9:1.
+  assert(
+    light.get("--brand-text") === "#a65000",
+    "the light accent is legible on Eggshell",
+  );
+  assert(
+    dark.get("--brand-text") === "#ff8c00",
+    "the dark accent is legible on Void",
+  ); // The spec's purple is a selection colour and this is the only place it is
+  // allowed to appear — once per palette, and nowhere else. It used to be the
+  // whole brand family, which is what turned the app violet; if it creeps back
+  // into --brand or a focus ring, the palette has stopped being the design
+  // system's.
+  const purple = new Set(
+    [...styleSheet().matchAll(/(--[a-z-]+):\s*([^;]+);/g)]
+      .filter(([, , value]) => /846ce4|132,\s*108,\s*228/i.test(value!))
+      .map(([, name]) => name),
+  );
+  assert(
+    purple.size === 1 && purple.has("--selection-soft"),
+    `the design system's purple is only ever selection, not ${
+      [...purple].join(", ")
+    }`,
+  );
+  // Both palettes carry it, or selecting text looks like a bug in one mode.
+  for (const [mode, tokens] of Object.entries({ light, dark })) {
+    assert(
+      /132,\s*108,\s*228/.test(tokens.get("--selection-soft")!),
+      `${mode} selects text in the design system's purple`,
+    );
+  }
+
+  // The browser chrome the window draws around the page, kept to the value the
+  // light canvas actually paints.
+  assert(
+    /<meta name="theme-color" content="#f7f2e8"/.test(page),
+    "the window's own colour matches the light canvas",
+  );
+});
+
 Deno.test("nothing is hidden past the edge of a narrow window", () => {
   // The shell clips its overflow rather than scrolling it, so a min-width on
   // the body is not a floor the layout grows into — it is a floor the window

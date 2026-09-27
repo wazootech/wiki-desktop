@@ -115,7 +115,7 @@ function tokensFor(mode: Mode): Map<string, string> {
   return mode === "dark" ? DARK : LIGHT;
 }
 
-/** `#f5f7fb` as the browser reports a painted colour. */
+/** `#f7f2e8` as the browser reports a painted colour. */
 function toRgb(hex: string): string {
   const digits = hex.replace("#", "");
   const full = digits.length === 3
