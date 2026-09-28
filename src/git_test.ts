@@ -981,9 +981,19 @@ Deno.test("git's own words about a commit that failed are the ones shown", async
       message.startsWith("git would not commit: "),
       "and the sentence says what we were asking git to do",
     );
+    // Git refuses this one in prose on stdout rather than with an `error:` on
+    // stderr, and it has two ways of saying it depending on whether untracked
+    // files are in the way. Asserting the refusal itself rather than the
+    // absence of the fallback is what keeps this honest: a checkout that
+    // happened to warn about line endings on stderr used to satisfy a check
+    // that only asked for a colon, and the reader was shown the warning.
+    assert(
+      /nothing (to|added to) commit/i.test(message),
+      `and carries git's own explanation of the refusal rather than the empty fallback or a warning about the working copy: ${message}`,
+    );
     assert(
       !/^git would not commit\.$/.test(message),
-      "and carries git's own explanation rather than the empty fallback",
+      "and the empty fallback is not what it settled for",
     );
     assertEqual(
       git(["log", "--format=%s", "-1"]).trim(),

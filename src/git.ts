@@ -600,8 +600,11 @@ function vaultRelative(
 }
 
 /** git's own words about a failure, with a note of what we were asking it. */
-function failure(what: string, result: { stderr: string }): string {
-  const detail = reason(result.stderr);
+function failure(
+  what: string,
+  result: { stdout: string; stderr: string },
+): string {
+  const detail = reason(result);
   return detail === null
     ? `git would not ${what}.`
     : `git would not ${what}: ${detail}`;
@@ -609,23 +612,53 @@ function failure(what: string, result: { stderr: string }): string {
 
 /**
  * The line of git's output that says what went wrong, or null when it said
- * nothing at all.
+ * nothing that could.
  *
- * Not simply the first line, because git writes a preamble and then a verdict:
- * a push says "To <url>" and only then "! [rejected] main -> main (fetch
- * first)", and a reader shown a temporary directory and no verdict has been
- * told nothing. So a line that marks itself as the failure — the `!` on a
- * rejected ref, `error:`, `fatal:` — wins over the lines that are only the
- * run-up, and the first line is the fallback for the failures that arrive
- * without one.
+ * Both streams, because git does not put the verdict in one place. A rejected
+ * push writes "To <url>" and then "! [rejected] main -> main (fetch first)" to
+ * stderr, but a commit with nothing staged in it writes "nothing to commit,
+ * working tree clean" to stdout and puts its exit status on stderr, where the
+ * only other line is whatever warning the checkout happened to produce. So
+ * stderr alone is not a place to look for the reason; it is a place where the
+ * reason sometimes is, and a reader shown only a line-ending warning has been
+ * told nothing about the commit that did not happen.
+ *
+ * Within that, a line that marks itself as the failure — the `!` on a rejected
+ * ref, `error:`, `fatal:` — wins over the lines that are only the run-up, then
+ * a plain-prose refusal ("nothing to commit") wins over both, and the first
+ * line left over is the fallback for the failures that arrive without either.
+ * A `warning:`, `advice:` or `hint:` is never a reason, and when the output
+ * holds nothing else the answer is null rather than one of those.
  */
-function reason(stderr: string): string | null {
-  const lines = stderr
+function reason(result: { stdout: string; stderr: string }): string | null {
+  const err = sentences(result.stderr);
+  const out = sentences(result.stdout);
+  return [
+    ...err,
+    ...out,
+  ].find((line) => /^(error|fatal|!)/.test(line)) ??
+    [...out, ...err].find((line) =>
+      /nothing (to|added to) commit/i.test(line)
+    ) ??
+    err[0] ??
+    out[0] ??
+    null;
+}
+
+/**
+ * Git's own sentences, one per line, minus the ones that are not about a
+ * failure.
+ *
+ * A `warning:` is advice about the working copy — line endings, a dangling
+ * remote — that git prints whether or not the command did what was asked, and
+ * quoting one as the reason a commit failed is a sentence that reads as an
+ * answer and is not one.
+ */
+function sentences(text: string): string[] {
+  return text
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line !== "");
-  if (lines.length === 0) return null;
-  return lines.find((line) => /^(error|fatal|!)/.test(line)) ?? lines[0];
+    .filter((line) => line !== "" && !/^(warning|advice|hint):/.test(line));
 }
 
 /** The message on an unknown throw, which is not always a string. */
