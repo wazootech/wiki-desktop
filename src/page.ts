@@ -824,7 +824,6 @@ const pageTemplate = `<!DOCTYPE html>
       background: var(--panel-muted);
     }
     .vault-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-    .vault-label { color: var(--muted); font-size: 9.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; flex-shrink: 0; }
     .vault-name { font-size: 12.5px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-name.is-placeholder { color: var(--muted); font-weight: 600; }
     /*
@@ -1450,7 +1449,6 @@ const pageTemplate = `<!DOCTYPE html>
 
       <section class="vault" aria-label="Vault">
         <div class="vault-head" id="vaultHead">
-          <span class="vault-label">Vault</span>
           <span class="vault-name is-placeholder" id="vaultName">No vault open</span>
           <div class="vault-actions">
             <button class="button button-secondary icon-button" id="openVaultButton" type="button" title="Open a vault" aria-label="Open a vault">${ICONS.openVault}</button>

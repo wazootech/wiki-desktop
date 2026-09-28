@@ -628,6 +628,21 @@ Deno.test("the vault's path row is spent only when there is no vault", () => {
     /\.vault-actions \{[^}]*margin-left: auto/.test(page),
     "the button sits at the far end of the name's row",
   );
+  // And the row does not label itself. The section already carries
+  // aria-label="Vault" for assistive tech and the name beside the folder glyph
+  // is the row's own heading, so a 9.5px uppercase VAULT next to "docs" was a
+  // label for a value that was never ambiguous — and the fourth copy of the
+  // pane eyebrow, on the one row of the sidebar that does not need one. The
+  // pane titles keep theirs because the activity bar shows only glyphs and the
+  // pane is the thing that has to spell its own name out.
+  assert(
+    !/vault-label/.test(page) &&
+      /<section class="vault" aria-label="Vault">/.test(page) &&
+      /<div class="vault-head" id="vaultHead">\s*<span class="vault-name/.test(
+        page,
+      ),
+    "the vault row names the vault, and the section keeps the name for a screen reader",
+  );
 });
 
 Deno.test("the folder dialog is the only way in, and it is the app's home", () => {
