@@ -1334,6 +1334,14 @@ const pageTemplate = `<!DOCTYPE html>
       font-size: 11.5px; line-height: 1.5;
     }
     .wiki-frontmatter[hidden] { display: none; }
+    /* Raw collapses the panel to one line. In raw the editor below is already
+       showing the frontmatter, so a tall panel would only repeat it; what has
+       to survive is the reason the panel stood down and the way back. */
+    .wiki-frontmatter-collapsed { padding: 5px 14px; max-height: none; }
+    .wiki-frontmatter-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    }
+    .wiki-frontmatter-bar-text { color: var(--muted); }
     .wiki-frontmatter-head {
       display: flex; align-items: flex-start; justify-content: space-between;
       gap: 16px; flex-wrap: wrap;

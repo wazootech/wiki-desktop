@@ -482,25 +482,62 @@ export class FrontmatterPanel {
     const plan = this.plan();
     this.root.replaceChildren();
     if (plan.mode === "raw") {
-      // Raw is the escape hatch: the panel says why it is standing down and
-      // leaves the buffer alone, which is the mode every page can be saved in.
-      // The header still goes in, because the toggle is the only way back out
-      // of raw: a page that `auto` stood down on — a shape document, say —
-      // should not have to be argued with through the command menu to be shown.
+      // Raw is the escape hatch: the panel stands down and leaves the buffer
+      // alone, which is the mode every page can be saved in. It collapses to a
+      // single line, because in raw the editor below is already showing the
+      // frontmatter and a tall panel would only repeat it. What stays is the
+      // reason and the toggle, and the toggle is the only way back: a page
+      // that `auto` stood down on — a shape document, say — should not have to
+      // be argued with through the command menu to be shown.
       this.root.hidden = plan.reason === null;
       if (plan.reason !== null) {
-        this.root.append(
-          this.renderHeader(plan),
-          note(`Raw frontmatter — ${reasonText(plan.reason)}.`),
-        );
+        this.root.classList.add("wiki-frontmatter-collapsed");
+        this.root.append(this.renderCollapsed(plan));
       }
       return;
     }
+    this.root.classList.remove("wiki-frontmatter-collapsed");
     this.root.hidden = false;
     this.root.append(this.renderHeader(plan));
     for (const group of plan.groups) {
       this.root.append(this.renderGroup(group, 0));
     }
+  }
+
+  /** One line: why the panel is standing down, and the way back. */
+  private renderCollapsed(plan: FrontmatterPlan): HTMLElement {
+    const bar = el("div", "wiki-frontmatter-bar");
+    // The reason alone reads as a fragment once the panel is one line tall —
+    // "you asked for raw" wants its subject — so the label is kept.
+    bar.append(
+      el(
+        "span",
+        "wiki-frontmatter-bar-text",
+        `Raw frontmatter — ${reasonText(plan.reason)}.`,
+      ),
+      this.renderToggle(plan),
+    );
+    return bar;
+  }
+
+  /** The Structured / Raw choice, which is the panel's one piece of chrome. */
+  private renderToggle(plan: FrontmatterPlan): HTMLElement {
+    const toggle = el("div", "wiki-frontmatter-modes");
+    for (const choice of ["structured", "raw"] as const) {
+      const on = this.mode === choice ||
+        (this.mode === "auto" && choice === "structured");
+      const button = buttonEl(
+        `wiki-frontmatter-mode${on ? " is-on" : ""}`,
+        choice === "structured" ? "Structured" : "Raw",
+      );
+      button.setAttribute("aria-pressed", String(plan.mode === choice));
+      button.addEventListener("click", () => {
+        this.setMode(choice);
+        this.onModeChange(choice);
+      });
+      toggle.append(button);
+    }
+    return toggle;
   }
 
   /** The class row and the toggle, which is the panel's one piece of chrome. */
@@ -534,24 +571,7 @@ export class FrontmatterPanel {
         ),
       );
     }
-    header.append(heading);
-
-    const toggle = el("div", "wiki-frontmatter-modes");
-    for (const choice of ["structured", "raw"] as const) {
-      const on = this.mode === choice ||
-        (this.mode === "auto" && choice === "structured");
-      const button = buttonEl(
-        `wiki-frontmatter-mode${on ? " is-on" : ""}`,
-        choice === "structured" ? "Structured" : "Raw",
-      );
-      button.setAttribute("aria-pressed", String(plan.mode === choice));
-      button.addEventListener("click", () => {
-        this.setMode(choice);
-        this.onModeChange(choice);
-      });
-      toggle.append(button);
-    }
-    header.append(toggle);
+    header.append(heading, this.renderToggle(plan));
     return header;
   }
 

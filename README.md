@@ -847,6 +847,25 @@ pre-paint path here is the real one, not a model of it.
   verdict rather than leaving a stale one standing: an input commits on blur,
   and between the keystrokes and the commit the text the verdict was computed
   from no longer exists.
+- **The panel and the editor never show the same frontmatter twice** — they are
+  two views of one buffer, so in the structured mode the document's opening
+  lines say what the form above already says. Those lines are folded to a
+  single line naming what they held, and in the raw mode the panel collapses to
+  that same single line, because there the editor *is* the raw frontmatter and a
+  tall panel would only repeat it. The fold is a decoration and not an edit: the
+  text is untouched, undo knows nothing about it, and the buffer is still the
+  one true copy. It is a consequence of the mode rather than a setting of its
+  own, so the two cannot drift apart; switching to raw puts it away and switching
+  back folds it again. Three things deliberately do **not** fold — a selection
+  or cursor that is actually inside the block (so a search hit, a go-to-line or
+  a paste at the top of the file reveals the lines rather than hiding what the
+  reader asked for), a document that is *only* frontmatter, and a block that
+  does not parse. The folded line is a real `button` with an accessible name, so
+  the way back is reachable from the keyboard and not only from a mouse. It
+  lives in editor state rather than in a view plugin, because CodeMirror rejects
+  a block decoration supplied by a plugin, and rightly: a block decoration a
+  plugin rebuilds on its own schedule is one that can disagree with the document
+  it is drawn against.
 - **Sidebar width** — the column's right edge is a drag handle (`col-resize`),
   clamped to 180–520px and to the width that still leaves the editor room on a
   small window. The handle is a separator, so it is tabbable and resizable from
