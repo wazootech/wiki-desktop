@@ -12,9 +12,24 @@
  */
 import { join } from "node:path";
 
+import {
+  addCursorAbove,
+  addCursorBelow,
+  simplifySelection,
+} from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
+import {
+  selectNextOccurrence,
+  selectSelectionMatches,
+} from "@codemirror/search";
+import {
+  EditorState,
+  type Extension,
+  type StateCommand,
+} from "@codemirror/state";
+import { type Command, keymap } from "@codemirror/view";
 
+import { editorKeymap, multipleSelections } from "./editor.ts";
 import { linkHrefAt, resolveLinkTarget } from "./markdown_links.ts";
 import { toEditorText } from "./vault.ts";
 
@@ -140,6 +155,408 @@ Deno.test("the editor themes itself through an extension the cascade respects", 
   assert(
     source.includes('backgroundColor: "var(--panel-muted)"'),
     "the gutter takes the app's own panel token",
+  );
+});
+
+Deno.test("find is the editor's own panel, themed, and reachable from outside", async () => {
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  const code = withoutComments(source);
+
+  // The panel has to be an extension of the editor rather than a bar the page
+  // draws, because the matches and the count are the editor's state. A second
+  // set of answers held in the page is a second set that can be wrong.
+  assert(
+    /const extensions: Extension\[\] = \[[\s\S]*?\n\s*search\(/.test(source),
+    "the search extension is one of the extensions the editor is created with",
+  );
+  assert(
+    code.includes("searchKeymap.filter("),
+    "CodeMirror's own search chords are the source, minus the ones this app refuses by name",
+  );
+
+  // The page reaches it through the handle and nothing else, so the tab strip
+  // and dirty state still do not know CodeMirror exists.
+  for (const method of ["openFind", "closeFind", "findIsOpen"]) {
+    assert(
+      new RegExp(`return \\{[\\s\\S]*\\b${method},`).test(code),
+      `the handle exposes ${method}`,
+    );
+  }
+  assert(
+    code.includes("openSearchPanel(view)") &&
+      code.includes("closeSearchPanel(view)") &&
+      code.includes("searchPanelOpen(view.state)"),
+    "the handle's find methods are CodeMirror's, not a partial reimplementation",
+  );
+
+  // The panel arrives with CodeMirror's own hard-coded light styling, which is
+  // a white bar with grey borders sitting on top of a wiki page in either
+  // mode. It has to be written as a theme extension for the same reason the
+  // gutter does: the base theme is injected above the page's stylesheet.
+  assert(
+    /\.cm-panels"?:\s*\{[\s\S]{0,80}?backgroundColor:\s*"var\(--panel-muted\)"/
+      .test(source),
+    "the panel takes the app's own surface token",
+  );
+  assert(
+    /\.cm-searchMatch\.cm-searchMatch-selected"?:\s*\{[\s\S]{0,120}?var\(--brand-marker\)/
+      .test(source),
+    "the current match carries the brand, so it is told apart from the rest",
+  );
+});
+
+/**
+ * The search extension's chords, as an exact list, read off a real state.
+ *
+ * `@codemirror/search` is the one import that brings chords this app did not
+ * choose. Spread whole, it put go-to-line, select-the-next-occurrence and
+ * select-them-all into the editor with nothing in the test suite to notice,
+ * because the test that guards the app's own chords checks chords the app
+ * announced — and a chord that was never announced is invisible to it. This is
+ * that list, pinned, including the two multi-cursor chords the app now keeps on
+ * purpose rather than filtering out.
+ *
+ * The keymap facet is readable from an `EditorState` with no view and no DOM,
+ * which is what lets a ranking be tested here at all.
+ */
+Deno.test("the search chords are exactly the set this app chose", () => {
+  const groups = EditorState.create({ doc: "", extensions: editorKeymap })
+    .facet(keymap);
+  const find = groups.find((group) =>
+    group.some((binding) => binding.key === "Mod-f")
+  );
+  assert(find !== undefined, "the find panel's chords are registered at all");
+
+  const expected = [
+    "Mod-f", // open the panel
+    "Escape", // close it
+    "Mod-g", // the next match
+    "F3", // the next match, the other half of the pair
+    // Deliberate: these two are the mode, and they are only real because the
+    // facet below is on. See `multipleSelections`.
+    "Mod-d",
+    "Mod-Shift-l",
+  ];
+  assertEqual(
+    [...find!].map((binding) => binding.key).sort().join(","),
+    [...expected].sort().join(","),
+    "the panel answers these chords and no others",
+  );
+
+  // Looked for in every map rather than only in the one it came from: if a
+  // future `@codemirror/commands` ever binds it, the app would be offering
+  // go-to-line again, from a place nobody would think to look for it.
+  assert(
+    !groups.some((group) =>
+      group.some((binding) => binding.key === "Mod-Alt-g")
+    ),
+    "go-to-line is refused, and is not reachable by chord from any keymap",
+  );
+});
+
+/**
+ * The chords and the facet have to agree, and this is what makes them.
+ *
+ * Four of the chords this app binds mean nothing without
+ * `EditorState.allowMultipleSelections`: without that facet `EditorState`
+ * collapses any multi-range selection with `asSingle()`, so Ctrl+D selects the
+ * next occurrence and gets a single range back. The app shipped that collapsed
+ * version for a while — measured in the running app before it was written down,
+ * where a word selected plus Ctrl+D and a keystroke replaced one occurrence and
+ * not two — and filtered the dead chords out rather than leave keystrokes that
+ * promise a cursor and move nothing.
+ *
+ * The mode is on now, so the invariant reverses and the test with it. Both
+ * halves are still asserted together, because either one alone would pass with
+ * the other broken: a facet with no chords bound is a capability nobody can
+ * reach, and chords with no facet are four silent keystrokes, which is exactly
+ * the failure that started this. Two of the four chords come from the search
+ * keymap and two from the default keymap, so neither can be dropped by editing
+ * one list.
+ */
+Deno.test("the multi-cursor chords ship with the facet that makes them real", async () => {
+  const state = EditorState.create({
+    doc: "",
+    extensions: [...editorKeymap, multipleSelections],
+  });
+  const chordsFor = (command: Command | StateCommand) =>
+    state.facet(keymap).flat()
+      .filter((binding) => binding.run === command)
+      .map((binding) => binding.key);
+
+  // By name, because which keys these are is the deliberate part of the
+  // decision rather than an accident of which keymap ships them.
+  assertEqual(
+    chordsFor(selectNextOccurrence).join(", "),
+    "Mod-d",
+    "Ctrl+D grows a selection to its next occurrence",
+  );
+  assertEqual(
+    chordsFor(selectSelectionMatches).join(", "),
+    "Mod-Shift-l",
+    "Ctrl+Shift+L takes them all at once",
+  );
+  assertEqual(
+    chordsFor(addCursorAbove).join(", "),
+    "Mod-Alt-ArrowUp",
+    "Ctrl+Alt+ArrowUp stacks a caret above",
+  );
+  assertEqual(
+    chordsFor(addCursorBelow).join(", "),
+    "Mod-Alt-ArrowDown",
+    "Ctrl+Alt+ArrowDown stacks one below",
+  );
+  assertEqual(
+    state.facet(EditorState.allowMultipleSelections),
+    true,
+    "and the facet that makes those chords more than keystrokes is on",
+  );
+
+  // The state above is built from the two exports, so it would keep passing if
+  // `createEditor` left the facet out of the extensions it actually ships. The
+  // source is the only place that can be checked from here, and it is read the
+  // way the other wiring tests in this file read it.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  assert(
+    /const extensions: Extension\[\] = \[[\s\S]*?\n\s*multipleSelections,/
+      .test(source),
+    "and the editor the app builds is created with the facet, not just the tests",
+  );
+});
+
+/**
+ * The same claim, executed: the second cursor is really there, and typing
+ * reaches it.
+ *
+ * A `Command` is run against `{ state, dispatch }` rather than a view, which is
+ * the entire interface the three chords used here need — so the mode can be
+ * driven with no DOM, the same way the keymap above is read. It is worth driving
+ * rather than describing because the failure this replaces was invisible in the
+ * source: the chords were bound, the commands ran, and the second range was
+ * collapsed away by state that nothing in this file mentioned.
+ */
+Deno.test("Ctrl+D reaches a second occurrence, and Ctrl+Shift+L is the other way there", () => {
+  const doc = "the cat and the cat and the cat";
+
+  /**
+   * A command's target, without a view: state in, one transaction out.
+   *
+   * `StateCommand` is CodeMirror's own type for exactly this — a command that
+   * reads the state and dispatches, and that therefore "can be run and tested
+   * outside of a browser environment", which is what makes the mode testable
+   * here at all.
+   */
+  function press(command: StateCommand, state: EditorState): EditorState {
+    let next: EditorState | null = null;
+    const handled = command({
+      state,
+      dispatch: (transaction) => {
+        next = transaction.state;
+      },
+    });
+    assert(handled, "the chord does something rather than falling through");
+    assert(next !== null, "and says so by dispatching a transaction");
+    return next!;
+  }
+
+  const start = (extensions: readonly Extension[]) =>
+    EditorState.create({ doc, extensions, selection: { anchor: 0 } });
+  const enabled = start([...editorKeymap, multipleSelections]);
+
+  let state = press(selectNextOccurrence, enabled);
+  assertEqual(
+    state.selection.ranges.length,
+    1,
+    "the first press selects the word under the caret rather than a second range",
+  );
+  assertEqual(
+    state.selection.main.from,
+    0,
+    "which is the word the caret was in",
+  );
+
+  state = press(selectNextOccurrence, state);
+  assertEqual(
+    state.selection.ranges.length,
+    2,
+    "the second press adds the next occurrence as its own cursor",
+  );
+  assertEqual(
+    state.selection.ranges.map((range) => state.sliceDoc(range.from, range.to))
+      .join("|"),
+    "the|the",
+    "and both ranges hold the same text, which is what Ctrl+D requires",
+  );
+
+  // Escape is the way out of the mode, and it lands on the selection the first
+  // Ctrl+D made — not the last one added, because that is what `main` still is.
+  const escaped = press(simplifySelection, state);
+  assertEqual(
+    escaped.selection.ranges.length,
+    1,
+    "Escape collapses the cursors back to one",
+  );
+  assertEqual(
+    escaped.selection.main.from,
+    0,
+    "the one the first Ctrl+D made",
+  );
+
+  // One keystroke, both occurrences, two carets left behind — so the next
+  // keystroke does the same, and the whole edit is a single undo step because it
+  // is a single transaction.
+  const typed = state.update(state.replaceSelection("a"));
+  assertEqual(
+    typed.state.doc.toString(),
+    "a cat and a cat and the cat",
+    "typing lands in every cursor at once",
+  );
+  assertEqual(
+    typed.state.selection.ranges.length,
+    2,
+    "leaving a caret where each one was, ready for the next keystroke",
+  );
+
+  // Ctrl+Shift+L is the other road rather than the next step. From one selection
+  // it takes every occurrence in a single pass, and from two it declines, so a
+  // reader who has already pressed Ctrl+D twice gets nothing from it.
+  const all = press(
+    selectSelectionMatches,
+    press(selectNextOccurrence, enabled),
+  );
+  assertEqual(
+    all.selection.ranges.length,
+    3,
+    "Ctrl+Shift+L selects every occurrence of one selection",
+  );
+  assertEqual(
+    all.selection.main.from,
+    0,
+    "keeping the caret on the occurrence the user selected",
+  );
+  assertEqual(
+    selectSelectionMatches({ state, dispatch: () => {} }),
+    false,
+    "and it refuses with more than one range, which is why the pair are alternatives",
+  );
+
+  // The facet is load-bearing rather than decorative: the same two presses with
+  // it left out collapse to one range. This is the measurement that made the
+  // chords look dead in the first place, pinned so nobody has to make it again.
+  const collapsed = press(
+    selectNextOccurrence,
+    press(selectNextOccurrence, start(editorKeymap)),
+  );
+  assertEqual(
+    collapsed.selection.ranges.length,
+    1,
+    "the same two presses without the facet keep one range, and the chord is dead",
+  );
+
+  // The two arrow chords are not driven here: `addCursorVertically` asks the
+  // view which line is below the caret, and there is no view. That this app
+  // binds them is asserted above; what they do once bound is CodeMirror's own
+  // command, unmodified.
+});
+
+/**
+ * The find chords outrank the general keymaps because they are declared to, not
+ * because of where they sit in an array.
+ *
+ * That is the difference between a ranking and a coincidence. Spreading
+ * `searchKeymap` first inside a single `keymap.of` works, and is not fragile by
+ * itself, but it makes "find wins" a fact about an index — one the next person
+ * to add a binding has to notice before they can place it. `Prec.high` says it
+ * where the chords are declared, and this is what says so out loud.
+ */
+Deno.test("the find chords outrank the general keymaps by declaration", () => {
+  const findAnswersFirst = (extensions: readonly Extension[]) =>
+    EditorState.create({ doc: "", extensions }).facet(keymap)[0]
+      .some((binding) => binding.key === "Mod-f");
+
+  assert(
+    findAnswersFirst(editorKeymap),
+    "find's Ctrl+F is the first binding CodeMirror is offered",
+  );
+  // The same extension list, backwards. A ranking that is really a ranking
+  // changes nothing here; one that was only ever an array index would put the
+  // general keymaps first and stop Ctrl+F reaching the panel.
+  assert(
+    findAnswersFirst([...editorKeymap].reverse()),
+    "and still first with the extensions reversed, so the ranking is declared and not an index",
+  );
+});
+
+Deno.test("the replace row is absent until something asks for it", async () => {
+  // CodeMirror builds Replace into the panel whenever the editor is writable,
+  // so a find panel here would otherwise ship a field and two buttons that
+  // rewrite the page in place with no preview -- the only bulk-rewrite surface
+  // in the app, inside the panel that reads as read-only.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  const code = withoutComments(source);
+
+  // Absent rather than disabled, and that is the whole guarantee: a
+  // `display: none` field is out of the tab order and out of the accessibility
+  // tree, so there is nothing to tab into, nothing announced, and no button
+  // one Enter away from rewriting the page.
+  for (const name of ["replace", "replaceAll"]) {
+    const rule = new RegExp(
+      `\"&:not\\(\\.wiki-replace\\) \\.cm-search \\[name='${name}'\\]\"?:\\s*\\{\\s*display:\\s*\"none\"`,
+    );
+    assert(
+      rule.test(source),
+      `the ${name} control is hidden until the replace row is asked for`,
+    );
+  }
+  assert(
+    /"&:not\(\.wiki-replace\) \.cm-search br"?:\s*\{\s*display:\s*"none"/.test(
+      source,
+    ),
+    "and the row's own line break goes with it, so the panel stays one row tall",
+  );
+
+  // The reveal is editor state, and a view plugin writes the class from it.
+  // Imperatively setting the class at open time is what this replaced: it was
+  // checked against the running app, where closing the panel with its own ×
+  // and reopening with Ctrl+H left the row hidden because the flag and the DOM
+  // had drifted apart with nobody to reconcile them.
+  assert(
+    code.includes("const revealReplaceRow = StateEffect.define<boolean>()"),
+    "asking for the row is an effect the editor state carries",
+  );
+  assert(
+    code.includes("const replaceRowRevealed = StateField.define<boolean>"),
+    "and a field that survives every update, including CodeMirror's own",
+  );
+  assert(
+    /view\.dom\.classList\.toggle\(\s*REPLACE_ROW,\s*view\.state\.field\(replaceRowRevealed\),?\s*\)/
+      .test(code),
+    "the class is written from that field, not from a local variable",
+  );
+  assert(
+    code.includes("ViewPlugin.fromClass("),
+    "a view plugin is what keeps the DOM in step on every update",
+  );
+  // The one thing the reveal must not do is read the panel's own bookkeeping,
+  // which is what reported a panel as up when it was gone.
+  const openFind = code.slice(
+    code.indexOf("function openFind"),
+    code.indexOf("function closeFind"),
+  );
+  assert(
+    !openFind.includes("searchPanelOpen") &&
+      openFind.includes("revealReplaceRow.of(revealReplace)"),
+    "the caller's intent decides, with no look at the panel's state",
+  );
+  assert(
+    code.includes("revealReplaceRow.of(false)"),
+    "closing find puts the row back to absent",
   );
 });
 

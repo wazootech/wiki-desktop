@@ -3520,6 +3520,155 @@ const pageTemplate = `<!DOCTYPE html>
         showToast('Reloaded ' + payload.path + ' from disk');
       }
 
+      /*
+       * Format the page in front of the user.
+       *
+       * The formatter is a pure function over the text the editor holds, so
+       * this is the whole operation: read, tidy, hand back. Nothing here reads
+       * the file from disk, which is what makes it correct on a tab with
+       * unsaved work in it -- a formatter that shelled out to the wiki CLI
+       * would reformat the copy on disk and lose the edits, and the app runs
+       * without --allow-run on purpose anyway.
+       *
+       * A formatted tab comes out dirty, because the buffer no longer matches
+       * what was saved. That is the honest state: the user made a change and
+       * gets to look at it before it lands, the same as any other edit.
+       *
+       * Only pages. The vault's own wiki.yml decides what a page is, and
+       * formatting a page-adjacent file that the vault did not list as one --
+       * its README, its config, a static file -- is a change nobody asked for.
+       */
+      function formatFile() {
+        const tab = activeTab();
+        if (tab === null || editorApi === null) return;
+        if (!formatterAvailable()) return;
+        if (!fileIsPage(tab.path)) {
+          showToast(tab.path + ' is not a wiki page, so it is not formatted.');
+          return;
+        }
+        const before = editorValue();
+        const after = window.WikiFormat.formatMarkdown(before);
+        // No edit, no dirty dot, and a toast that says what happened rather
+        // than leaving the user pressing the key again to find out.
+        if (after === before) {
+          showToast(tab.path + ' is already formatted');
+          return;
+        }
+        editorApi.applyFormatted(after);
+        showToast('Formatted ' + tab.path + ' — not saved yet');
+      }
+
+      /*
+       * Every open page, in one pass.
+       *
+       * The same call as Format page, run over the tab strip instead of the
+       * one document on screen -- which is why this is a command and not a
+       * second feature: there is no second formatter, and no second decision
+       * about what a page is.
+       *
+       * The active tab goes through the editor and the others do not, and the
+       * asymmetry is the whole design. The editor holds its own copy of the
+       * document it is showing, so that one has to be told; every other tab is
+       * the page's own buffer, which stashCursor keeps in step on the way out
+       * and which the editor reconciles from the next time the tab is shown.
+       * Switching to each tab in turn would have preserved the per-tab undo
+       * stacks, at the price of scrolling the window around under the user to
+       * do it -- and a tab whose text changed underneath it loses that stack
+       * anyway when the editor rebuilds its state, which is the same thing
+       * Reload from disk has always done.
+       */
+      function formatAllOpenPages() {
+        const active = activeTab();
+        if (editorApi === null) {
+          showToast('The editor failed to load. Reload the window to retry.');
+          return;
+        }
+        if (!formatterAvailable()) return;
+        const pages = tabs.filter((tab) => fileIsPage(tab.path));
+        if (pages.length === 0) {
+          showToast(tabs.length === 0 ? 'Nothing is open' : 'No open file is a wiki page');
+          return;
+        }
+
+        let changed = 0;
+        if (active !== null && fileIsPage(active.path)) {
+          const before = editorValue();
+          const after = window.WikiFormat.formatMarkdown(before);
+          if (after !== before) changed++;
+          editorApi.applyFormatted(after);
+        }
+        for (const tab of tabs) {
+          if (tab === active || !fileIsPage(tab.path)) continue;
+          const after = window.WikiFormat.formatMarkdown(tab.content);
+          if (after === tab.content) continue;
+          tab.content = after;
+          changed++;
+        }
+        // The dirty dots on the tabs that are not showing are drawn from their
+        // buffers, so nothing redraws them for us.
+        renderTabs();
+
+        if (changed === 0) {
+          showToast('Every open page is already formatted');
+          return;
+        }
+        // The count and the count of pages together, because "formatted 3" is
+        // a different piece of news depending on whether three were open.
+        let message = 'Formatted ' + changed + ' of ' + pages.length +
+          ' open ' + (pages.length === 1 ? 'page' : 'pages') + ' — not saved yet';
+        const notPages = tabs.length - pages.length;
+        if (notPages > 0) {
+          message += '; ' + notPages + ' open ' +
+            (notPages === 1 ? 'file is' : 'files are') + ' not a wiki page';
+        }
+        showToast(message);
+      }
+
+      /*
+       * Open the editor's own find panel.
+       *
+       * The page does not build a find bar, and that is the whole point: the
+       * matches, the count, the wrap-around and the "no results" state are the
+       * editor's, so there is no second set of answers to keep in step with
+       * what is actually on screen.
+       *
+       * This is safe to reach from two places at once. CodeMirror's own keymap
+       * answers Ctrl+F while the editor has focus and this answers it while the
+       * focus is somewhere else -- the sidebar or the tab strip -- and opening
+       * a panel that is already open focuses the one that is there.
+       */
+      function findInPage(withReplace) {
+        if (editorApi === null) {
+          showToast('The editor failed to load. Reload the window to retry.');
+          return;
+        }
+        editorApi.openFind(withReplace === true);
+      }
+
+      /** Whether the bundle that carries the formatter actually loaded. */
+      function formatterAvailable() {
+        if (window.WikiFormat === undefined) {
+          showToast('The formatter failed to load. Reload the window to retry.');
+          return false;
+        }
+        return true;
+      }
+
+      /**
+       * Whether the vault counts this path as one of its pages.
+       *
+       * The scope an entry carries is 'input' exactly when the vault's own
+       * wiki.yml lists the file under wiki.input, read in src/wiki_config.ts,
+       * so this asks the same question the file list already asks rather than
+       * guessing from the extension. A path the list does not carry is not a
+       * page: refusing is the safe answer, since the cost of being wrong the
+       * other way is a file rewritten that nobody chose.
+       */
+      function fileIsPage(path) {
+        const file = files.find((entry) => entry.path === path);
+        return file !== undefined && file.scope === 'input';
+      }
+
       async function createFile() {
         if (vault.root === null) return;
         const suggested = 'notes/untitled.md';
@@ -3878,9 +4027,34 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'open-vault', group: 'File', label: 'Open vault…', keys: 'Ctrl+O', canRun: () => true, run: openBrowser },
         { id: 'reload', group: 'File', label: 'Reload from disk', keys: '', canRun: () => activeTab() !== null, run: reloadFile },
         { id: 'save', group: 'File', label: 'Save', keys: 'Ctrl+S', canRun: () => activeTab() !== null, run: saveFile },
+        // Shift+Alt+F, which is what editors have settled on. It was
+        // Ctrl+Shift+I first, which is the chord every browser has bound to
+        // its developer tools for twenty years: in the desktop webview that is
+        // harmless today because the window ships without devtools, and in
+        // dev:web it swallowed the shortcut and opened a console the user did
+        // not ask for. A shortcut that fights the host is not a shortcut.
+        { id: 'format', group: 'File', label: 'Format page', keys: 'Shift+Alt+F', canRun: () => activeTab() !== null && window.WikiFormat !== undefined, run: formatFile },
+        // No shortcut: the chord above is the one worth memorizing, and a
+        // second formatting key for the same thing on a different set of tabs
+        // is a key to forget rather than a key to press.
+        { id: 'format-all', group: 'File', label: 'Format all open pages', keys: '', canRun: () => window.WikiFormat !== undefined && tabs.some((tab) => fileIsPage(tab.path)), run: formatAllOpenPages },
         { id: 'close-tab', group: 'Tabs', label: 'Close tab', keys: 'Ctrl+W', canRun: () => activeTab() !== null, run: () => closeTab(activeIndex) },
         { id: 'next-tab', group: 'Tabs', label: 'Next tab', keys: 'Ctrl+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(1) },
         { id: 'previous-tab', group: 'Tabs', label: 'Previous tab', keys: 'Ctrl+Shift+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(-1) },
+        // Find is the one chord the host also has, and the app takes it on
+        // purpose. A browser's find searches the rendered page, and CodeMirror
+        // only renders the lines near the viewport, so in a long wiki page the
+        // browser can only ever match what is already on screen. The shortcut
+        // belongs to the document here, which is exactly the difference
+        // between this and Ctrl+Shift+I: devtools belongs to the host, find
+        // belongs to what the host is showing.
+        { id: 'find', group: 'File', label: 'Find in page', keys: 'Ctrl+F', canRun: () => activeTab() !== null, run: () => findInPage(false) },
+        // Replace is its own command rather than a row inside find, which is
+        // what VS Code does with Ctrl+H and what the p5.js editor does by
+        // giving Find and Replace different chords. Find is the thing people
+        // reach for constantly and replace rewrites the page, so the two are
+        // one keystroke apart from each other on purpose.
+        { id: 'replace', group: 'File', label: 'Replace in page', keys: 'Ctrl+H', canRun: () => activeTab() !== null, run: () => findInPage(true) },
         { id: 'toggle-sidebar', group: 'View', label: 'Toggle vault files', keys: 'Ctrl+B', canRun: () => true, run: toggleSidebar },
         // One menu item per view, from the same table the bar draws, so the two
         // surfaces cannot offer different views -- and a check mark rather than
@@ -4250,11 +4424,31 @@ const pageTemplate = `<!DOCTYPE html>
             setSidebarOpen(false);
             return;
           }
+          // Before the Ctrl/Cmd guard below, because this chord has neither.
+          // Alt is the modifier editors use for the commands the host has not
+          // already taken, and F is free there.
+          if (event.shiftKey && event.altKey && event.key.toLowerCase() === 'f') {
+            event.preventDefault();
+            formatFile();
+            return;
+          }
           if (!(event.metaKey || event.ctrlKey)) return;
           const key = event.key.toLowerCase();
           if (key === 's') {
             event.preventDefault();
             saveFile();
+          } else if (key === 'f') {
+            // preventDefault is what stops the browser's own find bar from
+            // opening on top of the editor's. See the command's note: the
+            // shortcut belongs to the document, not to the host.
+            event.preventDefault();
+            findInPage(false);
+          } else if (key === 'h') {
+            // Ctrl+H, the chord VS Code pairs with Ctrl+F. The browser's own
+            // Ctrl+H is its history panel, in the tab rather than in this
+            // page, so there is nothing here to take it from.
+            event.preventDefault();
+            findInPage(true);
           } else if (key === 'o') {
             event.preventDefault();
             openBrowser();
