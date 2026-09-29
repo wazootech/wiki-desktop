@@ -387,51 +387,56 @@ pre-paint path here is the real one, not a model of it.
   synchronously when `openFind` runs and the panel's own element appears in a
   later update.
 - **Find and replace come with more than their two chords, and the app picks
-  which** — `searchKeymap` is registered **minus three entries**. What it
-  brings: `F3` and `Ctrl+G` step to the next match, `Shift+F3` and
-  `Ctrl+Shift+G` to the previous, `Escape` closes the panel, and `Enter` and
-  `Shift+Enter` work inside the field. Two of the three it drops are the
-  multi-selection pair, `Ctrl+D` (select the next occurrence) and `Ctrl+Shift+L`
-  (select every one of them), because they do not work here: `EditorState`
-  collapses a selection of more than one range with `asSingle()` unless
-  `allowMultipleSelections` is set, and this app never sets it, so `Ctrl+D`
-  dispatches a second occurrence and gets a single range back. That was measured
-  in the running app rather than reasoned about — a word selected plus `Ctrl+D`
-  and a keystroke replaced **one** occurrence and not two — and the same is true
-  of the default keymap's `Ctrl+Alt+ArrowUp` and `Ctrl+Alt+ArrowDown`, which
-  moved the caret from `Ln 13, Col 4` to `Ln 14, Col 1` and added no second
-  cursor. `Ctrl+Alt+G` (go to a line) is the other refusal, and it goes for a
-  smaller reason: line numbers are in the gutter so it is not meaningless, but
-  find is already how a reader moves around a page and it has three ways into
-  next and previous, while the jump a wiki author actually reaches for is to a
-  heading — not built yet, and `followLink` in `src/page.ts` says so when it is
-  asked for. It is also the only three-modifier chord of the set, which is the
-  most collision-prone part of a keyboard. All five refusals are matched by
-  **the command a binding runs, not the key it sits on**, so a CodeMirror
-  release that rebinds one still has it dropped. None of this is in the menu's
-  shortcut column, because that column is for the chords the page's own keydown
-  handler implements and these are CodeMirror's; advertising them from a list
-  that does not own them is how a label and the thing it labels drift apart. The
-  surviving set is pinned by a test that reads the resolved keymap out of a real
-  `EditorState` instead of matching a string in `src/editor.ts`, and the
-  refusals are pinned by a second test that asserts _both_ halves — no bound
-  command needs a second selection, and the facet that would make one real is
-  off — so turning the mode on fails a test rather than quietly changing what
-  four keys do.
-- **Multiple cursors are off, and the editor says so by binding nothing for
-  them** — that is a decision rather than an omission, and the cost of it is the
-  part worth keeping: four working chords are refused by command identity,
-  against whatever `@codemirror` binds next, so that no key promises a cursor
-  the editor cannot make. It is one line to reverse
-  (`EditorState.allowMultipleSelections.of(true)`) and nothing else has to
-  change for it — `drawSelection` already renders extra carets, the theme
-  already paints `.cm-cursor`, and `highlightSelectionMatches` already tints
-  every occurrence of the selected word, which is what `Ctrl+Shift+L` would
-  select. So this is a product call rather than an architectural one, and what
-  the app does not have is a multi-cursor story: until it has one, the honest
-  thing for the keyboard to do is nothing. The status bar is the one place a
-  mode like this would show up as an absence — it reports the primary cursor
-  (`selection.main`), not a count.
+  which** — `searchKeymap` is registered **minus one entry**. What it brings:
+  `F3` and `Ctrl+G` step to the next match, `Shift+F3` and `Ctrl+Shift+G` to the
+  previous, `Escape` closes the panel, `Enter` and `Shift+Enter` work inside the
+  field, and `Ctrl+D` and `Ctrl+Shift+L` are the multi-cursor pair the app keeps
+  on purpose rather than filtering out. `Ctrl+Alt+G` (go to a line) is the one
+  refusal, and it goes for a smaller reason: line numbers are in the gutter so
+  it is not meaningless, but find is already how a reader moves around a page
+  and it has three ways into next and previous, while the jump a wiki author
+  actually reaches for is to a heading — not built yet, and `followLink` in
+  `src/page.ts` says so when it is asked for. It is also the only three-modifier
+  chord of the set, which is the most collision-prone part of a keyboard. That
+  refusal is matched by **the command a binding runs, not the key it sits on**,
+  so a CodeMirror release that rebinds go-to-line still has it dropped. None of
+  this is in the menu's shortcut column, because that column is for the chords
+  the page's own keydown handler implements and these are CodeMirror's;
+  advertising them from a list that does not own them is how a label and the
+  thing it labels drift apart. The surviving set is pinned by a test that reads
+  the resolved keymap out of a real `EditorState` instead of matching a string
+  in `src/editor.ts`, and the four multi-cursor chords are pinned by a second
+  test that asserts _both_ halves — each command is bound, and the facet that
+  makes it real is on — so neither half can be dropped without a failure.
+- **Multiple cursors are on, and the editor says so by binding them** — this app
+  shipped the opposite decision first, and the reason it reversed is the part
+  worth keeping: the chords were refused because they were **dead**, not because
+  the mode was unwanted. `EditorState` collapses a selection of more than one
+  range with `asSingle()` unless `allowMultipleSelections` is set, so with the
+  facet off `Ctrl+D` dispatched a second occurrence and got a single range back
+  — measured in the running app rather than reasoned about, where a word
+  selected plus `Ctrl+D` and a keystroke replaced **one** occurrence and not
+  two. Holding that position meant using this editor to actively refuse four
+  working chords by command identity, against whatever `@codemirror` does next,
+  and the facet is one line. So the mode is on, and what it creates is four
+  chords: `Ctrl+D` with a caret selects the word under it and pressed again adds
+  the next occurrence of that text as a second cursor, so one keystroke then
+  edits every one of them in a single undo step; `Ctrl+Shift+L` selects every
+  occurrence of one selection in a pass; `Ctrl+Alt+ArrowUp` and
+  `Ctrl+Alt+ArrowDown` stack a caret above and below; and `Escape` drops back to
+  the single main range, which is the selection `Ctrl+D` started from. The two
+  text-driven chords reach the same set of cursors from two directions rather
+  than in sequence — `Ctrl+D` refuses once the ranges have stopped holding the
+  same text, and `Ctrl+Shift+L` refuses with more than one range at all, so
+  pressing it after two `Ctrl+D`s does nothing — and both are silent when they
+  cannot act, which is what a chord doing arithmetic on the selection should do.
+  Nothing else had to change for any of it: `drawSelection` already renders the
+  extra carets, the theme already paints `.cm-cursor`, and
+  `highlightSelectionMatches` was already tinting every occurrence of the
+  selected word, which turns out to be the preview of what `Ctrl+Shift+L` does.
+  The status bar is the one place the mode shows up as an absence — it reports
+  the primary cursor (`selection.main`), not a count, so a second cursor is
+  visible in the document and nowhere else.
 - **Which keymap answers a chord is declared, not positional** — the find chords
   are wrapped in `Prec.high` rather than spread first inside a single
   `keymap.of`. The behaviour is the same; what changes is that "find wins" stops
@@ -621,7 +626,7 @@ pre-paint path here is the real one, not a model of it.
   for the grammars alone** — about three times the editor. Adopting it is a
   deliberate trade, not an oversight
   ([#6](https://github.com/wazootech/wiki-desktop/issues/6)). There is no
-  autocomplete, folding, or multi-cursor yet.
+  autocomplete or code folding yet.
 - `Save` writes the active tab only; there is no save-all and no session
   restore.
 - `Ctrl+W`, `Ctrl+Tab`, and `Ctrl+B` work in the desktop window, but a browser

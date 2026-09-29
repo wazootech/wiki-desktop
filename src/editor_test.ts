@@ -12,16 +12,24 @@
  */
 import { join } from "node:path";
 
-import { addCursorAbove, addCursorBelow } from "@codemirror/commands";
+import {
+  addCursorAbove,
+  addCursorBelow,
+  simplifySelection,
+} from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import {
   selectNextOccurrence,
   selectSelectionMatches,
 } from "@codemirror/search";
-import { EditorState, type Extension } from "@codemirror/state";
-import { keymap } from "@codemirror/view";
+import {
+  EditorState,
+  type Extension,
+  type StateCommand,
+} from "@codemirror/state";
+import { type Command, keymap } from "@codemirror/view";
 
-import { editorKeymap } from "./editor.ts";
+import { editorKeymap, multipleSelections } from "./editor.ts";
 import { linkHrefAt, resolveLinkTarget } from "./markdown_links.ts";
 import { toEditorText } from "./vault.ts";
 
@@ -163,6 +171,10 @@ Deno.test("find is the editor's own panel, themed, and reachable from outside", 
     /const extensions: Extension\[\] = \[[\s\S]*?\n\s*search\(/.test(source),
     "the search extension is one of the extensions the editor is created with",
   );
+  assert(
+    code.includes("searchKeymap.filter("),
+    "CodeMirror's own search chords are the source, minus the ones this app refuses by name",
+  );
 
   // The page reaches it through the handle and nothing else, so the tab strip
   // and dirty state still do not know CodeMirror exists.
@@ -203,8 +215,8 @@ Deno.test("find is the editor's own panel, themed, and reachable from outside", 
  * select-them-all into the editor with nothing in the test suite to notice,
  * because the test that guards the app's own chords checks chords the app
  * announced — and a chord that was never announced is invisible to it. This is
- * that list, pinned, minus the three the app refuses: what is left is the four
- * entries the README describes.
+ * that list, pinned, including the two multi-cursor chords the app now keeps on
+ * purpose rather than filtering out.
  *
  * The keymap facet is readable from an `EditorState` with no view and no DOM,
  * which is what lets a ranking be tested here at all.
@@ -222,6 +234,10 @@ Deno.test("the search chords are exactly the set this app chose", () => {
     "Escape", // close it
     "Mod-g", // the next match
     "F3", // the next match, the other half of the pair
+    // Deliberate: these two are the mode, and they are only real because the
+    // facet below is on. See `multipleSelections`.
+    "Mod-d",
+    "Mod-Shift-l",
   ];
   assertEqual(
     [...find!].map((binding) => binding.key).sort().join(","),
@@ -243,44 +259,208 @@ Deno.test("the search chords are exactly the set this app chose", () => {
 /**
  * The chords and the facet have to agree, and this is what makes them.
  *
- * Four of the chords these keymaps bring mean nothing without
+ * Four of the chords this app binds mean nothing without
  * `EditorState.allowMultipleSelections`: without that facet `EditorState`
  * collapses any multi-range selection with `asSingle()`, so Ctrl+D selects the
- * next occurrence and gets a single range back, and the arrow pair moves the
- * caret instead of adding one. Measured in the running app before it was written
- * down — a word selected plus Ctrl+D and a keystroke replaced one occurrence and
- * not two — which is why this app refuses them instead of leaving four keys that
+ * next occurrence and gets a single range back. The app shipped that collapsed
+ * version for a while — measured in the running app before it was written down,
+ * where a word selected plus Ctrl+D and a keystroke replaced one occurrence and
+ * not two — and filtered the dead chords out rather than leave keystrokes that
  * promise a cursor and move nothing.
  *
- * Both halves are asserted together, because either one alone would pass with
- * the other broken: a refusal is only correct while the facet is off, so turning
- * the mode on has to fail here and make the chords come back deliberately. Two
- * of the four come from the search keymap and two from the default keymap, so
- * neither list can be missed by editing one.
+ * The mode is on now, so the invariant reverses and the test with it. Both
+ * halves are still asserted together, because either one alone would pass with
+ * the other broken: a facet with no chords bound is a capability nobody can
+ * reach, and chords with no facet are four silent keystrokes, which is exactly
+ * the failure that started this. Two of the four chords come from the search
+ * keymap and two from the default keymap, so neither can be dropped by editing
+ * one list.
  */
-Deno.test("no chord is bound for a feature the editor has not turned on", () => {
-  const state = EditorState.create({ doc: "", extensions: editorKeymap });
-  const bound = state.facet(keymap).flat().map((binding) => binding.run);
+Deno.test("the multi-cursor chords ship with the facet that makes them real", async () => {
+  const state = EditorState.create({
+    doc: "",
+    extensions: [...editorKeymap, multipleSelections],
+  });
+  const chordsFor = (command: Command | StateCommand) =>
+    state.facet(keymap).flat()
+      .filter((binding) => binding.run === command)
+      .map((binding) => binding.key);
 
-  // By command, because which keys these are is not the point of the refusal.
-  const needASecondSelection = [
-    [selectNextOccurrence, "Mod-d"],
-    [selectSelectionMatches, "Mod-Shift-l"],
-    [addCursorAbove, "Mod-Alt-ArrowUp"],
-    [addCursorBelow, "Mod-Alt-ArrowDown"],
-  ] as const;
-  for (const [command, key] of needASecondSelection) {
-    assert(
-      !bound.includes(command),
-      `${key} is not bound, because the editor cannot make a second cursor`, //
-    );
-  }
-
+  // By name, because which keys these are is the deliberate part of the
+  // decision rather than an accident of which keymap ships them.
+  assertEqual(
+    chordsFor(selectNextOccurrence).join(", "),
+    "Mod-d",
+    "Ctrl+D grows a selection to its next occurrence",
+  );
+  assertEqual(
+    chordsFor(selectSelectionMatches).join(", "),
+    "Mod-Shift-l",
+    "Ctrl+Shift+L takes them all at once",
+  );
+  assertEqual(
+    chordsFor(addCursorAbove).join(", "),
+    "Mod-Alt-ArrowUp",
+    "Ctrl+Alt+ArrowUp stacks a caret above",
+  );
+  assertEqual(
+    chordsFor(addCursorBelow).join(", "),
+    "Mod-Alt-ArrowDown",
+    "Ctrl+Alt+ArrowDown stacks one below",
+  );
   assertEqual(
     state.facet(EditorState.allowMultipleSelections),
-    false,
-    "and the facet that would make one real is still off",
+    true,
+    "and the facet that makes those chords more than keystrokes is on",
   );
+
+  // The state above is built from the two exports, so it would keep passing if
+  // `createEditor` left the facet out of the extensions it actually ships. The
+  // source is the only place that can be checked from here, and it is read the
+  // way the other wiring tests in this file read it.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  assert(
+    /const extensions: Extension\[\] = \[[\s\S]*?\n\s*multipleSelections,/
+      .test(source),
+    "and the editor the app builds is created with the facet, not just the tests",
+  );
+});
+
+/**
+ * The same claim, executed: the second cursor is really there, and typing
+ * reaches it.
+ *
+ * A `Command` is run against `{ state, dispatch }` rather than a view, which is
+ * the entire interface the three chords used here need — so the mode can be
+ * driven with no DOM, the same way the keymap above is read. It is worth driving
+ * rather than describing because the failure this replaces was invisible in the
+ * source: the chords were bound, the commands ran, and the second range was
+ * collapsed away by state that nothing in this file mentioned.
+ */
+Deno.test("Ctrl+D reaches a second occurrence, and Ctrl+Shift+L is the other way there", () => {
+  const doc = "the cat and the cat and the cat";
+
+  /**
+   * A command's target, without a view: state in, one transaction out.
+   *
+   * `StateCommand` is CodeMirror's own type for exactly this — a command that
+   * reads the state and dispatches, and that therefore "can be run and tested
+   * outside of a browser environment", which is what makes the mode testable
+   * here at all.
+   */
+  function press(command: StateCommand, state: EditorState): EditorState {
+    let next: EditorState | null = null;
+    const handled = command({
+      state,
+      dispatch: (transaction) => {
+        next = transaction.state;
+      },
+    });
+    assert(handled, "the chord does something rather than falling through");
+    assert(next !== null, "and says so by dispatching a transaction");
+    return next!;
+  }
+
+  const start = (extensions: readonly Extension[]) =>
+    EditorState.create({ doc, extensions, selection: { anchor: 0 } });
+  const enabled = start([...editorKeymap, multipleSelections]);
+
+  let state = press(selectNextOccurrence, enabled);
+  assertEqual(
+    state.selection.ranges.length,
+    1,
+    "the first press selects the word under the caret rather than a second range",
+  );
+  assertEqual(
+    state.selection.main.from,
+    0,
+    "which is the word the caret was in",
+  );
+
+  state = press(selectNextOccurrence, state);
+  assertEqual(
+    state.selection.ranges.length,
+    2,
+    "the second press adds the next occurrence as its own cursor",
+  );
+  assertEqual(
+    state.selection.ranges.map((range) => state.sliceDoc(range.from, range.to))
+      .join("|"),
+    "the|the",
+    "and both ranges hold the same text, which is what Ctrl+D requires",
+  );
+
+  // Escape is the way out of the mode, and it lands on the selection the first
+  // Ctrl+D made — not the last one added, because that is what `main` still is.
+  const escaped = press(simplifySelection, state);
+  assertEqual(
+    escaped.selection.ranges.length,
+    1,
+    "Escape collapses the cursors back to one",
+  );
+  assertEqual(
+    escaped.selection.main.from,
+    0,
+    "the one the first Ctrl+D made",
+  );
+
+  // One keystroke, both occurrences, two carets left behind — so the next
+  // keystroke does the same, and the whole edit is a single undo step because it
+  // is a single transaction.
+  const typed = state.update(state.replaceSelection("a"));
+  assertEqual(
+    typed.state.doc.toString(),
+    "a cat and a cat and the cat",
+    "typing lands in every cursor at once",
+  );
+  assertEqual(
+    typed.state.selection.ranges.length,
+    2,
+    "leaving a caret where each one was, ready for the next keystroke",
+  );
+
+  // Ctrl+Shift+L is the other road rather than the next step. From one selection
+  // it takes every occurrence in a single pass, and from two it declines, so a
+  // reader who has already pressed Ctrl+D twice gets nothing from it.
+  const all = press(
+    selectSelectionMatches,
+    press(selectNextOccurrence, enabled),
+  );
+  assertEqual(
+    all.selection.ranges.length,
+    3,
+    "Ctrl+Shift+L selects every occurrence of one selection",
+  );
+  assertEqual(
+    all.selection.main.from,
+    0,
+    "keeping the caret on the occurrence the user selected",
+  );
+  assertEqual(
+    selectSelectionMatches({ state, dispatch: () => {} }),
+    false,
+    "and it refuses with more than one range, which is why the pair are alternatives",
+  );
+
+  // The facet is load-bearing rather than decorative: the same two presses with
+  // it left out collapse to one range. This is the measurement that made the
+  // chords look dead in the first place, pinned so nobody has to make it again.
+  const collapsed = press(
+    selectNextOccurrence,
+    press(selectNextOccurrence, start(editorKeymap)),
+  );
+  assertEqual(
+    collapsed.selection.ranges.length,
+    1,
+    "the same two presses without the facet keep one range, and the chord is dead",
+  );
+
+  // The two arrow chords are not driven here: `addCursorVertically` asks the
+  // view which line is below the caret, and there is no view. That this app
+  // binds them is asserted above; what they do once bound is CodeMirror's own
+  // command, unmodified.
 });
 
 /**

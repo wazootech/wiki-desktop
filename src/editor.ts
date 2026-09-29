@@ -13,13 +13,7 @@
  * undo history, selection, and scroll survive a tab switch — the page only has
  * to say which document is on screen, not how to restore it.
  */
-import {
-  addCursorAbove,
-  addCursorBelow,
-  defaultKeymap,
-  history,
-  historyKeymap,
-} from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import {
   bracketMatching,
@@ -34,8 +28,6 @@ import {
   search,
   searchKeymap,
   searchPanelOpen,
-  selectNextOccurrence,
-  selectSelectionMatches,
 } from "@codemirror/search";
 import {
   EditorState,
@@ -56,7 +48,6 @@ import {
 } from "./markdown_links.ts";
 import {
   closeHoverTooltips,
-  type Command,
   drawSelection,
   dropCursor,
   EditorView,
@@ -78,7 +69,15 @@ export interface WikiEditorHandle {
   showDocument(key: string, text: string): void;
   /** Drop a closed document's state instead of holding it for the session. */
   forgetDocument(key: string): void;
-  /** Cursor position as a character offset into `getValue()`. */
+  /**
+   * Cursor position as a character offset into `getValue()`.
+   *
+   * The primary cursor, when the user has made more than one: that is the range
+   * `selection.main` names, the one a scroll follows and the one a fresh
+   * selection replaces. So the status bar reports a position rather than a
+   * count, and a second cursor is visible in the editor instead — see
+   * `multipleSelections`.
+   */
   getCursor(): number;
   /**
    * Replace the whole document with `text`, as one undo step.
@@ -371,7 +370,8 @@ const appTheme = EditorView.theme({
     outline: "1px solid var(--brand-marker)",
   },
   // The other occurrences of whatever is selected. This is what Ctrl+F would
-  // find without the panel.
+  // find without the panel, and it is the preview of Ctrl+Shift+L: every run
+  // tinted here is one the chord turns into a cursor.
   ".cm-selectionMatch": { backgroundColor: "var(--selection-soft)" },
 
   /*
@@ -410,43 +410,66 @@ function insertSoftTab(view: EditorView): boolean {
 }
 
 /**
- * The commands that need a second selection before they can do anything.
+ * Multiple selections, on.
  *
- * With `allowMultipleSelections` off, `EditorState` collapses a selection of
- * more than one range with `asSingle()`, so every chord that runs one of these
- * promises a second cursor and moves nothing.
+ * This is the one line that decides whether the editor can hold more than one
+ * selection at a time, and it has to ship with the chords that use it: without
+ * it `EditorState` collapses every multi-range selection with `asSingle()`, so
+ * Ctrl+D dispatches a second occurrence and gets a single range back.
+ * `editorKeymap` below is the other half, and one test asserts both at once.
+ *
+ * The app refused this for a while, on the grounds that those chords were dead
+ * anyway. That reason was about a chord being broken rather than about a mode
+ * being unwanted, and the difference is what turned the decision: `searchKeymap`
+ * brings Ctrl+D and Ctrl+Shift+L, the default keymap brings Ctrl+Alt+ArrowUp and
+ * ArrowDown, and with the facet off every one of them had to be filtered out by
+ * command identity — an active refusal, maintained against whatever a CodeMirror
+ * release does next, of four chords that would otherwise work. Enabling the
+ * facet is the single line that makes them real.
+ *
+ * Nothing else had to change for it, because the parts a multi-cursor mode needs
+ * had already been paid for: `drawSelection()` renders the extra carets, the
+ * theme already paints `.cm-cursor`, and `highlightSelectionMatches()` is
+ * already tinting every occurrence of the selected word. That tint was the
+ * preview of a chord this app refused to run, which is the strongest argument
+ * for the mode and the reason it reads as finished rather than bolted on.
+ *
+ * The mode, stated plainly, is four chords. Ctrl+D with a caret selects the word
+ * under it, and pressed again it adds the next occurrence of that text as a
+ * second cursor, so typing then edits both in one undo step. Ctrl+Shift+L
+ * selects every occurrence of a single selection at once. Ctrl+Alt+ArrowUp and
+ * ArrowDown stack a caret above and below. Escape — `simplifySelection`, from
+ * the default keymap — drops back to the single main range, which is the one
+ * Ctrl+D started from.
+ *
+ * Two limits are worth knowing before they are met: Ctrl+D goes quiet once the
+ * ranges no longer hold the same text, and Ctrl+Shift+L goes quiet with more
+ * than one range at all. The pair are two ways to the same place rather than one
+ * after the other — see `findChords`.
  */
-const multiSelection = new Set<Command>([
-  addCursorAbove,
-  addCursorBelow,
-  selectNextOccurrence,
-  selectSelectionMatches,
-]);
+export const multipleSelections: Extension = EditorState.allowMultipleSelections
+  .of(true);
 
 /**
- * Whether a binding needs a second selection to be more than a caret move.
+ * The search extension's chords: CodeMirror's own list, minus go-to-line.
  *
- * A set of commands rather than a list of key names, because what has to be
- * dropped is the capability, not the chord: a CodeMirror release that moves one
- * of these to another key still gets it dropped, and a list of keys would not.
- */
-function drawsASecondSelection(binding: KeyBinding): boolean {
-  return binding.run !== undefined && multiSelection.has(binding.run);
-}
-
-/**
- * The search extension's chords: CodeMirror's own list, minus three entries.
+ * `searchKeymap` is seven entries and the app wants six — Ctrl+F opens the
+ * panel, Ctrl+D selects the next occurrence of the selection, Ctrl+Shift+L
+ * selects all of them, Escape closes the panel, F3 and Ctrl+G step forward,
+ * Shift+F3 and Ctrl+Shift+G step back. Enter and Shift+Enter work inside the
+ * field.
  *
- * `searchKeymap` is seven entries and the app wants four — Ctrl+F opens the
- * panel, Escape closes it, F3 and Ctrl+G step to the next match, Shift+F3 and
- * Ctrl+Shift+G step back, and Enter and Shift+Enter work inside the field.
- *
- * Two of the three it drops are the multi-selection pair, Ctrl+D and
- * Ctrl+Shift+L, for the reason `drawsASecondSelection` gives: they are dead as
- * long as a selection of more than one range collapses to one, and shipping
- * them anyway would be four keys that promise a cursor and move nothing. That
- * is the deliberate part of this, rather than an accident of what CodeMirror
- * happens to bring.
+ * Ctrl+D and Ctrl+Shift+L are kept deliberately, and they are the reason this
+ * list is written out rather than spread whole: they only do anything at all
+ * with `multipleSelections` above, and the two are asserted together. What they
+ * reach is the same set of cursors from two directions rather than in sequence.
+ * Ctrl+D adds one occurrence at a time to the selection it was given and can be
+ * pressed again, refusing when the ranges have stopped holding the same text.
+ * Ctrl+Shift+L takes one selection's text and selects every occurrence of it in
+ * a single pass, which is the whole set at once and refuses when there is already
+ * more than one range — so it is the other road to the same place, not the end of
+ * Ctrl+D's. Both are silent when they cannot act, which is what a chord doing
+ * arithmetic on the selection rather than on the document should do.
  *
  * Go-to-line is refused for a smaller reason. This app does show line numbers
  * in the gutter, so Ctrl+Alt+G is not meaningless, but find is already how a
@@ -455,12 +478,9 @@ function drawsASecondSelection(binding: KeyBinding): boolean {
  * not built yet, and which followLink in src/page.ts says so about when it is
  * asked for. A line-number prompt is navigation for a document whose author
  * counts paragraphs rather than lines, and it is the only three-modifier chord
- * of the set, which is the most collision-prone part of a keyboard. It is
- * dropped by name because the command it runs is a navigation rather than a
- * selection, and it is the one refusal that would survive the facet being
- * turned on. Both kinds of refusal are matched by **the command a binding runs,
- * not the key it sits on**, so a release that rebinds either one still gets it
- * dropped.
+ * of the set, which is the most collision-prone part of a keyboard. The refusal
+ * is matched by the command a binding runs rather than by the key it sits on, so
+ * a CodeMirror release that rebinds go-to-line still gets it dropped.
  *
  * Nothing here is in the menu's shortcut column, because that column is for the
  * chords the page's own keydown handler implements and these are CodeMirror's;
@@ -468,7 +488,7 @@ function drawsASecondSelection(binding: KeyBinding): boolean {
  * thing it labels drift apart.
  */
 const findChords: readonly KeyBinding[] = searchKeymap.filter((binding) =>
-  binding.run !== gotoLine && !drawsASecondSelection(binding)
+  binding.run !== gotoLine
 );
 
 /**
@@ -476,14 +496,14 @@ const findChords: readonly KeyBinding[] = searchKeymap.filter((binding) =>
  *
  * Three decisions live here.
  *
- * **The chords that need a second selection are refused, by command.** Four
- * bindings arrive with these two keymaps that only do something with
- * `EditorState.allowMultipleSelections` set: Ctrl+D and Ctrl+Shift+L from
- * `searchKeymap`, Ctrl+Alt+ArrowUp and ArrowDown from the default keymap. All
- * four are filtered out by `drawsASecondSelection`, and the test that guards
- * them asserts both halves at once — that no bound command needs a second
- * selection *and* that the facet is still off — so turning the mode on fails a
- * test instead of quietly changing what four keys do.
+ * **The capability and the chords that need it ship as a pair.** Four of these
+ * bindings only do something because `multipleSelections` is among the editor's
+ * extensions: Ctrl+D and Ctrl+Shift+L arrive with `searchKeymap`, and
+ * Ctrl+Alt+ArrowUp and ArrowDown with the default keymap. All four are bound as
+ * they arrive. The test that guards this asserts both halves at once — that the
+ * commands are bound *and* that the facet is on — so dropping either one fails
+ * loudly instead of leaving a keystroke that quietly does nothing, which is the
+ * failure this app already paid for once.
  *
  * **Which map wins is declared, not positional.** The find chords are wrapped in
  * `Prec.high`, so they answer wherever they sit in this array. That used to be an
@@ -499,7 +519,7 @@ const findChords: readonly KeyBinding[] = searchKeymap.filter((binding) =>
  */
 export const editorKeymap: Extension[] = [
   keymap.of([
-    ...defaultKeymap.filter((binding) => !drawsASecondSelection(binding)),
+    ...defaultKeymap,
     ...historyKeymap,
     // Tab is not a CodeMirror default, and the plain textarea this replaced put
     // two spaces in.
@@ -547,7 +567,8 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
      *
      * The panel's chords come from `searchKeymap`, so it answers Ctrl+F while
      * the editor has focus; the page binds the same chord for when it does not,
-     * and `openFind` is written so the two cannot fight.
+     * and `openFind` is written so the two cannot fight. Which of those chords
+     * the app offers, and which it refuses, is `findChords` below.
      * `highlightSelectionMatches` marks the other occurrences of a selected
      * word without the reader asking, which is the moment they were about to.
      */
@@ -555,6 +576,9 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     highlightSelectionMatches(),
     replaceRowRevealed,
     replaceRowOnDom,
+    // The capability, and then the keyboard that uses it: without this facet
+    // every multi-cursor chord below is inert — see `multipleSelections`.
+    multipleSelections,
     // The keyboard, in one piece: the general keymaps and the find chords ranked
     // above them. Spread as a unit so which one answers a key is decided where
     // the chords are declared — see `editorKeymap`.
