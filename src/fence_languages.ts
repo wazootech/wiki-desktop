@@ -21,7 +21,9 @@ import { xmlLanguage } from "@codemirror/lang-xml";
 import { yamlLanguage } from "@codemirror/lang-yaml";
 import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { sparql } from "@codemirror/legacy-modes/mode/sparql";
 import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { turtle } from "@codemirror/legacy-modes/mode/turtle";
 
 /**
  * Fence info strings to a grammar, for the languages this vault actually uses.
@@ -29,19 +31,42 @@ import { toml } from "@codemirror/legacy-modes/mode/toml";
  * A hand-picked subset rather than `@codemirror/language-data`, which measured
  * 1,527 KB against this editor's 514 KB — 3.0x — and whose `load()` is a
  * dynamic import that `deno bundle` inlines anyway, so a grammar that never
- * runs still costs its bytes. This subset measured +83 KB minified and
- * +33 KB gzipped, and covers 101 of the vault's 123 named fences.
+ * runs still costs its bytes. The first twelve measured +83 KB minified and
+ * +33 KB gzipped; the two RDF modes below cost +5.7 KB and +1.6 KB more. The
+ * fourteen together resolve a grammar for 121 of the vault's 124 named fences.
  *
- * `sparql` (18 fences) and `turtle` (1) are the gap. Neither has a maintained
- * CodeMirror 6 grammar, and a third-party one is not a dependency this app
- * takes on for 15% of its fences. They stay monochrome, which is what every
- * fence looked like before.
+ * `sparql` (19 fences) and `turtle` (1) used to be the gap, on the finding that
+ * "neither has a maintained CodeMirror 6 grammar" and that a third-party one is
+ * not a dependency this app takes on for 15% of its fences. Both halves of that
+ * were wrong, and the correction is worth recording because the reasoning, not
+ * the conclusion, is what was mistaken: it looked for a *lezer* grammar.
+ * `@codemirror/legacy-modes` — already a dependency here, for `shell`,
+ * `powershell` and `toml` — carries `mode/sparql` and `mode/turtle`, and
+ * `@codemirror/language-data`, the registry the paragraph above rejects on
+ * size, is itself a list of `LanguageDescription`s that load exactly these two
+ * out of that package. So they are maintained — the package is the CodeMirror
+ * project's own port of the CodeMirror 5 modes, released with the rest of 6.x —
+ * they are not a third-party dependency, and they cost a few KB rather than a
+ * subtree.
+ *
+ * They arrived together with the palette widening in #35, and it is worth
+ * keeping the two apart: a grammar decides whether a block is *parsed*, a rule
+ * in `src/editor.ts` decides whether anything is *coloured*. The ported modes
+ * tag `?variables` and prefixed names as names and their IRIs as atoms, none of
+ * which had a colour when this table was first written — which is how 29 `yaml`
+ * fences spent a week rendering as prose with a working grammar behind them.
  */
 const FENCE_LANGUAGES: Record<string, Language> = {
   // StreamLanguage grammars, from one package.
   bash: StreamLanguage.define(shell),
   powershell: StreamLanguage.define(powerShell),
   toml: StreamLanguage.define(toml),
+  // The RDF pair, from the same package, and the two the wiki is most about:
+  // `@prefix` and `a` come back as `meta` (this app's marker colour), IRIs as
+  // `atom`, and local names as `keyword` or `variableName`. Until this landed
+  // the vault's 19 `sparql` fences and its single `turtle` one read as prose.
+  sparql: StreamLanguage.define(sparql),
+  turtle: StreamLanguage.define(turtle),
   // lezer grammars, taken as the bare `Language` each package exports rather
   // than the `LanguageSupport` wrapper, so nothing pulls in an autocomplete
   // source or the language-data registry behind it.
@@ -92,6 +117,14 @@ export function fenceLanguage(info: string): Language | null {
     case "ps1":
     case "pwsh":
       return FENCE_LANGUAGES.powershell;
+    // The extension names the ecosystem itself uses for these two —
+    // `@codemirror/language-data` lists SPARQL under `rq`/`sparql` and Turtle
+    // under `ttl`. Not invented here, and not the whole alias list either: it
+    // also spells SPARQL `sparul`, which no wiki writes.
+    case "rq":
+      return FENCE_LANGUAGES.sparql;
+    case "ttl":
+      return FENCE_LANGUAGES.turtle;
     default:
       // hasOwn, not a plain index into the record. An object literal inherits
       // `constructor` from Object.prototype, and `FENCE_LANGUAGES.constructor`

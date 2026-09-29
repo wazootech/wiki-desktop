@@ -47,8 +47,10 @@ Deno.test("an info string with no grammar yields none, and nothing throws", () =
       "nosuchlanguage",
       "bashh",
       "python2",
-      "sparql",
-      "turtle",
+      // The pair this module used to return null for, and no longer does —
+      // see the reversal note below. A near-miss must still come back empty.
+      "sparql1.1",
+      "ttl2",
       "\t",
       // The one name that reaches past the record: an object literal inherits
       // `constructor` from Object.prototype, and it is already lower-case, so
@@ -70,13 +72,14 @@ Deno.test("an info string with no grammar yields none, and nothing throws", () =
 });
 
 Deno.test("every language the vault uses resolves to a grammar", () => {
-  // The census in #7: bash 47, yaml 29, python 8, json 4, toml 3,
+  // The census in #7: bash 47, yaml 29, sparql 19, python 8, json 4, toml 3,
   // powershell 3, then the singletons. These are the fences that stop being
   // monochrome when this lands.
   for (
     const name of [
       "bash",
       "yaml",
+      "sparql",
       "python",
       "json",
       "toml",
@@ -87,6 +90,7 @@ Deno.test("every language the vault uses resolves to a grammar", () => {
       "tsx",
       "html",
       "xml",
+      "turtle",
     ]
   ) {
     assert(
@@ -141,6 +145,8 @@ Deno.test("the aliases a wiki actually writes resolve", () => {
       ["js", "javascript"],
       ["ps1", "powershell"],
       ["pwsh", "powershell"],
+      ["rq", "sparql"],
+      ["ttl", "turtle"],
     ] as const
   ) {
     assertEqual(
@@ -151,18 +157,24 @@ Deno.test("the aliases a wiki actually writes resolve", () => {
   }
 });
 
-Deno.test("sparql and turtle are absent by decision, not oversight", () => {
-  // They are 19 of the vault's 123 named fences and neither has a maintained
-  // CodeMirror 6 grammar. A third-party one is not a dependency this app takes
-  // on for 15% of its fences, so they stay monochrome. Recorded here so the
-  // next person does not read the omission as a bug.
+Deno.test("sparql and turtle are present, and the reversal is the record", () => {
+  // These two were absent by decision once: "neither has a maintained
+  // CodeMirror 6 grammar, and a third-party one is not a dependency this app
+  // takes on for 15% of its fences". Both halves were wrong, and the mistake
+  // was in the search rather than the taste — it looked for a *lezer* grammar,
+  // while `@codemirror/legacy-modes` (already a dependency, for `shell`,
+  // `powershell` and `toml`) carries `mode/sparql` and `mode/turtle`, and
+  // `@codemirror/language-data` is itself a registry that loads those two out
+  // of that package. So the assertion is inverted here rather than deleted:
+  // 20 of the vault's 124 named fences now take a colour, and a future change
+  // that drops them has to say why in this test.
   assert(
-    !FENCE_LANGUAGE_NAMES.includes("sparql"),
-    "sparql has no maintained CodeMirror 6 grammar and stays monochrome",
+    FENCE_LANGUAGE_NAMES.includes("sparql"),
+    "sparql is highlighted by the ported mode in @codemirror/legacy-modes",
   );
   assert(
-    !FENCE_LANGUAGE_NAMES.includes("turtle"),
-    "turtle has no maintained CodeMirror 6 grammar and stays monochrome",
+    FENCE_LANGUAGE_NAMES.includes("turtle"),
+    "turtle is highlighted by the ported mode in @codemirror/legacy-modes",
   );
 });
 
