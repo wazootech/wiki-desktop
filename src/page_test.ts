@@ -1475,16 +1475,276 @@ Deno.test("no menu entry advertises a shortcut the page does not handle", () => 
   assert(labels.length >= 4, "the menu offers shortcuts at all");
 
   const unhandled = labels.filter((label) => {
-    const letter = /^Ctrl\+([A-Z])$/.exec(label);
-    if (letter) return !page.includes(`key === '${letter[1].toLowerCase()}'`);
     if (label === "Ctrl+Tab" || label === "Ctrl+Shift+Tab") {
       return !page.includes("event.key === 'Tab'");
+    }
+    const plain = /^Ctrl\+([A-Z])$/.exec(label);
+    if (plain !== null) {
+      return !page.includes(`key === '${plain[1].toLowerCase()}'`);
+    }
+    // A chord is advertised with its modifiers, and the handler has to read
+    // them as part of the branch. Asserting the letter alone would pass for a
+    // handler that also fires on the bare Ctrl+<letter>, taking a key nobody
+    // offered along with the one they did.
+    const shifted = /^Ctrl\+Shift\+([A-Z])$/.exec(label);
+    if (shifted !== null) {
+      return !page.includes(
+        `key === '${shifted[1].toLowerCase()}' && event.shiftKey`,
+      );
+    }
+    // The Alt chord, which is also the one that is not under the Ctrl guard:
+    // an Alt+letter binding has to be reached before the handler bails out on
+    // anything that is not Ctrl or Cmd, or the label is a promise nothing keeps.
+    const alt = /^Shift\+Alt\+([A-Z])$/.exec(label);
+    if (alt !== null) {
+      return !page.includes(`key.toLowerCase() === '${alt[1].toLowerCase()}'`);
     }
     return true;
   });
   assert(
     unhandled.length === 0,
     `these labels have no keydown branch: ${unhandled.join(", ")}`,
+  );
+});
+
+Deno.test("every command has its own id", () => {
+  // The list is rendered one item per entry, so a repeated id is a repeated
+  // row: the menu showed "Format all open pages" twice, and both rows ran the
+  // same function, which is a worse bug than one row or none — it looks like
+  // the app is offering two different things and is offering the same thing
+  // twice. The ids are also what `window.wikiRunCommand` is keyed on, so a
+  // duplicate silently makes one of them unreachable by name.
+  const list = page.slice(
+    page.indexOf("const commands = ["),
+    page.indexOf("let menuIndex"),
+  );
+  const ids = [...list.matchAll(/id: '([^']+)'/g)].map((match) => match[1]);
+  assert(ids.length > 0, "the list has commands in it at all");
+  const seen = new Set<string>();
+  const repeated = ids.filter((id) => {
+    if (seen.has(id)) return true;
+    seen.add(id);
+    return false;
+  });
+  assert(
+    repeated.length === 0,
+    `these command ids are declared more than once: ${
+      [...new Set(repeated)].join(", ")
+    }`,
+  );
+});
+
+Deno.test("no command advertises a shortcut the host already owns", () => {
+  // The browser dev server and the desktop window share one page, so a chord
+  // the browser has bound is a chord this app cannot have. It shipped as
+  // Ctrl+Shift+I first and the press opened a console the user had not asked
+  // for, which in dev:web is indistinguishable from the app being broken.
+  //
+  // The desktop webview has no developer tools attached today, so nothing here
+  // can see the collision happening -- which is exactly why it is a test
+  // rather than a thing to remember.
+  const reserved = [
+    "Ctrl+Shift+I", // developer tools
+    "Ctrl+Shift+J", // developer tools, console
+    "Ctrl+Shift+C", // inspect
+    "F12",
+    "Ctrl+Shift+Delete",
+  ];
+  const list = page.slice(
+    page.indexOf("const commands = ["),
+    page.indexOf("let menuIndex"),
+  );
+  const labels = [...list.matchAll(/keys: '([^']+)'/g)].map((m) => m[1]);
+  const taken = labels.filter((label) => reserved.includes(label));
+  assert(
+    taken.length === 0,
+    `these shortcuts belong to the browser, not to the app: ${
+      taken.join(", ")
+    }`,
+  );
+});
+
+Deno.test("formatting runs on the buffer, on pages only, and says what it did", () => {
+  // The wiring, asserted against the source, the way the other editor tests in
+  // this repo do: the page is a string and the editor is a bundle, so there is
+  // no DOM here to drive.
+  assert(
+    page.includes("window.WikiFormat.formatMarkdown(before)"),
+    "the command formats the text the editor holds",
+  );
+  assert(
+    page.includes("editorApi.applyFormatted(after)"),
+    "the formatted text goes back through the editor's handle",
+  );
+
+  // The formatter must not reach for the file on disk. Reading it and writing
+  // it back is the one shape that loses a tab's unsaved edits, and the app has
+  // no reason to do either -- the editor already holds the page.
+  const format = page.slice(
+    page.indexOf("function formatFile()"),
+    page.indexOf("function formatAllOpenPages()"),
+  );
+  assert(
+    !/call\('(readFile|writeFile)'/.test(format),
+    "formatting does not read or write the file behind the tab",
+  );
+
+  // Only what the vault calls a page. The file list already carries the
+  // scope, so the check is a comparison rather than a guess from the extension.
+  assert(
+    page.includes("file.scope === 'input'"),
+    "formatting is gated on the vault listing the file under wiki.input",
+  );
+  assert(
+    page.includes("is not a wiki page"),
+    "a file that is not a page is refused by name, not silently skipped",
+  );
+
+  // Nothing to do has to say so. A key that formats a tidy page and reports
+  // success anyway is how a user ends up pressing it twice to find out.
+  assert(
+    page.includes("is already formatted"),
+    "a page with nothing to fix says so instead of reporting success",
+  );
+  // And a format that changed something is not a save: the buffer is dirty
+  // until the user saves, and the toast has to not imply otherwise.
+  assert(
+    page.includes("not saved yet"),
+    "the toast says the formatted page has not been written yet",
+  );
+
+  // A bundle that did not load is reported rather than throwing on a keystroke,
+  // the same as the editor itself.
+  assert(
+    page.includes("The formatter failed to load"),
+    "a missing formatter is reported instead of throwing",
+  );
+});
+
+Deno.test("formatting every open page is the same call, run over the tab strip", () => {
+  // The claim this command rests on is that it is not a second feature: one
+  // formatter, one answer to what a page is, called once per open page. If a
+  // second formatter or a second scope check ever appears here, the two
+  // commands can disagree about the same file, and the disagreement is a page
+  // the user formatted with one and not the other.
+  const all = page.slice(
+    page.indexOf("function formatAllOpenPages()"),
+    page.indexOf("function formatterAvailable()"),
+  );
+  assert(
+    all.includes("window.WikiFormat.formatMarkdown("),
+    "it formats through the same entry the single-page command uses",
+  );
+  // The only function it declares is itself. A second one named format
+  // anything would be a second formatter, which is the thing this command is
+  // supposed not to be.
+  const declared = [...all.matchAll(/function (format[A-Za-z]*)\(/g)].map(
+    (match) => match[1],
+  );
+  assert(
+    declared.length === 1 && declared[0] === "formatAllOpenPages",
+    `it declares no formatter of its own, only these: ${declared.join(", ")}`,
+  );
+  assert(
+    (all.match(/fileIsPage\(/g) ?? []).length >= 2,
+    "it asks the one page check, rather than a second scope test of its own",
+  );
+  assert(
+    !/scope\s*===/.test(all),
+    "the scope comparison lives in fileIsPage alone, not repeated here",
+  );
+
+  // The active tab is the editor's document and the rest are the page's
+  // buffers, and only the first can go through the handle. Getting this the
+  // wrong way round means formatting a tab the editor is still showing and
+  // then having the editor's stale copy overwrite it on the next keystroke.
+  assert(
+    all.indexOf("editorApi.applyFormatted(after)") <
+      all.indexOf("window.WikiFormat.formatMarkdown(tab.content)"),
+    "the tab on screen goes through the editor before the others are touched",
+  );
+  assert(
+    all.includes("tab === active"),
+    "a tab is not formatted twice, once through the editor and once as a buffer",
+  );
+
+  // Neither shape may reach the disk, for the reason the single-page command
+  // does not: it is the one that loses unsaved edits.
+  assert(
+    !/call\('(readFile|writeFile)'/.test(all),
+    "formatting every open page still does not touch the files behind the tabs",
+  );
+
+  // The dirty dots on the tabs nobody is looking at are drawn from their
+  // buffers, so nothing else redraws them.
+  assert(
+    all.includes("renderTabs()"),
+    "the tab strip is redrawn, so the dots on the hidden tabs follow",
+  );
+
+  // A count with nothing to count against is not a report. "Formatted 3" means
+  // something quite different when three pages were open and when three hundred
+  // were, and the summary has to say which happened.
+  assert(
+    all.includes("pages.length"),
+    "the summary counts against the number of open pages",
+  );
+  assert(
+    all.includes("'Every open page is already formatted'"),
+    "a pass that changed nothing says so instead of reporting a count of zero",
+  );
+  // And it must not claim a save.
+  assert(
+    all.includes("not saved yet"),
+    "the summary says the pages have not been written yet",
+  );
+});
+
+Deno.test("formatting every open page is offered only when there is one to do", () => {
+  const list = page.slice(
+    page.indexOf("const commands = ["),
+    page.indexOf("let menuIndex"),
+  );
+  const command = /id: 'format-all'[^\n]*/.exec(list);
+  assert(command !== null, "the command is in the list at all");
+  const entry = command![0];
+  // Two reasons it cannot run: nothing open that is a page, and a bundle that
+  // did not load. A menu entry that is enabled and then does nothing is worse
+  // than one that is honestly greyed out.
+  assert(
+    entry.includes("tabs.some((tab) => fileIsPage(tab.path))"),
+    "it needs at least one open file that is a wiki page",
+  );
+  assert(
+    entry.includes("window.WikiFormat !== undefined"),
+    "it is disabled when the formatter did not load",
+  );
+  assert(
+    entry.includes("run: formatAllOpenPages"),
+    "the menu entry and the command run the same function",
+  );
+});
+
+Deno.test("no command id is listed twice", () => {
+  // An id is what the menu item's data-command, the keyboard's focusCommand,
+  // and window.wikiRunCommand all address a command by, so a repeat is not a
+  // cosmetic duplicate: runCommand finds the first, the menu draws both, and
+  // the entry the user can see is not the entry the key reaches. It shipped
+  // once, as two identical lines in the list, and only the rendered menu
+  // showed it.
+  const list = page.slice(
+    page.indexOf("const commands = ["),
+    page.indexOf("let menuIndex"),
+  );
+  const ids = [...list.matchAll(/id: '([^']+)'/g)].map((m) => m[1]);
+  assert(ids.length > 0, "there are commands to check at all");
+  const seen = new Set<string>();
+  const repeated = ids.filter((id) =>
+    seen.has(id) ? true : (seen.add(id), false)
+  );
+  assert(
+    repeated.length === 0,
+    `these command ids are listed more than once: ${repeated.join(", ")}`,
   );
 });
 

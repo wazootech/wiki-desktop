@@ -53,6 +53,19 @@ export interface WikiEditorHandle {
   forgetDocument(key: string): void;
   /** Cursor position as a character offset into `getValue()`. */
   getCursor(): number;
+  /**
+   * Replace the whole document with `text`, as one undo step.
+   *
+   * Formatting is the reason this is the whole document and not a range: a
+   * formatter reads the page rather than a selection, so the page is what it
+   * produces. The selection is mapped through the change rather than reset,
+   * because a formatter that returns the caret to the top of the file on every
+   * run is unusable on anything long.
+   *
+   * Text that is already what the document holds changes nothing at all — see
+   * the implementation for why that is load-bearing.
+   */
+  applyFormatted(text: string): void;
   focus(): void;
 }
 
@@ -373,6 +386,29 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     view.scrollDOM.scrollTop = scrollTops.get(key) ?? 0;
   }
 
+  function applyFormatted(text: string): void {
+    const doc = view.state.doc;
+    // Nothing to do is the common case rather than the rare one: most pages
+    // the user opens are already tidy, and an empty transaction here would
+    // still land in the undo history and still mark the tab dirty. The caller
+    // compares first, but the handle cannot trust that, and a formatter that
+    // dirties a clean page is a bug report every time somebody presses the
+    // key on a file that had nothing wrong with it.
+    if (doc.toString() === text) return;
+    const change = view.state.update({
+      changes: { from: 0, to: doc.length, insert: text },
+    });
+    view.dispatch(change, {
+      // Mapped, not reset. A reflowed paragraph moves every offset after it,
+      // and the user was reading somewhere in there.
+      selection: view.state.selection.map(change.changes),
+      // Not an "input" event, which is what stops the history extension from
+      // folding this into the typing around it — undo would then step back a
+      // character at a time through a page-sized change.
+      userEvent: "format",
+    });
+  }
+
   return {
     getValue: () => view.state.doc.toString(),
     showDocument,
@@ -381,6 +417,7 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
       scrollTops.delete(target);
     },
     getCursor: () => view.state.selection.main.head,
+    applyFormatted,
     focus: () => view.focus(),
   };
 }

@@ -110,9 +110,10 @@ pre-paint path here is the real one, not a model of it.
 | `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance, and the file list's three switches as one table).                                                                                                                                                         |
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
 | `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                                                  |
-| `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag.                                                                                                                                                                                                                                                     |
+| `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag, and the formatter as `window.WikiFormat` beside it — the page is a classic script with no import to reach either by.                                                                                                                                |
 | `src/plex_mono.ts`        | IBM Plex Mono, the design system's body face, as two embedded woff2 subsets. Generated, not hand-edited; see the file's own header for how to regenerate it.                                                                                                                                                                                      |
 | `src/fence_languages.ts`  | Which grammar highlights a fenced code block, if any. Its own module so the mapping is testable without a DOM, like `vault.ts` and `wiki_config.ts`.                                                                                                                                                                                              |
+| `src/format.ts`           | Formatting: a pure function from a page's text to the same text tidied. Its own module for the same reason, and bundled rather than reached over a binding — see the note on formatting below.                                                                                                                                                    |
 | `src/editor_bundle.js`    | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact. CI rebuilds it and fails on any diff, which is the only way drift is visible: `deno task build` makes the binary, not the bundle, so a change to `src/editor.ts` can pass every other check and still serve the old behaviour. |
 
 ## How it works
@@ -394,6 +395,64 @@ pre-paint path here is the real one, not a model of it.
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a
   whole-file rewrite. A BOM is preserved for the same reason.
+- **Formatting is a function, not a subprocess** — `Format page` in the File
+  menu, or `Shift+Alt+F`, runs `src/format.ts` over the text the editor holds
+  and hands the result back through `applyFormatted`. It is a pure `string` to
+  `string` and it never touches the file on disk, which is what makes it correct
+  on a tab with unsaved work in it. The alternative was shelling out to the
+  `wiki` CLI, and that is wrong here twice over: the app runs without
+  `--allow-run` on purpose (see _Reveal in Explorer_ above), and `wiki fmt`
+  takes only existing file paths and writes them back — no stdin — so it would
+  reformat the copy on disk and lose the edits. Routing it through the app's own
+  read/write path would also have been better on line endings, which
+  `src/vault.ts` already gets right per file and `wiki fmt` does not. It was
+  `Ctrl+Shift+I` to begin with, which is the chord every browser has bound to
+  its developer tools for twenty years: the desktop webview ships without
+  devtools so nothing happened there, and in `dev:web` the press opened a
+  console the user had not asked for. A shortcut that fights the host is not a
+  shortcut, and nothing in this app's own checks can see the collision — hence a
+  test that names the browser's reserved chords instead.
+- **Formatting every open page is the same call, run over the tab strip** —
+  `Format all open pages` filters the tabs to the ones the vault calls pages and
+  runs the identical format-and-apply over each, so there is no second formatter
+  to disagree with the first and no second answer to what a page is. The tab on
+  screen goes through `applyFormatted`; the others are formatted in place on the
+  page's own buffer, which `stashCursor` keeps in step and the editor reconciles
+  the next time that tab is shown. Switching to each tab in turn would have kept
+  the per-tab undo stacks, at the price of scrolling the window around under the
+  user — and a tab whose text changed underneath it loses that stack anyway when
+  the editor rebuilds its state, which is what `Reload from disk` has always
+  done. The summary counts against the number of open pages, because "Formatted
+  3" is a different piece of news when three were open and when three hundred
+  were, and it names any open file it skipped for not being a page.
+- **What the formatter will not do is most of it** — headings get one space and
+  lose a closing run, bullets become dashes, task boxes lose their extra
+  spacing, tables are aligned to their widest cell, and a document ends on
+  exactly one newline. It leaves fenced code, frontmatter, setext headings, hard
+  line breaks, blank-line runs, emphasis markers, and ordered-list numbering
+  alone, and each of those is a test in `src/format_test.ts` rather than a
+  caveat. Two of them are the kind of thing a formatter is expected to get
+  wrong: two trailing spaces are a hard line break, so stripping trailing
+  whitespace would silently join lines; and intraword `__` is not emphasis while
+  intraword `_` is, so rewriting `__bold__` to `**bold**` would change what
+  `snake__case__name` means. Only pages are formatted — the vault's own
+  `wiki.yml` decides what a page is, and formatting its README or its config is
+  a change nobody asked for.
+- **A format is one undo step, and it is not a save** — `applyFormatted`
+  replaces the whole document, because a formatter reads the page rather than a
+  range, and maps the selection through the change so a reflowed paragraph does
+  not drop the user at the top of the file. It is a plain edit: the tab goes
+  dirty and the user saves it like any other, which is the honest state for a
+  change they have not looked at yet. Text that is already tidy changes nothing
+  at all, so pressing the key on a clean page costs no transaction and leaves no
+  dirty dot.
+- **The formatter's bundle cost is measured, the way the fence subset's was** —
+  it is bundled into `src/editor_bundle.js` rather than reached over a binding,
+  and measured **+3.9 KB minified, +1.5 KB gzipped**, 0.6% of the bundle. That
+  is the argument for a bounded hand-rolled pass over an AST round trip: this is
+  13 tests and a few hundred lines against a remark/mdast pipeline's megabytes,
+  and the passes here are chosen so that a line they do not apply to comes back
+  byte-identical.
 - **Sidebar** — the panel icon at the top-left collapses the column on wide
   windows (the editor reflows into the space) and slides it in as a drawer below
   640px. It is one action with two affordances: the brand row's while the
