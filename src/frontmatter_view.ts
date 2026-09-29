@@ -749,24 +749,6 @@ function reasonBarText(reason: FrontmatterPlan["reason"]): string {
   }
 }
 
-/** Why structured is not on, in the words of the thing that decided it. */
-function reasonText(reason: FrontmatterPlan["reason"]): string {
-  switch (reason) {
-    case "absent":
-      return "this page has no frontmatter block";
-    case "unterminated":
-      return "the frontmatter block is never closed";
-    case "no-shape":
-      return "no shape targets this page's class, so there is nothing to show";
-    case "no-vocabulary":
-      return "the vault's wiki.yml has not been read yet";
-    case "off":
-      return "you asked for raw";
-    default:
-      return "structured view is off";
-  }
-}
-
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   node.className = className;
