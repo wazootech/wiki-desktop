@@ -1534,6 +1534,85 @@ Deno.test("every command has its own id", () => {
   );
 });
 
+Deno.test("find takes the chord the host has, and is the only command that does", () => {
+  const list = page.slice(
+    page.indexOf("const commands = ["),
+    page.indexOf("let menuIndex"),
+  );
+  const find = /\{ id: 'find'[^\n]*/.exec(list);
+  assert(find !== null, "find is in the command list");
+  assert(
+    find![0].includes("keys: 'Ctrl+F'"),
+    "find advertises the chord a reader already knows",
+  );
+  assert(
+    find![0].includes("findInPage(false)"),
+    "and opens find without the replace row",
+  );
+
+  // Replace is a second command, not a row that is always there, and it is the
+  // only way to reach one. Both references agree on the shape: VS Code opens
+  // find on Ctrl+F and adds the row on Ctrl+H, and the p5.js editor (following
+  // Sublime) gives Find and Replace different chords. A found-and-shown
+  // replace row is a page-rewriting button in the middle of a read-only-looking
+  // panel, which is the accident this avoids.
+  const replace = /\{ id: 'replace'[^\n]*/.exec(list);
+  assert(replace !== null, "replace is its own command");
+  assert(
+    replace![0].includes("keys: 'Ctrl+H'"),
+    "and carries the chord the reference editors pair with Ctrl+F",
+  );
+  assert(
+    replace![0].includes("findInPage(true)"),
+    "and opens find with the replace row revealed",
+  );
+  const replaceBranch = page.slice(
+    page.indexOf("key === 'h'"),
+    page.indexOf("key === 'o'"),
+  );
+  assert(
+    replaceBranch.includes("event.preventDefault();") &&
+      replaceBranch.includes("findInPage(true);"),
+    "the Ctrl+H branch takes the browser's history chord and reveals replace",
+  );
+
+  // The chord has to be taken rather than merely offered: without
+  // preventDefault the browser's find bar opens on top of the editor's panel,
+  // and the reader gets two find boxes and the wrong one focused.
+  const branch = page.slice(
+    page.indexOf("key === 'f'"),
+    page.indexOf("key === 'o'"),
+  );
+  assert(
+    branch.includes("event.preventDefault();"),
+    "the chord is taken from the browser, not shared with it",
+  );
+  assert(
+    branch.includes("findInPage(false);"),
+    "and it opens the editor's panel with no replace row",
+  );
+
+  // The page must not build a find bar of its own. Its own count would be a
+  // second answer to a question the editor already answers, and the two would
+  // disagree the moment a line scrolled out of the rendered range — which is
+  // the reason for owning the chord in the first place.
+  assert(
+    (page.match(/id: 'find'/g) ?? []).length === 1,
+    "there is exactly one find command",
+  );
+  // No find *panel* of its own. The sidebar's file filter is a search input
+  // and is none of this test's business, so what is checked is a panel rather
+  // than the word.
+  assert(
+    !/find-bar|findBar|find-panel|findPanel/.test(page),
+    "the page draws no find panel of its own",
+  );
+  assert(
+    !/<input[^>]+name=["']search["']/i.test(page),
+    "and no second search field, which is what a hand-rolled find bar starts as",
+  );
+});
+
 Deno.test("no command advertises a shortcut the host already owns", () => {
   // The browser dev server and the desktop window share one page, so a chord
   // the browser has bound is a chord this app cannot have. It shipped as

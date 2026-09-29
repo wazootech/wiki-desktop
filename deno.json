@@ -22,6 +22,7 @@
     "@codemirror/commands": "npm:@codemirror/commands@^6",
     "@codemirror/lang-markdown": "npm:@codemirror/lang-markdown@^6",
     "@codemirror/language": "npm:@codemirror/language@^6",
+    "@codemirror/search": "npm:@codemirror/search@^6",
     "@codemirror/state": "npm:@codemirror/state@^6",
     "@codemirror/view": "npm:@codemirror/view@^6",
     "@lezer/highlight": "npm:@lezer/highlight@^1"

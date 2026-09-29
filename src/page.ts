@@ -1883,6 +1883,27 @@ const pageTemplate = `<!DOCTYPE html>
         showToast(message);
       }
 
+      /*
+       * Open the editor's own find panel.
+       *
+       * The page does not build a find bar, and that is the whole point: the
+       * matches, the count, the wrap-around and the "no results" state are the
+       * editor's, so there is no second set of answers to keep in step with
+       * what is actually on screen.
+       *
+       * This is safe to reach from two places at once. CodeMirror's own keymap
+       * answers Ctrl+F while the editor has focus and this answers it while the
+       * focus is somewhere else -- the sidebar or the tab strip -- and opening
+       * a panel that is already open focuses the one that is there.
+       */
+      function findInPage(withReplace) {
+        if (editorApi === null) {
+          showToast('The editor failed to load. Reload the window to retry.');
+          return;
+        }
+        editorApi.openFind(withReplace === true);
+      }
+
       /** Whether the bundle that carries the formatter actually loaded. */
       function formatterAvailable() {
         if (window.WikiFormat === undefined) {
@@ -2274,6 +2295,20 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'close-tab', group: 'Tabs', label: 'Close tab', keys: 'Ctrl+W', canRun: () => activeTab() !== null, run: () => closeTab(activeIndex) },
         { id: 'next-tab', group: 'Tabs', label: 'Next tab', keys: 'Ctrl+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(1) },
         { id: 'previous-tab', group: 'Tabs', label: 'Previous tab', keys: 'Ctrl+Shift+Tab', canRun: () => tabs.length > 1, run: () => cycleTab(-1) },
+        // Find is the one chord the host also has, and the app takes it on
+        // purpose. A browser's find searches the rendered page, and CodeMirror
+        // only renders the lines near the viewport, so in a long wiki page the
+        // browser can only ever match what is already on screen. The shortcut
+        // belongs to the document here, which is exactly the difference
+        // between this and Ctrl+Shift+I: devtools belongs to the host, find
+        // belongs to what the host is showing.
+        { id: 'find', group: 'File', label: 'Find in page', keys: 'Ctrl+F', canRun: () => activeTab() !== null, run: () => findInPage(false) },
+        // Replace is its own command rather than a row inside find, which is
+        // what VS Code does with Ctrl+H and what the p5.js editor does by
+        // giving Find and Replace different chords. Find is the thing people
+        // reach for constantly and replace rewrites the page, so the two are
+        // one keystroke apart from each other on purpose.
+        { id: 'replace', group: 'File', label: 'Replace in page', keys: 'Ctrl+H', canRun: () => activeTab() !== null, run: () => findInPage(true) },
         { id: 'toggle-sidebar', group: 'View', label: 'Toggle vault files', keys: 'Ctrl+B', canRun: () => true, run: toggleSidebar },
         // Three choices rather than three commands, so each one reports whether
         // it is the active one and the menu can show that.
@@ -2616,6 +2651,18 @@ const pageTemplate = `<!DOCTYPE html>
           if (key === 's') {
             event.preventDefault();
             saveFile();
+          } else if (key === 'f') {
+            // preventDefault is what stops the browser's own find bar from
+            // opening on top of the editor's. See the command's note: the
+            // shortcut belongs to the document, not to the host.
+            event.preventDefault();
+            findInPage(false);
+          } else if (key === 'h') {
+            // Ctrl+H, the chord VS Code pairs with Ctrl+F. The browser's own
+            // Ctrl+H is its history panel, in the tab rather than in this
+            // page, so there is nothing here to take it from.
+            event.preventDefault();
+            findInPage(true);
           } else if (key === 'o') {
             event.preventDefault();
             openBrowser();

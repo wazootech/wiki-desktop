@@ -109,7 +109,7 @@ pre-paint path here is the real one, not a model of it.
 | `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.                                                                                                                                                                                                     |
 | `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance, and the file list's three switches as one table).                                                                                                                                                         |
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
-| `src/editor.ts`           | The editor's document model and theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                                                  |
+| `src/editor.ts`           | The editor's document model, its find panel, and its theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                             |
 | `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag, and the formatter as `window.WikiFormat` beside it — the page is a classic script with no import to reach either by.                                                                                                                                |
 | `src/plex_mono.ts`        | IBM Plex Mono, the design system's body face, as two embedded woff2 subsets. Generated, not hand-edited; see the file's own header for how to regenerate it.                                                                                                                                                                                      |
 | `src/fence_languages.ts`  | Which grammar highlights a fenced code block, if any. Its own module so the mapping is testable without a DOM, like `vault.ts` and `wiki_config.ts`.                                                                                                                                                                                              |
@@ -348,6 +348,44 @@ pre-paint path here is the real one, not a model of it.
   _after_ the page's stylesheet with an extra class of specificity, so a
   page-written `.cm-gutters` rule loses and the gutter renders light grey in
   dark mode.
+- **Find is the editor's panel, and the app takes `Ctrl+F` to show it** —
+  `Find in page` opens CodeMirror's own search panel, so the matches, the count,
+  the wrap-around and the "no results" state are the editor's state rather than
+  a second set of answers kept in step by hand. The browser's own find is the
+  wrong tool here and not merely a different one: CodeMirror renders only the
+  lines near the viewport, so find-in-page can only ever match what happens to
+  be on screen, and the sentence a reader wants in a long wiki page is usually
+  the part that is not rendered. That is why the chord is taken with
+  `preventDefault` — and why this is the one place the app overrides a browser
+  shortcut it does not own. The distinction from `Ctrl+Shift+I` is _whose_ key
+  it is: developer tools belongs to the host, find belongs to the document the
+  host is showing. `highlightSelectionMatches` also marks the other occurrences
+  of a selected word without being asked, which is the moment the reader was
+  about to press the key. The panel arrives light-styled on a hard-coded white
+  bar, so it is re-tokenized in the theme extension beside the gutter, for the
+  same reason: CodeMirror injects its base theme above the page's stylesheet. It
+  is the most expensive dependency the editor takes on — `@codemirror/search`
+  measured **+27.3 KB minified, +9.0 KB gzipped**, 4.3% of the pre-search
+  bundle, which is seven times what the formatter cost and still 1.8% of what
+  `@codemirror/language-data` was rejected for.
+- **Find has no replace row until something asks for one** — CodeMirror builds
+  Replace into the panel whenever the editor is writable, so left alone this app
+  ships a field and two buttons that rewrite the page in place, with no preview,
+  inside the one panel that reads as read-only. It would have been the app's
+  only bulk-rewrite surface, one Enter away from a page nobody had looked at
+  yet. Neither reference widget does that, and both are copied here: VS Code
+  opens find on `Ctrl+F` and adds the row on `Ctrl+H`, and the p5.js Web Editor
+  puts Find and Replace on separate chords too (`Ctrl/Cmd+F` against
+  `Ctrl/Cmd+Alt+F`, following Sublime). So `Replace in page` is its own command
+  on `Ctrl+H`, and find is find. The row is _hidden rather than disabled_, and
+  the difference is the whole guarantee: `display: none` takes the field out of
+  the tab order and out of the accessibility tree, so there is nothing to tab
+  into, nothing announced, and no button to press by accident — a disabled field
+  is still all three. A panel that is already up keeps the row it is showing, so
+  `Ctrl+F` during a replace does not pull the field out from under the user. The
+  flag rides on the editor root rather than the panel, because the root is there
+  synchronously when `openFind` runs and the panel's own element appears in a
+  later update.
 - **Fenced code is highlighted by its language** — `src/fence_languages.ts` maps
   a fence's info string to a grammar for the twelve languages this vault
   actually uses (`bash`, `yaml`, `python`, `json`, `toml`, `powershell`,
@@ -527,7 +565,7 @@ pre-paint path here is the real one, not a model of it.
   for the grammars alone** — about three times the editor. Adopting it is a
   deliberate trade, not an oversight
   ([#6](https://github.com/wazootech/wiki-desktop/issues/6)). There is no
-  search, autocomplete, folding, or multi-cursor yet.
+  autocomplete, folding, or multi-cursor yet.
 - `Save` writes the active tab only; there is no save-all and no session
   restore.
 - `Ctrl+W`, `Ctrl+Tab`, and `Ctrl+B` work in the desktop window, but a browser

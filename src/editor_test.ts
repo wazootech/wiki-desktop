@@ -14,7 +14,6 @@ import { join } from "node:path";
 
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
-
 import { linkHrefAt, resolveLinkTarget } from "./markdown_links.ts";
 import { toEditorText } from "./vault.ts";
 
@@ -140,6 +139,120 @@ Deno.test("the editor themes itself through an extension the cascade respects", 
   assert(
     source.includes('backgroundColor: "var(--panel-muted)"'),
     "the gutter takes the app's own panel token",
+  );
+});
+
+Deno.test("find is the editor's own panel, themed, and reachable from outside", async () => {
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  const code = withoutComments(source);
+
+  // The panel has to be an extension of the editor rather than a bar the page
+  // draws, because the matches and the count are the editor's state. A second
+  // set of answers held in the page is a second set that can be wrong.
+  assert(
+    /const extensions: Extension\[\] = \[[\s\S]*?\n\s*search\(/.test(source),
+    "the search extension is one of the extensions the editor is created with",
+  );
+
+  // The page reaches it through the handle and nothing else, so the tab strip
+  // and dirty state still do not know CodeMirror exists.
+  for (const method of ["openFind", "closeFind", "findIsOpen"]) {
+    assert(
+      new RegExp(`return \\{[\\s\\S]*\\b${method},`).test(code),
+      `the handle exposes ${method}`,
+    );
+  }
+  assert(
+    code.includes("openSearchPanel(view)") &&
+      code.includes("closeSearchPanel(view)") &&
+      code.includes("searchPanelOpen(view.state)"),
+    "the handle's find methods are CodeMirror's, not a partial reimplementation",
+  );
+
+  // The panel arrives with CodeMirror's own hard-coded light styling, which is
+  // a white bar with grey borders sitting on top of a wiki page in either
+  // mode. It has to be written as a theme extension for the same reason the
+  // gutter does: the base theme is injected above the page's stylesheet.
+  assert(
+    /\.cm-panels"?:\s*\{[\s\S]{0,80}?backgroundColor:\s*"var\(--panel-muted\)"/
+      .test(source),
+    "the panel takes the app's own surface token",
+  );
+  assert(
+    /\.cm-searchMatch\.cm-searchMatch-selected"?:\s*\{[\s\S]{0,120}?var\(--brand-marker\)/
+      .test(source),
+    "the current match carries the brand, so it is told apart from the rest",
+  );
+});
+
+Deno.test("the replace row is absent until something asks for it", async () => {
+  // CodeMirror builds Replace into the panel whenever the editor is writable,
+  // so a find panel here would otherwise ship a field and two buttons that
+  // rewrite the page in place with no preview -- the only bulk-rewrite surface
+  // in the app, inside the panel that reads as read-only.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "editor.ts"),
+  );
+  const code = withoutComments(source);
+
+  // Absent rather than disabled, and that is the whole guarantee: a
+  // `display: none` field is out of the tab order and out of the accessibility
+  // tree, so there is nothing to tab into, nothing announced, and no button
+  // one Enter away from rewriting the page.
+  for (const name of ["replace", "replaceAll"]) {
+    const rule = new RegExp(
+      `\"&:not\\(\\.wiki-replace\\) \\.cm-search \\[name='${name}'\\]\"?:\\s*\\{\\s*display:\\s*\"none\"`,
+    );
+    assert(
+      rule.test(source),
+      `the ${name} control is hidden until the replace row is asked for`,
+    );
+  }
+  assert(
+    /"&:not\(\.wiki-replace\) \.cm-search br"?:\s*\{\s*display:\s*"none"/.test(
+      source,
+    ),
+    "and the row's own line break goes with it, so the panel stays one row tall",
+  );
+
+  // The reveal is editor state, and a view plugin writes the class from it.
+  // Imperatively setting the class at open time is what this replaced: it was
+  // checked against the running app, where closing the panel with its own ×
+  // and reopening with Ctrl+H left the row hidden because the flag and the DOM
+  // had drifted apart with nobody to reconcile them.
+  assert(
+    code.includes("const revealReplaceRow = StateEffect.define<boolean>()"),
+    "asking for the row is an effect the editor state carries",
+  );
+  assert(
+    code.includes("const replaceRowRevealed = StateField.define<boolean>"),
+    "and a field that survives every update, including CodeMirror's own",
+  );
+  assert(
+    /view\.dom\.classList\.toggle\(\s*REPLACE_ROW,\s*view\.state\.field\(replaceRowRevealed\),?\s*\)/
+      .test(code),
+    "the class is written from that field, not from a local variable",
+  );
+  assert(
+    code.includes("ViewPlugin.fromClass("),
+    "a view plugin is what keeps the DOM in step on every update",
+  );
+  // The one thing the reveal must not do is read the panel's own bookkeeping,
+  // which is what reported a panel as up when it was gone.
+  const openFind = code.slice(
+    code.indexOf("function openFind"),
+    code.indexOf("function closeFind"),
+  );
+  assert(
+    !openFind.includes("searchPanelOpen") &&
+      openFind.includes("revealReplaceRow.of(revealReplace)"),
+    "the caller's intent decides, with no look at the panel's state",
+  );
+  assert(
+    code.includes("revealReplaceRow.of(false)"),
+    "closing find puts the row back to absent",
   );
 });
 

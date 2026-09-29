@@ -20,7 +20,20 @@ import {
   HighlightStyle,
   syntaxHighlighting,
 } from "@codemirror/language";
-import { EditorState, type Extension } from "@codemirror/state";
+import {
+  closeSearchPanel,
+  highlightSelectionMatches,
+  openSearchPanel,
+  search,
+  searchKeymap,
+  searchPanelOpen,
+} from "@codemirror/search";
+import {
+  EditorState,
+  type Extension,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
 import { tags as t } from "@lezer/highlight";
 
 import { fenceLanguage } from "./fence_languages.ts";
@@ -42,6 +55,8 @@ import {
   hoverTooltip,
   keymap,
   lineNumbers,
+  ViewPlugin,
+  type ViewUpdate,
 } from "@codemirror/view";
 
 export interface WikiEditorHandle {
@@ -66,6 +81,26 @@ export interface WikiEditorHandle {
    * the implementation for why that is load-bearing.
    */
   applyFormatted(text: string): void;
+  /**
+   * Open the find panel over the document that is showing, and put the caret
+   * in its field.
+   *
+   * Opening it twice is the same as opening it once: the panel is a piece of
+   * the editor that either is up or is not, so a second caller focuses the one
+   * that is already there rather than stacking another. That is what makes it
+   * safe for both the page's shortcut and CodeMirror's own keymap to ask for
+   * it on the same keystroke.
+   *
+   * `revealReplace` is the whole of the find-versus-replace distinction, and
+   * it is a parameter rather than a second panel because the panel is the
+   * same one either way — see `openFind`'s implementation for why the row
+   * starts absent rather than disabled.
+   */
+  openFind(revealReplace?: boolean): void;
+  /** Put the panel away. Harmless when it was never up. */
+  closeFind(): void;
+  /** Whether the find panel is up, so a caller can avoid re-opening it. */
+  findIsOpen(): boolean;
   focus(): void;
 }
 
@@ -84,6 +119,64 @@ export interface WikiEditorOptions {
 
 /** Two spaces, matching what the plain-textarea editor did on Tab. */
 const SOFT_TAB = "  ";
+
+/**
+ * The class on the editor root that reveals the find panel's replace row.
+ *
+ * Named for the row rather than for the panel, because find is always up and
+ * this is only sometimes true of it.
+ */
+const REPLACE_ROW = "wiki-replace";
+
+/**
+ * Whether the replace row has been asked for.
+ *
+ * A piece of editor state rather than a variable beside the view, because the
+ * panel the row lives in is CodeMirror's own and it can be opened, closed and
+ * rebuilt by paths this module does not drive. State is what survives that:
+ * the alternative tried here first was reading the panel's open flag at the
+ * moment of the call, and it was wrong in the running app -- a panel reported
+ * as up when it was demonstrably gone, so Ctrl+H after a close did nothing.
+ */
+const revealReplaceRow = StateEffect.define<boolean>();
+
+const replaceRowRevealed = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(revealReplaceRow)) return effect.value;
+    }
+    return value;
+  },
+});
+
+/**
+ * Keeps the editor root's class in step with that state.
+ *
+ * The class is what the theme keys on, and it is written here rather than in
+ * `openFind` so that *every* update reconciles it -- including the ones
+ * CodeMirror makes on its own behalf. Written imperatively, a class set at open
+ * time could be left stale by anything that closed the panel afterwards, and
+ * the state and the DOM could disagree with no one to notice.
+ */
+const replaceRowOnDom = ViewPlugin.fromClass(
+  class {
+    constructor(view: EditorView) {
+      this.sync(view);
+    }
+
+    update(update: ViewUpdate) {
+      this.sync(update.view);
+    }
+
+    sync(view: EditorView) {
+      view.dom.classList.toggle(
+        REPLACE_ROW,
+        view.state.field(replaceRowRevealed),
+      );
+    }
+  },
+);
 
 /**
  * How close together three clicks must be to read as a triple click.
@@ -199,6 +292,104 @@ const appTheme = EditorView.theme({
     {
       backgroundColor: "var(--selection-soft) !important",
     },
+
+  /*
+   * The find panel, in the app's own tokens.
+   *
+   * It has to be written here for the same reason the gutter does — CodeMirror
+   * injects its base theme above the page's stylesheet — and its defaults are
+   * the ones that give it away as a foreign component: a hard-coded white
+   * panel with grey borders, sitting on top of a Wiki page in either mode. The
+   * panel keeps its own layout and only takes the palette.
+   */
+  ".cm-panels": {
+    backgroundColor: "var(--panel-muted)",
+    color: "var(--text-body)",
+    borderBottom: "1px solid var(--line)",
+  },
+  ".cm-panels.cm-panels-bottom": {
+    borderTop: "1px solid var(--line)",
+    borderBottom: "none",
+  },
+  ".cm-search": {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "4px 8px",
+    padding: "7px 10px",
+    fontFamily: "inherit",
+    fontSize: "12px",
+  },
+  ".cm-search label": { color: "var(--muted)", whiteSpace: "nowrap" },
+  ".cm-textfield": {
+    border: "1px solid var(--line-strong)",
+    borderRadius: "6px",
+    padding: "3px 7px",
+    color: "var(--text-body)",
+    backgroundColor: "var(--panel)",
+    fontFamily: "inherit",
+    fontSize: "12px",
+  },
+  ".cm-textfield:focus-visible": {
+    outline: "3px solid var(--focus-ring)",
+    outlineOffset: "1px",
+  },
+  ".cm-button": {
+    border: "1px solid var(--line-strong)",
+    borderRadius: "6px",
+    padding: "3px 9px",
+    color: "var(--text-body)",
+    backgroundColor: "var(--panel)",
+    backgroundImage: "none",
+    fontFamily: "inherit",
+    fontSize: "12px",
+    textTransform: "none",
+  },
+  ".cm-button:hover": { backgroundColor: "var(--surface-hover)" },
+  // Every match, and the one the caret is on. The defaults are a lime and an
+  // orange that read as somebody else's editor; these are the app's selection
+  // tint, with the current match the brand's own colour so the two are told
+  // apart at a glance rather than by shade.
+  ".cm-searchMatch": {
+    backgroundColor: "var(--selection-soft)",
+    outline: "1px solid var(--line-strong)",
+  },
+  ".cm-searchMatch.cm-searchMatch-selected": {
+    backgroundColor: "var(--brand-soft)",
+    outline: "1px solid var(--brand-marker)",
+  },
+  // The other occurrences of whatever is selected. This is what Ctrl+F would
+  // find without the panel.
+  ".cm-selectionMatch": { backgroundColor: "var(--selection-soft)" },
+
+  /*
+   * Find has no replace row until something asks for one.
+   *
+   * CodeMirror builds Replace into the panel whenever the editor is writable,
+   * so on a find panel this app would otherwise ship a field and two buttons
+   * that rewrite the page in place, with no preview and no undo boundary — the
+   * only bulk-rewrite surface in the app, sitting in the middle of the one
+   * that reads as read-only. Neither reference widget does that: VS Code opens
+   * find on Ctrl+F and adds the row on Ctrl+H, and the p5.js Web Editor puts
+   * Find and Replace on separate chords too (Ctrl/Cmd+F against Ctrl/Cmd+Alt+F,
+   * following Sublime). Both treat replacing as its own intent rather than a
+   * row that happens to be there, which is what this copies.
+   *
+   * It is hidden rather than disabled, and that distinction is the point:
+   * `display: none` takes the field out of the tab order and out of the
+   * accessibility tree, so there is nothing to tab into and no button to press
+   * by accident. A disabled field is still reachable, still announced, and
+   * still one Enter away from rewriting a page.
+   *
+   * The class lives on the editor root rather than on the panel because the
+   * root is there synchronously when `openFind` runs, while the panel's own
+   * element appears in a later update.
+   */
+  "&:not(.wiki-replace) .cm-search [name='replace']": { display: "none" },
+  "&:not(.wiki-replace) .cm-search [name='replaceAll']": { display: "none" },
+  // The line break belongs to the row: left behind, it is a blank line under
+  // the find field on a panel that is meant to be one row tall.
+  "&:not(.wiki-replace) .cm-search br": { display: "none" },
 });
 
 export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
@@ -229,9 +420,34 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
       "aria-label": "File contents",
       spellcheck: "false",
     }),
+    /*
+     * Search, as a panel above the document rather than a browser find.
+     *
+     * The browser's own find is the wrong tool here and not merely a different
+     * one: CodeMirror renders only the visible lines, so find-in-page can only
+     * ever match what happens to be on screen. A wiki page is long, and the
+     * sentence the reader is looking for is usually the part that is not
+     * rendered.
+     *
+     * The panel's chords come from `searchKeymap`, so it answers Ctrl+F while
+     * the editor has focus; the page binds the same chord for when it does not,
+     * and `openFind` is written so the two cannot fight.
+     * `highlightSelectionMatches` marks the other occurrences of a selected
+     * word without the reader asking, which is the moment they were about to.
+     */
+    search({ top: true }),
+    highlightSelectionMatches(),
+    replaceRowRevealed,
+    replaceRowOnDom,
     keymap.of([
+      // Search is the newest claim on these chords, so it goes first: the
+      // first binding CodeMirror is offered that answers a key is the one that
+      // runs, and Ctrl+F should reach the panel.
+      ...searchKeymap,
       ...defaultKeymap,
       ...historyKeymap,
+      // Tab is not a CodeMirror default, and the plain textarea this replaced
+      // put two spaces in.
       { key: "Tab", run: insertSoftTab },
     ]),
     /*
@@ -409,6 +625,36 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     });
   }
 
+  /*
+   * Find is a panel the editor owns, so the page asks for it rather than
+   * building one. That is what keeps the matches, the wrap-around and the
+   * "3 of 7" count honest -- they are CodeMirror's state, not a second opinion
+   * held somewhere else.
+   *
+   * Opening focuses the field, which is the only way the chord is useful from
+   * the sidebar or the tab strip: the caret was not in the editor, and a panel
+   * that opens without taking the keyboard is a panel the user has to click.
+   */
+  function openFind(revealReplace = false): void {
+    // The caller's intent decides, on every call. Ctrl+F means find and Ctrl+H
+    // means replace, so a row left over from an earlier replace cannot survive
+    // a Ctrl+F, and nothing about the panel's own bookkeeping can stop Ctrl+H
+    // revealing it. The two chords are one keystroke apart, and a chord whose
+    // effect depends on what the user did ten minutes ago is worse than one
+    // that always does the same thing.
+    view.dispatch({ effects: revealReplaceRow.of(revealReplace) });
+    openSearchPanel(view);
+  }
+
+  function closeFind(): void {
+    view.dispatch({ effects: revealReplaceRow.of(false) });
+    closeSearchPanel(view);
+  }
+
+  function findIsOpen(): boolean {
+    return searchPanelOpen(view.state);
+  }
+
   return {
     getValue: () => view.state.doc.toString(),
     showDocument,
@@ -418,6 +664,9 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     },
     getCursor: () => view.state.selection.main.head,
     applyFormatted,
+    openFind,
+    closeFind,
+    findIsOpen,
     focus: () => view.focus(),
   };
 }
