@@ -509,7 +509,10 @@ const pageTemplate = `<!DOCTYPE html>
       --warning: #c77700;
       /* The one role the spec's purple has: selected text. */
       --selection-soft: rgba(132, 108, 228, 0.22);
-      /* Syntax, read by the editor bundle's highlight style. */
+      /* Syntax, read by the editor bundle's highlight style. The design system
+         names no code palette, so these are roles this app needs and the warm
+         greys above cannot carry: each one has to be tellable from its
+         neighbours at 13px. */
       --syntax-heading: #1f1b14;
       --syntax-link: #a65000;
       --syntax-code: #7a4a12;
@@ -519,6 +522,12 @@ const pageTemplate = `<!DOCTYPE html>
       --syntax-string: #17724f;
       --syntax-number: #a8540a;
       --syntax-type: #2f6f9f;
+      /* A name the grammar distinguishes: a YAML key, a variable, a property,
+         an attribute, a label. Teal, because it is the hue between the two
+         roles either side of it — the string green and the type blue — and
+         neither of those can be reused without saying a key is a value or that
+         a variable is a type. 7.0:1 on the light panel. */
+      --syntax-name: #15616d;
       --overlay: rgba(31, 27, 20, 0.38);
       --focus-ring: rgba(255, 140, 0, 0.45);
       --toast-bg: #fffdf8;
@@ -574,6 +583,12 @@ const pageTemplate = `<!DOCTYPE html>
       --syntax-string: #8fd9ad;
       --syntax-number: #ffc27a;
       --syntax-type: #8fc7ff;
+      /* The same role as the light palette's, and the one colour the two
+         palettes move rather than invert: pastel here, because every other
+         token in this family is, and the dark panel is where a teal step
+         between the string green and the type blue is legible. 11.1:1 on
+         Surface. */
+      --syntax-name: #8fd0d8;
       --overlay: rgba(0, 0, 0, 0.66);
       --focus-ring: rgba(255, 140, 0, 0.45);
       --toast-bg: #161616;

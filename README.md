@@ -553,30 +553,113 @@ pre-paint path here is the real one, not a model of it.
   extension list and asserts the find chords still come first — a property a
   positional keymap could not have.
 - **Fenced code is highlighted by its language** — `src/fence_languages.ts` maps
-  a fence's info string to a grammar for the twelve languages this vault
-  actually uses (`bash`, `yaml`, `python`, `json`, `toml`, `powershell`,
-  `javascript`, `jsx`, `typescript`, `tsx`, `html`, `xml`), plus the aliases a
-  wiki writes (`sh`, `zsh`, `py`, `yml`, `js`, `ts`, `ps1`, `pwsh`). It is a
-  hand-picked subset rather than `@codemirror/language-data`, which measured
-  1,527 KB against this editor's 514 KB, and whose `load()` is a dynamic import
-  that `deno bundle` inlines anyway — a grammar that never runs still costs its
-  bytes. The subset measured **+83 KB minified, +33 KB gzipped**, 5% of the
-  registry, and covers 101 of the vault's 123 named fences.
+  a fence's info string to a grammar for the fourteen languages this vault
+  actually uses (`bash`, `yaml`, `sparql`, `python`, `json`, `toml`,
+  `powershell`, `javascript`, `jsx`, `typescript`, `tsx`, `html`, `xml`,
+  `turtle`), plus the aliases a wiki writes (`sh`, `zsh`, `py`, `yml`, `js`,
+  `ts`, `ps1`, `pwsh`, `rq`, `ttl`). It is a hand-picked subset rather than
+  `@codemirror/language-data`, which measured 1,527 KB against this editor's 514
+  KB, and whose `load()` is a dynamic import that `deno bundle` inlines anyway —
+  a grammar that never runs still costs its bytes. The twelve lezer and ported
+  grammars measured **+83 KB minified, +33 KB gzipped**, 5% of the registry, and
+  the two RDF modes added **+5.7 KB minified, +1.6 KB gzipped** on top of that
+  (`deno bundle --platform browser --minify`, then `gzip -9`). They resolve a
+  grammar for 121 of the vault's 124 named fences.
 
   The lookup reads only the **first word** of the info string, because it is
   free text: a real page carries `` ```ts twoslash title=example ``, where the
   rest belongs to a tool. Anything it cannot resolve returns null — an
-  unlabelled fence, a typo, `sparql`, a half-typed word — and the block renders
-  exactly as it did before, so adding or mistyping an info string stays an
-  ordinary text edit and nothing can throw. `sparql` (18 fences) and `turtle`
-  (1) are the deliberate gap: neither has a maintained CodeMirror 6 grammar, and
-  a third-party one is not a dependency this app takes on for 15% of its fences.
+  unlabelled fence, a typo, a half-typed word — and the block renders exactly as
+  it did before, so adding or mistyping an info string stays an ordinary text
+  edit and nothing can throw. The three fences that still resolve to nothing are
+  the `markdown`-labelled wrappers in `Dataview_Integration.md`, left alone
+  deliberately: they document a syntax rather than hold code a reader copies,
+  and a nested Markdown grammar inside a Markdown fence is its own decision.
+
+  **`sparql` (19 fences) and `turtle` (1) used to be refused here**, on the
+  finding that neither has a maintained CodeMirror 6 grammar and that a
+  third-party one is not a dependency to take on for 15% of the vault's fences.
+  The search was for a _lezer_ grammar, and it missed the package that was
+  already installed: `@codemirror/legacy-modes` — the dependency behind `bash`,
+  `powershell` and `toml` above — carries `mode/sparql` and `mode/turtle`, and
+  `@codemirror/language-data`, the registry rejected on size two paragraphs up,
+  is itself a list of descriptions that load those two out of that package. So
+  the two most wiki-shaped languages in the vault were the ones left flat. They
+  now take the same route as the other modes: 70.3% of the `sparql` fences'
+  visible characters carried a colour under the twelve-tag palette, 95.6% carry
+  one with the palette widened below, against none before either.
+
+  **Resolving a grammar is not the same as colouring the block**, and the second
+  half was the bug behind #35: a block could parse perfectly and still render as
+  prose, because the style named twelve tags and the grammars emit more. `yaml`
+  was the loudest case — 29 fences whose keys are tagged
+  `definition(propertyName)` and whose plain scalars are tagged `content` — but
+  the same hole swallowed every identifier in bash, python, json and toml. Two
+  rules close it: `t.name` for a name the grammar distinguishes (a YAML key, a
+  variable, a property, an attribute, a label, and their `definition(...)` and
+  `special(...)` variants) onto a new `--syntax-name` token, and the two
+  literals a grammar does not quote — a plain scalar and an IRI — onto the
+  string colour. `typeName` still wins over `name` because a tag's inheritance
+  chain is tried most-specific first. What is deliberately left at the body
+  colour is the punctuation family: separators, brackets, operators.
+
+  The second of those two is where the author's own first attempt went wrong,
+  and the file keeps the scar: `content` is the one rule that is **scoped to a
+  grammar** rather than applied to the document. `@lezer/highlight` defines the
+  tag as "plain text in XML or markup documents", and a YAML plain scalar
+  (`givenName: Alice`), an html text node, an xml one and a JSX text node all
+  carry it — but so does every `Paragraph` `@lezer/markdown` produces, so a
+  document-wide rule for it rendered the sentence you are reading in the string
+  colour, which is how it was caught: by looking at a page. The tag cannot tell
+  a scalar from a sentence; the grammar can, and `HighlightStyle.define`'s
+  `scope` is how a style asks — applied once per tree against its top node type,
+  which inside a fence is the fence's grammar and never the document's. So
+  `yamlLanguage`, `htmlLanguage`, `xmlLanguage` and the JavaScript family each
+  get a style for that one rule. Four styles for five grammars, because jsx and
+  tsx are configured copies of `javascriptLanguage` and configuration keeps a
+  language's data, so a scope pointed at one of the four accepts all four —
+  harmless here, since none of the others tags anything `content`.
+
+  `src/syntax_tokens_test.ts` is what holds that. It parses one fixture per
+  language in this table through `fenceLanguage` and fails on any tag no style
+  in `markdownHighlightStyles` reaches _for that tree_ — a grammar cannot be
+  added without a colour for it, a rule cannot be dropped quietly, and neither
+  can a scope be pointed at the wrong grammar or at the document. It cannot see
+  the rendering (a nested language only enters the tree once a view drives the
+  parse context), so the colours themselves are still checked by opening the
+  app: prose in `--text-editor`, a YAML fence's keys in `--syntax-name` and its
+  scalars in `--syntax-string`.
 
   This is what makes the last four syntax tokens live. `keyword`, `string`,
   `number` and `type` were mapped in the highlight style from the start and
   rendered nothing, because the Markdown grammar does not parse fence contents;
   the grammars produce the tags and the existing tokens colour them, with no
   change to the stylesheet.
+- **Page frontmatter is parsed as YAML, not as Markdown** — `documentLanguage`
+  in `src/editor.ts` wraps the Markdown language in `@codemirror/lang-yaml`'s
+  `yamlFrontmatter`, so the `---` block every page opens with is a YAML tree
+  instead of a paragraph and a bullet list: `- schema:TechArticle` was a list
+  item, `type:` part of a sentence, and neither was parsed by anything. What
+  made that visible was pulling on the colour — the only reason the frontmatter
+  looked highlighted at all was the palette rule for `content` that also
+  rendered the prose green, because both were the same tag in the same tree. Now
+  the keys take `--syntax-name`, the scalars `--syntax-string` through the same
+  scoped rule a yaml fence uses, and both `---` lines take `--syntax-marker`.
+
+  The cost, stated rather than discovered: a file that opens with `---` and
+  never closes it is frontmatter as far as this parser is concerned, so the rest
+  of it is read as YAML until a closing line arrives. That is upstream's rule
+  rather than a setting. Measured across the vault: all 87 pages open with
+  `---`, all 87 parse their frontmatter as a yaml tree, and not one document in
+  the vault has an error node anywhere. A new file is created empty
+  (`createFile(path, "")`), so the case is reachable only by typing `---` on the
+  first line of a page and carrying on, and it resolves the moment the second
+  `---` is typed. `src/syntax_tokens_test.ts` parses a whole document through
+  the language the editor actually installs and asserts the four claims
+  together: a yaml tree above, a key tagged as a name, a scalar tagged
+  `content`, and below the closing `---` a Markdown `Paragraph` carrying that
+  same tag that is **not** coloured. Replacing the document language with plain
+  Markdown fails it on the first of those.
 - **Following a link** — `Ctrl`/`Cmd`+click opens a Markdown link, and holding
   the modifier shows where it goes before you commit to it: the vault-relative
   path for a page, the URL for an external link, and plainly that there is

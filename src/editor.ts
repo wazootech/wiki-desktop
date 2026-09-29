@@ -14,11 +14,16 @@
  * to say which document is on screen, not how to restore it.
  */
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { htmlLanguage } from "@codemirror/lang-html";
+import { javascriptLanguage } from "@codemirror/lang-javascript";
 import { markdown } from "@codemirror/lang-markdown";
+import { xmlLanguage } from "@codemirror/lang-xml";
+import { yamlFrontmatter, yamlLanguage } from "@codemirror/lang-yaml";
 import {
   bracketMatching,
   HighlightStyle,
   syntaxHighlighting,
+  type TagStyle,
 } from "@codemirror/language";
 import {
   closeSearchPanel,
@@ -220,15 +225,16 @@ const TRIPLE_CLICK_MS = 700;
 const TRIPLE_CLICK_SLOP = 5;
 
 /**
- * Syntax colours, as CSS custom properties rather than literals.
+ * The highlight style's rules, as data.
  *
- * The editor ships a highlight style tuned for a white background, and those
- * colours are close to unreadable on this app's dark panel — dark green
- * headings on a near-black canvas. Pointing the style at tokens instead means
- * one palette serves both schemes, and a theme change is a token change, the
- * same as everywhere else in the interface.
+ * Exported because the stylesheet and the grammars are two halves of one
+ * decision and nothing could see them together: `markdownHighlightStyle` is a
+ * black box to a test, so "which tags does this colour?" had no answer that
+ * could fail. `src/syntax_tokens_test.ts` reads this list, parses one fixture
+ * per language through `fenceLanguage`, and refuses any tag a grammar emits
+ * that no rule here reaches and the fixture does not deliberately allow.
  */
-const markdownHighlightStyle = HighlightStyle.define([
+export const markdownHighlightRules: readonly TagStyle[] = [
   { tag: t.heading, color: "var(--syntax-heading)", fontWeight: "700" },
   { tag: t.strong, fontWeight: "700" },
   { tag: t.emphasis, fontStyle: "italic" },
@@ -240,13 +246,109 @@ const markdownHighlightStyle = HighlightStyle.define([
     tag: [t.comment, t.quote, t.contentSeparator],
     color: "var(--syntax-muted)",
   },
-  // The fence grammars below produce these; the markdown grammar alone does
-  // not, which is why they sat unused until the subset landed.
+  // The fence grammars produce these; the markdown grammar alone does not,
+  // which is why they sat unused until the subset landed.
   { tag: t.keyword, color: "var(--syntax-keyword)" },
   { tag: [t.string, t.special(t.string)], color: "var(--syntax-string)" },
   { tag: [t.number, t.bool], color: "var(--syntax-number)" },
   { tag: [t.typeName, t.namespace], color: "var(--syntax-type)" },
-]);
+  // `t.name` is the one rule that reaches more than it names: every tag in a
+  // node's set is tried in order of decreasing specificity, so `typeName` is
+  // still typed as a type, while `propertyName`, `attributeName`,
+  // `variableName`, `className` and `labelName` — and the `definition(...)`,
+  // `special(...)` and `local` variants of each — land here. That is the point
+  // rather than a side effect: a YAML key, a bash variable and a JSON property
+  // are one role to a reader who is skimming, and the grammars distinguish
+  // them because a parser needs to, not because a palette should invent a hue
+  // per case.
+  { tag: t.name, color: "var(--syntax-name)" },
+  // A literal a grammar does not quote: `atom` is a blob it treats as opaque —
+  // every IRI in the vault's sparql and turtle fences. Its twin, `content`, is
+  // deliberately not in this list; `fenceTextRules` below is where it went.
+  { tag: t.atom, color: "var(--syntax-string)" },
+];
+
+/**
+ * Syntax colours, as CSS custom properties rather than literals.
+ *
+ * The editor ships a highlight style tuned for a white background, and those
+ * colours are close to unreadable on this app's dark panel — dark green
+ * headings on a near-black canvas. Pointing the style at tokens instead means
+ * one palette serves both schemes, and a theme change is a token change, the
+ * same as everywhere else in the interface.
+ */
+const markdownHighlightStyle = HighlightStyle.define(markdownHighlightRules);
+
+/**
+ * `content`, coloured — in a fence, and nowhere else.
+ *
+ * This is the rule that was written and then taken back. `@lezer/highlight`
+ * defines `content` as "plain text in XML or markup documents", and a yaml
+ * plain scalar (`givenName: Alice`), an html text node and an xml one all carry
+ * it — so giving it the string colour, as the obvious twin of `atom` above, was
+ * the way to make a yaml fence's scalars read as values. But
+ * `@lezer/markdown` tags a `Paragraph` with the same tag, so what it actually
+ * did was put every sentence in the vault in the string colour. Not a rule that
+ * reached a little too far: a sentence and a scalar are *one tag*, and a rule
+ * is a statement about tags.
+ *
+ * A grammar can tell them apart, and `HighlightStyle.define`'s `scope` is how a
+ * style asks it. A scope is applied once per tree, against the tree's top node
+ * type — for a fenced block, the fence's own grammar, never the document's. So
+ * the rule lives in one style per grammar that means data by `content`, and the
+ * document body is not one of them.
+ *
+ * One style per grammar rather than one style with a predicate because `scope`
+ * takes a grammar, which is the thing the fence table already names: the same
+ * `Language` objects, so a grammar is scoped here by identifying it, not by
+ * matching on tags or on node names it happens to use. Before adding a fifth,
+ * note that a grammar whose `content` is a value belongs in `textLanguages`
+ * below — `src/syntax_tokens_test.ts` fails the day one is added and forgotten.
+ */
+export const fenceTextRules: readonly TagStyle[] = [
+  { tag: t.content, color: "var(--syntax-string)" },
+];
+
+/**
+ * The grammars whose `content` is a value rather than the prose itself.
+ *
+ * Four scopes for five grammars, and the gap between those numbers is the one
+ * thing here that had to be measured. The five are `Literal` in yaml, `Text` in
+ * html and xml, and `JSXText` in jsx and tsx — a plain scalar, two flavours of
+ * markup text, and the string a JSX element contains, which is what a reader
+ * looking at the fence is being shown. The last two are configured copies of
+ * `javascriptLanguage`, and configuring a language keeps its language data, so
+ * a scope pointed at one of the four JavaScript grammars accepts all four. That
+ * costs nothing — none of the others tags anything `content` — and it is why
+ * jsx and tsx have no scopes of their own: copies of one scope would state a
+ * distinction `scope` cannot make.
+ *
+ * Markdown is not in this list and cannot be: it means a sentence by the tag.
+ * `src/syntax_tokens_test.ts` checks both halves of that — every scope here
+ * lands on a grammar in the fence table, and none of them lands on the
+ * document.
+ */
+const textLanguages = [
+  yamlLanguage,
+  htmlLanguage,
+  xmlLanguage,
+  javascriptLanguage,
+] as const;
+
+/**
+ * Every highlight style the editor installs, for `src/syntax_tokens_test.ts`.
+ *
+ * The first is document-wide; the rest are the scoped `content` rules above. A
+ * test that read only the first could not tell a tag no rule reaches from one
+ * this file means to reach in a fence — which is the whole difference between
+ * a palette that works and the regression above.
+ */
+export const markdownHighlightStyles: readonly HighlightStyle[] = [
+  markdownHighlightStyle,
+  ...textLanguages.map((language) =>
+    HighlightStyle.define(fenceTextRules, { scope: language })
+  ),
+];
 
 /**
  * The editor's own appearance, in the app's tokens.
@@ -541,6 +643,42 @@ export const editorKeymap: Extension[] = [
   Prec.high(keymap.of(findChords)),
 ];
 
+/**
+ * The document language: Markdown, with the frontmatter a page opens with.
+ *
+ * Every page in this vault opens with a `---` block, and until this existed not
+ * one of them was parsed as anything. `@lezer/markdown` has no frontmatter rule,
+ * so the YAML at the top of a file fell into the Markdown grammar and came out
+ * as a paragraph plus a bullet list — `- schema:TechArticle` was a list item and
+ * `type:` part of a sentence. `yamlFrontmatter` is `@codemirror/lang-yaml`'s own
+ * answer for the pair, and it is the only thing that puts YAML above Markdown
+ * here: it splits the document, mounts `yamlLanguage` on the delimited block,
+ * and hands everything after it to the language passed in.
+ *
+ * What that buys is the vault's most common text rendered as what it is — keys
+ * in `--syntax-name`, scalars in `--syntax-string`, the two `---` lines in
+ * `--syntax-marker`. It also makes the frontmatter the first place the scoped
+ * `content` rule above has to work, since the rule colours a yaml tree and this
+ * is one, at the top of all 87 of the vault's pages.
+ *
+ * What it costs is one shape of document, and it is better stated than
+ * discovered: a file whose first line is `---` and which never closes it is
+ * frontmatter as far as this parser is concerned, so the rest of the file reads
+ * as YAML until a closing line arrives. That is upstream's rule rather than a
+ * setting, and the price of the paragraph above. Measured against the vault, all
+ * 87 pages close theirs, and a new file is created empty (`createFile(path,
+ * "")`), so the case is only reachable by typing `---` on the first line of a
+ * page — and it resolves itself the moment the second `---` is typed.
+ *
+ * Exported so `src/syntax_tokens_test.ts` can parse a real document through it
+ * rather than trusting this comment: the frontmatter has to come back as a yaml
+ * tree and everything after it as Markdown, and the same `content` tag has to
+ * be coloured in the first and not in the second.
+ */
+export const documentLanguage = yamlFrontmatter({
+  content: markdown({ codeLanguages: fenceLanguage }),
+});
+
 export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
   const states = new Map<string, EditorState>();
   let clicks = 0;
@@ -561,8 +699,11 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     dropCursor(),
     bracketMatching(),
     highlightActiveLine(),
-    syntaxHighlighting(markdownHighlightStyle),
-    markdown({ codeLanguages: fenceLanguage }),
+    // One extension per style, because a scoped style is what makes `content`
+    // legal in a fence and illegal in the document. CodeMirror applies the
+    // union of what they emit, so the order here is not a decision.
+    ...markdownHighlightStyles.map((style) => syntaxHighlighting(style)),
+    documentLanguage,
     appTheme,
     // The accessible name and the spellchecker used to live on the textarea.
     EditorView.contentAttributes.of({
