@@ -292,6 +292,11 @@ Deno.test("a shape document's own sh:property list renders as rows", () => {
   assert(property !== undefined, "the list is a field");
   assertEqual(property!.block?.kind, "sequence", "a list");
   assertEqual(property!.block?.children.length, 2, "with two items");
+  assertEqual(
+    property!.scalar,
+    null,
+    "and the field is rows, not one input: a list of maps joined into a line is `[, ]`",
+  );
   const [first] = property!.block!.children;
   assertEqual(first.label, "1", "labelled by position");
   assertEqual(
@@ -308,6 +313,110 @@ Deno.test("a shape document's own sh:property list renders as rows", () => {
     first.fields[0].state,
     "undeclared",
     "and no state, because no shape constrains a nested key",
+  );
+});
+
+Deno.test("a one-line flow list is one input, because it is one token", () => {
+  // The counterpart to the block list above, and the reason a sequence is
+  // never joined into a line: `[a, b]` arrives as a scalar written `flow`, so
+  // the input shows the reader's own text rather than a reconstruction of it.
+  const page = [
+    "---",
+    "type: schema:TechArticle",
+    "headline: Flow",
+    "description: A summary.",
+    "redirect_to: [Old_Page, Older_Page]",
+    "---",
+    "",
+  ].join("\n");
+  const plan = planFrontmatter(
+    page,
+    "wiki/Flow.md",
+    withShapes(),
+    "structured",
+  );
+  const list = field(plan, "redirect_to");
+  assert(list !== undefined, "the key is a field");
+  assertEqual(list!.scalar, "[Old_Page, Older_Page]", "verbatim as written");
+  assertEqual(list!.block, null, "and it has no rows of its own");
+});
+
+Deno.test("a block list of plain strings is rows too", () => {
+  const page = [
+    "---",
+    "type: schema:TechArticle",
+    "headline: Block",
+    "description: A summary.",
+    "keywords:",
+    "  - alpha",
+    "  - beta",
+    "---",
+    "",
+  ].join("\n");
+  const plan = planFrontmatter(
+    page,
+    "wiki/Block.md",
+    withShapes(),
+    "structured",
+  );
+  const list = field(plan, "keywords");
+  assert(list !== undefined, "the key is a field");
+  assertEqual(list!.scalar, null, "not one input pretending to hold two items");
+  assertEqual(list!.block?.kind, "sequence", "but a list of rows");
+  assertEqual(
+    list!.block?.children.map((child) => child.fields[0]?.scalar).join(","),
+    "alpha,beta",
+    "each item keeping its own value",
+  );
+});
+
+Deno.test("editing a list item replaces the item, not the frontmatter", () => {
+  // A list item has no key, so the path that adds a missing key would write a
+  // literal `1: gamma` into the top of the frontmatter. The item is edited
+  // through its own span instead, which is one token on one line.
+  const page = [
+    "---",
+    "type: schema:TechArticle",
+    "headline: Block",
+    "description: A summary.",
+    "keywords:",
+    "  - alpha",
+    "  - beta",
+    "---",
+    "",
+  ].join("\n");
+  const plan = planFrontmatter(
+    page,
+    "wiki/Block.md",
+    withShapes(),
+    "structured",
+  );
+  const list = field(plan, "keywords");
+  const second = list!.block!.children[1].fields[0];
+  const edited = editText(page, editFor(page, second, "gamma"));
+  assertEqual(
+    edited,
+    [
+      "---",
+      "type: schema:TechArticle",
+      "headline: Block",
+      "description: A summary.",
+      "keywords:",
+      "  - alpha",
+      "  - gamma",
+      "---",
+      "",
+    ].join("\n"),
+    "the item's own token, and nothing else",
+  );
+  assertEqual(
+    changedLineCount(page, edited),
+    1,
+    "one line changed",
+  );
+  assert(
+    !/^\s*1:/m.test(edited),
+    "and no key named after the item's label anywhere in the frontmatter",
   );
 });
 

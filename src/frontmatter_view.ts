@@ -32,6 +32,7 @@ import {
   setValueEdit,
   type TextEdit,
   type YamlEntry,
+  type YamlItem,
   type YamlValue,
 } from "./frontmatter.ts";
 import {
@@ -66,6 +67,15 @@ export interface FieldPlan {
   block: BlockPlan | null;
   /** The entry this field edits, or null when the page does not have the key. */
   entry: YamlEntry | null;
+  /**
+   * The list item this field edits, or null when it is not a list item.
+   *
+   * An item has no key, so it cannot be written by inserting one: a field with
+   * neither an entry nor an item is a key the page has not written yet, and an
+   * item is the other thing entirely — a value that exists, under a dash, with
+   * its own span to replace.
+   */
+  item: YamlItem | null;
   /** Every result for this field, each naming the shape that raised it. */
   results: Violation[];
   missing: boolean;
@@ -241,6 +251,7 @@ function planField(
     scalar: scalarOf(field.entry),
     block: blockOf(field.entry?.value ?? null),
     entry: field.entry,
+    item: null,
     results,
     missing: field.entry === null,
   };
@@ -253,14 +264,12 @@ function scalarOf(entry: YamlEntry | null): string | null {
   if (value.kind === "scalar") {
     return value.style === "empty" ? "" : value.text;
   }
-  if (value.kind === "sequence") {
-    // A flow list is one token and fits in one input; a block list is rows.
-    if (value.items.length === 0) return null;
-    const texts = value.items.map((item) =>
-      item.value.kind === "scalar" ? item.value.text : ""
-    );
-    return `[${texts.join(", ")}]`;
-  }
+  // A sequence is always rows, never one input. A flow list is not a sequence
+  // here: a balanced `[a, b]` on one line parses as a scalar whose style is
+  // `flow`, and the case above already returns it, verbatim, as the text the
+  // reader wrote. What reaches here is a block list, and joining its items
+  // into one line would show a list of maps as `[, ]` and invite an edit that
+  // would throw the maps away.
   return null;
 }
 
@@ -292,7 +301,7 @@ function blockOf(value: YamlValue | null): BlockPlan | null {
         entry: null,
         fields: item.value.kind === "mapping"
           ? item.value.entries.map((nested) => planNested(nested))
-          : [planScalarItem(item.value, String(index + 1))],
+          : [planScalarItem(item, String(index + 1))],
       })),
     };
   }
@@ -318,23 +327,25 @@ function planNested(entry: YamlEntry): FieldPlan {
       : null,
     block: entry.value.kind === "scalar" ? null : blockOf(entry.value),
     entry,
+    item: null,
     results: [],
     missing: false,
   };
 }
 
 /** A list item that is a scalar rather than a map. */
-function planScalarItem(value: YamlValue, label: string): FieldPlan {
+function planScalarItem(item: YamlItem, label: string): FieldPlan {
   return {
     key: label,
     iri: null,
     origin: "observed",
     state: "undeclared",
-    scalar: value.kind === "scalar" && value.style !== "empty"
-      ? value.text
+    scalar: item.value.kind === "scalar" && item.value.style !== "empty"
+      ? item.value.text
       : "",
     block: null,
     entry: null,
+    item,
     results: [],
     missing: false,
   };
@@ -356,6 +367,21 @@ export function editFor(
   const { frontmatter } = readFrontmatter(text);
   if (frontmatter === null) return null;
   if (field.entry !== null) return setValueEdit(text, field.entry, value);
+  if (field.item !== null) {
+    // An item is written through the same value path as a key, with the dash
+    // standing in for the key token: what changes is the one token the item
+    // holds, and `- alpha` becomes `- beta` rather than gaining a sibling.
+    return setValueEdit(
+      text,
+      {
+        key: field.key,
+        keySpan: { from: field.item.span.from, to: field.item.span.from },
+        value: field.item.value,
+        span: field.item.span,
+      },
+      value,
+    );
+  }
   return insertEdit(
     endOfMappingAnchor(text, frontmatter.mapping),
     0,

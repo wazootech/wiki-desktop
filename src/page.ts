@@ -1379,8 +1379,8 @@ const pageTemplate = `<!DOCTYPE html>
       color: var(--syntax-name); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     /* One mark per state, and each one is a shape as well as a colour: a filled
-       ring for invalid, a ring for valid, a dashed ring for not checked, and
-       nothing at all for a field no shape declares. */
+       ring for invalid, a ring for valid, a dashed ring for not checked, and a
+       dotted ring for a field no shape declares. */
     .wiki-fm-state { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
     .wiki-fm-state-valid { border: 2px solid var(--success); }
     .wiki-fm-state-invalid { background: var(--danger-marker); border: 2px solid var(--danger-marker); }
@@ -1392,8 +1392,12 @@ const pageTemplate = `<!DOCTYPE html>
       background: var(--panel); color: var(--text-editor);
     }
     .wiki-fm-input:focus { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-    .wiki-fm-field.wiki-fm-invalid .wiki-fm-input { border-color: var(--danger-marker); }
+    .wiki-fm-field.wiki-fm-invalid:not(.wiki-fm-pending) .wiki-fm-input { border-color: var(--danger-marker); }
+    /* Pinned to the last column rather than left to flow: a field whose value
+       is rows has no input, and without this its Remove would land in the
+       input column and float in the middle of an empty row. */
     .wiki-fm-remove {
+      grid-column: 3;
       font: inherit; font-size: 10px; padding: 1px 7px; cursor: pointer;
       border: 1px solid transparent; border-radius: 4px;
       background: none; color: var(--muted);
