@@ -99,7 +99,8 @@ export interface BlockChild {
 export interface GroupPlan {
   id: FieldOrigin;
   label: string;
-  hint: string;
+  /** A line under the label, or null when the label says it all. */
+  hint: string | null;
   fields: FieldPlan[];
 }
 
@@ -508,12 +509,14 @@ export class FrontmatterPanel {
   private renderCollapsed(plan: FrontmatterPlan): HTMLElement {
     const bar = el("div", "wiki-frontmatter-bar");
     // The reason alone reads as a fragment once the panel is one line tall —
-    // "you asked for raw" wants its subject — so the label is kept.
+    // "you asked for raw" wants its subject — so the label is kept, and the
+    // reason is the short one, because this bar has a toggle to sit beside and
+    // no room for a sentence that says the same thing at greater length.
     bar.append(
       el(
         "span",
         "wiki-frontmatter-bar-text",
-        `Raw frontmatter — ${reasonText(plan.reason)}.`,
+        `Raw frontmatter — ${reasonBarText(plan.reason)}.`,
       ),
       this.renderToggle(plan),
     );
@@ -552,27 +555,31 @@ export class FrontmatterPanel {
         plan.classHeading ?? "none",
       ),
     );
-    const where = plan.classes
-      .map((declared) =>
-        declared.shape === null
-          ? `${declared.term} — no shape targets this class`
-          : `${declared.term} — ${
-            declared.shape.label ?? declared.shape.sourcePath
-          }`
-      )
-      .join(" · ");
+    /*
+     * Which shape speaks for this class. It used to name the class a second
+     * time beside the answer, and then carry a third line saying nothing had
+     * been checked; the reader wants one row here and the fields below it, not
+     * a paragraph about the fields below it.
+     */
+    const parts = plan.classes.map((declared) =>
+      declared.shape === null
+        ? "no shape targets this class"
+        : (declared.shape.label ?? declared.shape.sourcePath)
+    );
+    const where = parts.length === 1 ? parts[0] : parts.join(" · ");
     if (where !== "") {
       heading.append(el("p", "wiki-frontmatter-class-where", where));
     }
-    if (plan.unconstrained) {
-      heading.append(
-        note(
-          "No shape constrains this page, so nothing here has been checked.",
-        ),
-      );
-    }
     header.append(heading, this.renderToggle(plan));
-    return header;
+    // A status rather than a fact about the class, so it gets its own line: it
+    // is the sentence a reader needs before reading any row below, and folding
+    // it into the class line left it wrapping around a single orphan word.
+    const top = el("div", "wiki-frontmatter-top");
+    top.append(header);
+    if (plan.unconstrained) {
+      top.append(note("Nothing here has been checked."));
+    }
+    return top;
   }
 
   /**
@@ -589,10 +596,12 @@ export class FrontmatterPanel {
    */
   private renderGroup(group: GroupPlan, depth: number): HTMLElement {
     const section = el("section", `wiki-fm-group wiki-fm-depth-${depth}`);
-    const hint = el("p", "wiki-fm-group-hint", group.hint);
+    const hint = group.hint === null
+      ? null
+      : el("p", "wiki-fm-group-hint", group.hint);
     if (group.id !== "suggested") {
       section.append(el("h3", "wiki-fm-group-label", group.label));
-      section.append(hint);
+      if (hint !== null) section.append(hint);
       for (const field of group.fields) {
         section.append(this.renderField(field, depth));
       }
@@ -603,7 +612,8 @@ export class FrontmatterPanel {
     const summary = document.createElement("summary");
     summary.className = "wiki-fm-group-label";
     summary.textContent = `${group.label} (${group.fields.length})`;
-    details.append(summary, hint);
+    details.append(summary);
+    if (hint !== null) details.append(hint);
     for (const field of group.fields) {
       details.append(this.renderField(field, depth));
     }
@@ -720,6 +730,24 @@ const STATE_LABELS: Record<string, string> = {
   unknown: "Not checked",
   undeclared: "No shape declares this",
 };
+
+/** Why structured is not on, short enough to sit beside a toggle. */
+function reasonBarText(reason: FrontmatterPlan["reason"]): string {
+  switch (reason) {
+    case "absent":
+      return "this page has no frontmatter block";
+    case "unterminated":
+      return "the frontmatter block is never closed";
+    case "no-shape":
+      return "no shape targets this class";
+    case "no-vocabulary":
+      return "the vault's wiki.yml has not been read yet";
+    case "off":
+      return "you asked for raw";
+    default:
+      return "structured view is off";
+  }
+}
 
 /** Why structured is not on, in the words of the thing that decided it. */
 function reasonText(reason: FrontmatterPlan["reason"]): string {

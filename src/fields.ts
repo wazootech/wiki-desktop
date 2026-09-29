@@ -90,7 +90,8 @@ export interface FieldGroup {
   /** What the group is, in the words of the thing it is describing. */
   label: string;
   /** Why it is here, for the line under the heading. */
-  hint: string;
+  /** A line under the label, or null when the label says it all. */
+  hint: string | null;
   fields: FrontmatterField[];
 }
 
@@ -291,10 +292,14 @@ export function buildFieldModel(
     groups.push({
       id: "declared",
       label: "Required by this page's shape",
+      // Only when it says something the heading above does not. With one shape
+      // the header already names it, and a second line reading "Declared by
+      // TechArticle Shape" directly under a header that says the same is the
+      // kind of restatement that makes a panel hard to scan. With several, the
+      // count is the part a reader cannot get anywhere else.
       hint: applicable.length > 1
         ? `${applicable.length} shapes apply to this page, so a field can carry more than one result.`
-        : "Declared by " + (applicable[0]?.label ?? applicable[0]?.sourcePath ??
-          "a shape"),
+        : null,
       fields: declaredFields,
     });
   }
@@ -302,7 +307,7 @@ export function buildFieldModel(
     groups.push({
       id: "observed",
       label: "On this page",
-      hint: "Carried by the page and constrained by no shape.",
+      hint: null,
       fields: observed,
     });
   }

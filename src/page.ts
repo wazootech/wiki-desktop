@@ -1339,24 +1339,34 @@ const pageTemplate = `<!DOCTYPE html>
        to survive is the reason the panel stood down and the way back. */
     .wiki-frontmatter-collapsed { padding: 5px 14px; max-height: none; }
     .wiki-frontmatter-bar {
-      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: nowrap;
     }
     .wiki-frontmatter-bar-text { color: var(--muted); }
+    /* Never wraps, so the toggle cannot be pushed onto a line of its own: the
+       class block takes the slack and its own text wraps inside it instead. */
     .wiki-frontmatter-head {
       display: flex; align-items: flex-start; justify-content: space-between;
-      gap: 16px; flex-wrap: wrap;
+      gap: 16px; flex-wrap: nowrap;
     }
-    .wiki-frontmatter-class { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .wiki-frontmatter-class {
+      display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+      flex: 1 1 auto; min-width: 0;
+    }
     .wiki-frontmatter-class-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px; }
     .wiki-frontmatter-class-value { color: var(--syntax-name); font-weight: 700; }
-    .wiki-frontmatter-class-where { margin: 2px 0 0; color: var(--muted); width: 100%; }
-    .wiki-frontmatter-modes { display: flex; gap: 4px; }
+    /* Beside the class rather than under it. The shape that speaks for a class
+       is a fact about that class, and a reader comparing two pages wants the
+       two on one line — which is also what leaves the fields higher up. */
+    .wiki-frontmatter-class-where { margin: 0; color: var(--muted); }
+    .wiki-frontmatter-top .wiki-fm-note { margin: 3px 0 0; }
+    .wiki-frontmatter-modes { display: flex; gap: 4px; flex: 0 0 auto; }
     .wiki-frontmatter-mode {
       font: inherit; padding: 2px 9px; border-radius: 999px; cursor: pointer;
       border: 1px solid var(--line); background: var(--panel); color: var(--text-soft);
     }
     .wiki-frontmatter-mode.is-on { border-color: var(--brand); color: var(--brand-text); font-weight: 700; }
-    .wiki-fm-group { margin: 10px 0 0; }
+    .wiki-fm-group { margin: 12px 0 0; }
     .wiki-fm-group-label {
       margin: 0; font-size: 10px; text-transform: uppercase;
       letter-spacing: 0.08em; color: var(--text-soft);
@@ -1378,22 +1388,38 @@ const pageTemplate = `<!DOCTYPE html>
     }
     .wiki-fm-details[open] > summary::before { transform: rotate(90deg); }
     .wiki-fm-details[open] > .wiki-fm-group-hint { margin-bottom: 6px; }
+    /* The third column is a fixed width rather than content-sized, because a
+       field the page does not have yet has no Remove button, and an auto
+       column sizes to what is in it: every input was a different width
+       depending on whether its row happened to carry a button. A fixed column
+       costs 60px of blank on the rows without one and makes the values line up
+       down the panel. */
     .wiki-fm-field {
-      display: grid; grid-template-columns: minmax(140px, 210px) 1fr auto;
+      display: grid; grid-template-columns: minmax(130px, 180px) 1fr 60px;
       align-items: center; gap: 8px; padding: 3px 0;
     }
-    .wiki-fm-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    /* Two columns rather than a flow, so the marks line up down the panel.
+       Letting the mark follow the key put it a different distance along every
+       row, and a ragged column of nine identical dots is noise. */
+    .wiki-fm-label {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 6px; min-width: 0;
+    }
     .wiki-fm-key {
       color: var(--syntax-name); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     /* One mark per state, and each one is a shape as well as a colour: a filled
-       ring for invalid, a ring for valid, a dashed ring for not checked, and a
-       dotted ring for a field no shape declares. */
+       ring for invalid, a ring for valid, a dashed ring for not checked, and
+       nothing at all for a field no shape declares. That last one is the state
+       a page full of a shape's own machinery is entirely made of, so a mark on
+       every row says nothing on every row. The element stays, and keeps its
+       accessible name, because "no shape declares this" is worth hearing even
+       when it is not worth seeing. */
     .wiki-fm-state { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
     .wiki-fm-state-valid { border: 2px solid var(--success); }
     .wiki-fm-state-invalid { background: var(--danger-marker); border: 2px solid var(--danger-marker); }
     .wiki-fm-state-unknown { border: 2px dashed var(--text-faint); }
-    .wiki-fm-state-undeclared { border: 2px dotted var(--line-strong); }
+    .wiki-fm-state-undeclared { border-color: transparent; }
     .wiki-fm-input {
       font: inherit; width: 100%; min-width: 0; padding: 3px 7px;
       border: 1px solid var(--line); border-radius: 4px;
@@ -1403,13 +1429,19 @@ const pageTemplate = `<!DOCTYPE html>
     .wiki-fm-field.wiki-fm-invalid:not(.wiki-fm-pending) .wiki-fm-input { border-color: var(--danger-marker); }
     /* Pinned to the last column rather than left to flow: a field whose value
        is rows has no input, and without this its Remove would land in the
-       input column and float in the middle of an empty row. */
+       input column and float in the middle of an empty row. Faint until the row
+       is under the pointer or holds the focus: on a page with thirty fields
+       that is thirty copies of the word "Remove" competing with the values, and
+       removing a key is not something a reader does while reading. */
     .wiki-fm-remove {
       grid-column: 3;
       font: inherit; font-size: 10px; padding: 1px 7px; cursor: pointer;
       border: 1px solid transparent; border-radius: 4px;
       background: none; color: var(--muted);
+      opacity: 0.32; transition: opacity 90ms ease-out;
     }
+    .wiki-fm-field:hover .wiki-fm-remove,
+    .wiki-fm-field:focus-within .wiki-fm-remove { opacity: 1; }
     .wiki-fm-remove:hover { border-color: var(--line); color: var(--danger-text); }
     .wiki-fm-message {
       grid-column: 1 / -1; margin: 2px 0 4px; display: flex; flex-wrap: wrap;
