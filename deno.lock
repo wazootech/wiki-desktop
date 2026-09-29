@@ -12,6 +12,7 @@
     "npm:@codemirror/lang-yaml@^6.1.3": "6.1.3",
     "npm:@codemirror/language@6": "6.12.4",
     "npm:@codemirror/legacy-modes@^6.5.4": "6.5.4",
+    "npm:@codemirror/search@6": "6.7.2",
     "npm:@codemirror/state@6": "6.7.5",
     "npm:@codemirror/view@6": "6.43.12",
     "npm:@lezer/common@^1.5.3": "1.5.3",
@@ -154,6 +155,14 @@
         "crelt"
       ]
     },
+    "@codemirror/search@6.7.2": {
+      "integrity": "sha512-gUYkYhT2+n/+VGZ+8EzE5WFkYZUZYm1VOKDudIsNqh42uRVQJ0a6Yss9sdKT3MeOYfuL1N6AZA57oza0Oyr0LA==",
+      "dependencies": [
+        "@codemirror/state",
+        "@codemirror/view",
+        "crelt"
+      ]
+    },
     "@codemirror/state@6.7.5": {
       "integrity": "sha512-QjLbZmY1Au3JiRrDVYFLRD0BZ3SOKS9pR3yjIkd7u27YY8TFD9/Q9fhPnLV5l1mHFSo3hHU/N31vpwEJOx4owQ==",
       "dependencies": [
@@ -273,6 +282,7 @@
       "npm:@codemirror/lang-yaml@^6.1.3",
       "npm:@codemirror/language@6",
       "npm:@codemirror/legacy-modes@^6.5.4",
+      "npm:@codemirror/search@6",
       "npm:@codemirror/state@6",
       "npm:@codemirror/view@6",
       "npm:@lezer/common@^1.5.3",
