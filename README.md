@@ -851,24 +851,24 @@ pre-paint path here is the real one, not a model of it.
   constrained by a shape is one line above its fields: the class, the shape that
   speaks for it, and the toggle. A page no shape constrains adds one short line
   saying nothing here has been checked, because that is the sentence a reader
-  needs *before* reading any row below it. Everything else that repeated a
+  needs _before_ reading any row below it. Everything else that repeated a
   heading was removed rather than restyled: the shape name was being printed
   twice, once in the header and once as the first group's hint, and the second
   group's hint said the same thing about the class. What survives is a hint only
   where it says something the heading cannot — which shape, how many, and why
-  the app's own layout keys are in a group of their own.
-  A field no shape declares gets **no mark at all**, rather than a distinct
-  fourth one: it is the state a shape document is *entirely* made of, so a mark
-  on every row says nothing on every row, and a ragged column of nine identical
-  dots down the panel is noise. Valid and invalid keep their marks, in a fixed
-  column rather than trailing each key at its own width, because a column you can
-  scan is the point of having a mark. `Remove` is faint until its row is hovered
-  or holds the focus, because on a page of thirty fields that is thirty copies
-  of the word "Remove" competing with the values, and removing a key is not
-  something a reader does while reading. The third column is a fixed 60px for
-  the same reason a mark needs a column: a field the page does not have yet has
-  no button in it, and a content-sized column made every input a different width
-  depending on whether its row happened to carry one.
+  the app's own layout keys are in a group of their own. A field no shape
+  declares gets **no mark at all**, rather than a distinct fourth one: it is the
+  state a shape document is _entirely_ made of, so a mark on every row says
+  nothing on every row, and a ragged column of nine identical dots down the
+  panel is noise. Valid and invalid keep their marks, in a fixed column rather
+  than trailing each key at its own width, because a column you can scan is the
+  point of having a mark. `Remove` is faint until its row is hovered or holds
+  the focus, because on a page of thirty fields that is thirty copies of the
+  word "Remove" competing with the values, and removing a key is not something a
+  reader does while reading. The third column is a fixed 60px for the same
+  reason a mark needs a column: a field the page does not have yet has no button
+  in it, and a content-sized column made every input a different width depending
+  on whether its row happened to carry one.
 - **The panel and the editor never show the same frontmatter twice** — they are
   two views of one buffer, so in the structured mode the document's opening
   lines say what the form above already says. Those lines are folded to a single
