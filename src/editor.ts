@@ -44,6 +44,8 @@ import {
 import { tags as t } from "@lezer/highlight";
 
 import { fenceLanguage } from "./fence_languages.ts";
+import { type FrontmatterMode, FrontmatterPanel } from "./frontmatter_view.ts";
+import type { VaultVocabularyPayload } from "./vocabulary.ts";
 import {
   asksToFollowLink,
   describeLinkTarget,
@@ -130,6 +132,25 @@ export interface WikiEditorHandle {
   closeFind(): void;
   /** Whether the find panel is up, so a caller can avoid re-opening it. */
   findIsOpen(): boolean;
+  /**
+   * Give the frontmatter panel what the vault declares, and redraw it.
+   *
+   * The page asks rather than the panel reaching for it, for the same reason
+   * every other operation here is a call: the panel is in the webview and the
+   * vault is in the Deno process, and nothing in the editor may read a file.
+   */
+  setVocabulary(vocabulary: VaultVocabularyPayload | null): void;
+  /**
+   * Set which view the frontmatter is shown in, and redraw.
+   *
+   * `auto` defers to what the vault declares. The mode is the reader's stored
+   * preference rather than a per-document one, so a page always opens in the
+   * same view as the last one and a malformed frontmatter can never be a mode
+   * a save is blocked by.
+   */
+  setFrontmatterMode(mode: FrontmatterMode): void;
+  /** The mode the reader chose, which is what the config stores. */
+  frontmatterMode(): FrontmatterMode;
   focus(): void;
 }
 
@@ -144,6 +165,14 @@ export interface WikiEditorOptions {
    * to do with the target, because it knows the vault and the folder browser.
    */
   onFollowLink?: (target: LinkTarget) => void;
+  /**
+   * The reader switched the frontmatter view, so the choice is worth keeping.
+   *
+   * Routed out to the page rather than stored here because the editor holds no
+   * settings: it is the one module in the app that runs in the webview, and the
+   * stored preference belongs with the rest of them in `src/config.ts`.
+   */
+  onFrontmatterMode?: (mode: FrontmatterMode) => void;
 }
 
 /** Two spaces, matching what the plain-textarea editor did on Tab. */
@@ -854,6 +883,9 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
         states.set(key, update.state);
         options.onChange();
       }
+      // Only on a change of text, never on a cursor move: the form's states are
+      // derived from the document, so a selection cannot alter any of them.
+      if (update.docChanged) queuePanelRefresh();
     }),
   ];
 
@@ -863,10 +895,68 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     if (!next) view.dispatch({ effects: closeHoverTooltips });
   }
 
+  /*
+   * The frontmatter panel is docked above the document, and it is a **view**
+   * over the same buffer rather than a second document: every value it shows
+   * came from a span in this text, and every value it writes is one dispatch
+   * against it. That is what keeps criterion 1 true for a page somebody edited
+   * through the form, and it is why the panel can be redrawn on every change
+   * without any risk of the two drifting — there is only one text.
+   */
+  const panelHost = document.createElement("div");
+  panelHost.className = "wiki-frontmatter-host";
+  options.container.append(panelHost);
+  // The document gets a wrapper of the app's own rather than being a direct
+  // child of the host, so the column layout can say what the editor's share is
+  // without a rule naming one of CodeMirror's classes — the page's stylesheet
+  // has no business styling those, and `src/page_test.ts` refuses it.
+  const editorBody = document.createElement("div");
+  editorBody.className = "wiki-editor-body";
+  options.container.append(editorBody);
+  let refreshQueued = false;
+  const panel = new FrontmatterPanel(
+    document.createElement("div"),
+    {
+      text: () => view.state.doc.toString(),
+      path: () => key,
+      apply: (edit) => {
+        if (!edit.changed) return;
+        view.dispatch({
+          changes: { from: edit.from, to: edit.to, insert: edit.insert },
+          // Its own event, so one write from the form is one step in the undo
+          // history rather than one step per character of the value, and so the
+          // typing that surrounds it is not folded into it.
+          userEvent: "frontmatter.edit",
+        });
+      },
+    },
+    {
+      onModeChange: (mode) => options.onFrontmatterMode?.(mode),
+      onDirty: () => options.onChange(),
+    },
+  );
+  panelHost.append(panel.root);
+
   const view = new EditorView({
-    parent: options.container,
+    parent: editorBody,
     state: EditorState.create({ doc: "", extensions }),
   });
+
+  /*
+   * Redraw the panel after the editor has settled rather than on every
+   * transaction. A keystroke produces a transaction, and so does every selection
+   * move, and re-planning the form on a cursor nudge is work whose result
+   * nothing can see; one frame of coalescing costs nothing and keeps a fast
+   * typist from paying for a form that is redrawn between two characters.
+   */
+  function queuePanelRefresh() {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    queueMicrotask(() => {
+      refreshQueued = false;
+      panel.render();
+    });
+  }
 
   function showDocument(nextKey: string, text: string): void {
     scrollTops.set(key, view.scrollDOM.scrollTop);
@@ -882,6 +972,9 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     }
     view.setState(state);
     view.scrollDOM.scrollTop = scrollTops.get(key) ?? 0;
+    // A different document has a different class and different fields, so the
+    // form is re-derived rather than carried across the switch.
+    panel.render();
   }
 
   function applyFormatted(text: string): void {
@@ -957,6 +1050,9 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     openFind,
     closeFind,
     findIsOpen,
+    setVocabulary: (vocabulary) => panel.setVocabulary(vocabulary),
+    setFrontmatterMode: (mode) => panel.setMode(mode),
+    frontmatterMode: () => panel.chosenMode(),
     focus: () => view.focus(),
   };
 }

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 import {
+  documentIri,
   isExcludedVaultPath,
   parseWikiConfig,
   readWikiConfig,
@@ -46,6 +47,10 @@ graph:
   content_predicate: schema:articleBody
   context:
     "@vocab": https://schema.org/
+    schema: https://schema.org/
+    wiki: https://wazootech.github.io/wiki/
+    sh: http://www.w3.org/ns/shacl#
+  base_iri: https://wazootech.github.io/wiki/
 `;
 
 Deno.test("wiki.yml says which files are pages and which are static", () => {
@@ -77,6 +82,8 @@ Deno.test("scope follows the config, and everything else is other", () => {
     inputs: ["wiki"],
     assets: ["assets"],
     excludes: [],
+    context: {},
+    baseIri: null,
     source: "wiki.yml",
   };
   assertEqual(scopeOf("wiki/CSS.md", config), "input", "a page");
@@ -100,6 +107,8 @@ Deno.test("an empty config leaves every file alone", () => {
     inputs: [],
     assets: [],
     excludes: [],
+    context: {},
+    baseIri: null,
     source: null,
   };
   assertEqual(scopeOf("wiki/CSS.md", empty), "other", "no config, no pages");
@@ -224,4 +233,78 @@ Deno.test("a vault with a broken config lists its files as it always did", async
   } finally {
     await Deno.remove(root, { recursive: true }).catch(() => {});
   }
+});
+
+Deno.test("the prefix map is read, because a bare key is not a property yet", () => {
+  // The one section this module used to skip, for the one reason that matters:
+  // a page writes `softwareVersion` and a shape writes
+  // `sh:path: schema:softwareVersion`, and nothing else connects them.
+  const config = parseWikiConfig(VAULT_CONFIG, "yaml");
+  assert(config !== null, "the vault's config parses");
+  assertEqual(
+    config.context["@vocab"],
+    "https://schema.org/",
+    "the vocab a bare key resolves through",
+  );
+  assertEqual(
+    config.context.sh,
+    "http://www.w3.org/ns/shacl#",
+    "and the prefixes the shapes use",
+  );
+  assertEqual(
+    config.baseIri,
+    "https://wazootech.github.io/wiki/",
+    "and where a document's IRI starts",
+  );
+});
+
+Deno.test("a context entry that is not a string is not a prefix", () => {
+  const config = parseWikiConfig(
+    'graph:\n  context:\n    good: "https://example.org/"\n    bad: 7\n    empty: ""\n',
+    "yaml",
+  );
+  assert(config !== null, "parses");
+  assertEqual(
+    Object.keys(config.context).join(","),
+    "good",
+    "only the string that is not empty is a prefix",
+  );
+});
+
+Deno.test("a page's IRI is the graph's IRI for it", () => {
+  const config = parseWikiConfig(VAULT_CONFIG, "yaml");
+  assert(config !== null, "parses");
+  const withBase = { ...config, baseIri: "https://example.org/docs/" };
+  // `_file_slug` in src/wiki/graph.py: the path under the input directory,
+  // without its extension, against a base that defaults to the wiki prefix.
+  assertEqual(
+    documentIri("wiki/CSS.md", withBase),
+    "https://example.org/docs/CSS",
+    "a page under the input directory",
+  );
+  assertEqual(
+    documentIri("README.md", withBase),
+    "https://example.org/docs/README",
+    "and one that is not, by its own name",
+  );
+  assertEqual(
+    documentIri("wiki/deep/Sub/Page.md", config),
+    "https://wazootech.github.io/wiki/deep/Sub/Page",
+    "a nested page",
+  );
+  assertEqual(
+    documentIri("wiki/CSS.md", { ...config, baseIri: null }),
+    "https://wazootech.github.io/wiki/CSS",
+    "a config with no base_iri falls back to the wiki prefix",
+  );
+  assertEqual(
+    documentIri("wiki/CSS.md", { ...config, inputs: [] }),
+    "https://wazootech.github.io/wiki/wiki/CSS",
+    "a vault with no input directory keeps the whole path",
+  );
+  assertEqual(
+    documentIri("wiki/CSS.md", { ...config, context: {}, baseIri: null }),
+    null,
+    "a context with no wiki prefix and no base gives a page no IRI",
+  );
 });
