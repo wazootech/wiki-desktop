@@ -1,15 +1,19 @@
 import { join } from "node:path";
 
 import {
+  activityByDay,
   browseDirectory,
   createVaultFile,
   detectNewlineStyle,
   isInsideRoot,
   listVaultFiles,
+  MAX_SEARCH_MATCHES,
   normalizeVaultPath,
   readVaultFile,
+  searchVaultFiles,
   toEditorText,
   VaultError,
+  VaultFile,
   writeVaultFile,
 } from "./vault.ts";
 
@@ -327,3 +331,258 @@ Deno.test("browseDirectory lists folders and spots a wiki", async () => {
     assert(withoutWiki.shortcuts.length > 0, "shortcuts are offered");
   });
 });
+
+Deno.test("the listing says when each file was written", async () => {
+  // Recently changed is a sort of the listing, and the only reason it can be
+  // is that the walk records the time. A vault where every entry reads the same
+  // instant would put the view's own files in an arbitrary order, so the check
+  // is that the two files really do come back in the order they were written.
+  await withTempVault(async (root) => {
+    await Deno.writeTextFile(join(root, "old.md"), "old\n");
+    // A filesystem clock is coarse and can report a tick the wall clock has not
+    // reached, so the band is generous and the ordering is what is being
+    // checked. Two writes in the same millisecond would be indistinguishable,
+    // so a gap makes the order a fact rather than a hope.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await Deno.writeTextFile(join(root, "new.md"), "new\n");
+    const now = Date.now();
+
+    const files = await listVaultFiles(root);
+    const times = files.map((file) => file.modified);
+    assert(
+      times.every((stamp) => stamp > 0 && Math.abs(stamp - now) < 60_000),
+      `every modification time is a real, recent one: ${times.join(", ")}`,
+    );
+    const byAge = files.slice().sort((left, right) =>
+      right.modified - left.modified
+    );
+    assertEqual(
+      byAge.map((file) => file.name).join(", "),
+      "new.md, old.md",
+      "newest first",
+    );
+  });
+});
+
+Deno.test("searchVaultFiles finds a word in a page and says which line", async () => {
+  await withTempVault(async (root) => {
+    await Deno.writeTextFile(
+      join(root, "RDF.md"),
+      "# RDF\n\nA graph is a set of triples.\n\nNothing here mentions a turtle.\n",
+    );
+    await Deno.writeTextFile(join(root, "Turtle.md"), "Turtle is shorter.\n");
+
+    const hits = await searchVaultFiles(root, "turtle");
+    assertEqual(
+      hits.map((hit) => hit.path).join(", "),
+      "RDF.md, Turtle.md",
+      "every file with a match, in the listing's own order",
+    );
+    assertEqual(
+      hits[0].matches.map((match) => match.line).join(", "),
+      "5",
+      "a 1-based line, the one the editor counts",
+    );
+    assertEqual(
+      hits[0].matches[0].text,
+      "Nothing here mentions a turtle.",
+      "the line itself comes back, trimmed",
+    );
+    assert(!hits[0].truncated, "and nothing is claimed to be missing");
+
+    assertEqual(
+      hits[1].matches.length,
+      1,
+      "the second file has one match",
+    );
+    assertEqual(
+      (await searchVaultFiles(root, "  turtle  "))[0].path,
+      "RDF.md",
+      "a query's surrounding spaces are not part of the search",
+    );
+    assertEqual(
+      (await searchVaultFiles(root, "TURTLE"))[0].path,
+      "RDF.md",
+      "matching ignores case, like the file list's own filter",
+    );
+  });
+});
+
+Deno.test("searchVaultFiles reports the line numbers the editor will show", async () => {
+  // The result is a line number and a click puts the caret on it, so a CRLF
+  // file that counted its own \r would be off by one line for the second line
+  // onward — the exact failure a page saved on Windows would hit.
+  await withTempVault(async (root) => {
+    await Deno.writeTextFile(
+      join(root, "windows.md"),
+      "# Title\r\n\r\nThe needle is here.\r\n",
+    );
+    const [hit] = await searchVaultFiles(root, "needle");
+    assertEqual(
+      hit.matches.map((match) => match.line).join(", "),
+      "3",
+      "the line is the one the editor counts",
+    );
+  });
+});
+
+Deno.test("searchVaultFiles searches text and skips what is not", async () => {
+  await withTempVault(async (root) => {
+    // A NUL byte in the opening bytes is what every other tool reads as binary,
+    // and a picture in a wiki is the case that would otherwise fill the results
+    // with lines of mojibake.
+    await Deno.writeFile(
+      join(root, "logo.png"),
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    await Deno.writeTextFile(join(root, "config.yml"), "needle: true\n");
+    // Bigger than the editor will open, so there is no way to show a match in
+    // it either.
+    await Deno.writeTextFile(
+      join(root, "huge.txt"),
+      "needle\n".repeat(2 * 1024 * 1024 / 7 + 1),
+    );
+    await Deno.writeTextFile(join(root, "page.md"), "nothing to see\n");
+
+    const hits = await searchVaultFiles(root, "needle");
+    assertEqual(
+      hits.map((hit) => hit.path).join(", "),
+      "config.yml",
+      "a vault's own config is text and is searched; its pictures are not",
+    );
+  });
+});
+
+Deno.test("searchVaultFiles says when it stopped short", async () => {
+  await withTempVault(async (root) => {
+    const body = "needle\n".repeat(MAX_SEARCH_MATCHES + 5);
+    await Deno.writeTextFile(join(root, "many.md"), body);
+    await Deno.writeTextFile(join(root, "two.md"), "needle\n");
+    await Deno.writeTextFile(join(root, "one.md"), "needle\n");
+
+    const [many] = await searchVaultFiles(root, "needle");
+    assertEqual(
+      many.matches.length,
+      MAX_SEARCH_MATCHES,
+      "a file reports at most the cap",
+    );
+    assert(
+      many.truncated,
+      "and says so, so the view can say 'more' rather than imply otherwise",
+    );
+
+    // A file whose matches exactly fill the cap is not truncated: the flag
+    // would otherwise be a lie for every file but the one that overflowed.
+    const exactly = await searchVaultFiles(root, "needle", {
+      maxMatchesPerFile: 1,
+    });
+    assertEqual(
+      exactly.filter((hit) => hit.truncated).map((hit) => hit.path).join(", "),
+      "many.md",
+      "only the file that actually has more matches says so",
+    );
+
+    const capped = await searchVaultFiles(root, "needle", { maxFiles: 1 });
+    assertEqual(
+      capped.length,
+      1,
+      "the file cap is a cap, not a suggestion",
+    );
+  });
+});
+
+Deno.test("a search over a vault that is not there is the caller's problem", async () => {
+  // The binding guards the root, so this is the shape of a vault that was
+  // closed between the listing and the scan rather than a page's mistake.
+  await withTempVault(async (root) => {
+    let thrown: unknown = null;
+    try {
+      await searchVaultFiles(join(root, "gone"), "needle");
+    } catch (error) {
+      thrown = error;
+    }
+    assert(
+      thrown instanceof VaultError,
+      "a missing vault fails as a vault error",
+    );
+  });
+});
+
+Deno.test("activityByDay files the listing under the day each file was written", () => {
+  // The panel's second pane is a history, and the only history a wiki reader
+  // has is when each file was last written: a day is a bucket, not a commit.
+  const at = (day: number, hour: number, minute = 0) =>
+    new Date(2026, 8, day, hour, minute).getTime();
+  const days = activityByDay([
+    file("oldest.md", at(10, 9)),
+    file("today-second.md", at(12, 16)),
+    file("yesterday-night.md", at(11, 23, 59)),
+    file("today-first.md", at(12, 8)),
+  ]);
+
+  assertEqual(
+    days.map((day) => day.files.map((entry) => entry.path)).flat().join(", "),
+    "today-second.md, today-first.md, yesterday-night.md, oldest.md",
+    "the newest write leads, days and files within them alike",
+  );
+  assertEqual(
+    days.length,
+    3,
+    "three writes on three days are three days of history",
+  );
+  assertEqual(
+    new Date(days[0].day).getHours(),
+    0,
+    "a day is bucketed at its local midnight, so Today is a whole day",
+  );
+});
+
+Deno.test("activityByDay keeps a file with no date out of the history", () => {
+  // A filesystem that will not say when is still a file in the listing, but it
+  // has no day to file it under, and inventing one would put it on a day it
+  // was never written.
+  const days = activityByDay([
+    { ...file("undated.md", 0), modified: 0 },
+    file("dated.md", new Date(2026, 8, 12, 10).getTime()),
+  ]);
+
+  assertEqual(
+    days.flatMap((day) => day.files.map((entry) => entry.path)).join(", "),
+    "dated.md",
+    "only the file that knows its own day is in the history",
+  );
+});
+
+Deno.test("activityByDay over an empty listing is an empty history", () => {
+  assertEqual(activityByDay([]).length, 0, "no files, no days");
+});
+
+Deno.test("activityByDay splits a day at local midnight, not at 24 hours", () => {
+  // The bug this rules out: bucketing on the raw timestamp, or dividing by
+  // 86400000, which files 23:59 and the next 00:01 under the same day whenever
+  // the clocks are not UTC -- a history that claims two nights were one.
+  const lateNight = new Date(2026, 8, 12, 23, 59, 30).getTime();
+  const smallHours = new Date(2026, 8, 13, 0, 1, 30).getTime();
+  const days = activityByDay([
+    file("late.md", lateNight),
+    file("early.md", smallHours),
+  ]);
+
+  assertEqual(days.length, 2, "two minutes apart is still two days apart");
+  assertEqual(
+    days[1].files[0].path,
+    "late.md",
+    "and the earlier write is the earlier day",
+  );
+});
+
+/** A listed file, with only the fields the history reads. */
+function file(path: string, modified: number): VaultFile {
+  return {
+    path,
+    name: path.slice(path.lastIndexOf("/") + 1),
+    isMarkdown: true,
+    scope: "input",
+    modified,
+  };
+}

@@ -2,6 +2,9 @@ import { join } from "node:path";
 
 import {
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_SPLIT_RATIO,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
 } from "./config.ts";
@@ -133,6 +136,85 @@ Deno.test("the dev server drives the whole vault flow over HTTP", async () => {
       (await call("setSidebarWidth", 10)).body.sidebarWidth,
       SIDEBAR_MIN_WIDTH,
       "a sliver of a sidebar is raised to the minimum",
+    );
+
+    // The split is the same kind of setting as the width, and it is clamped at
+    // the same boundary for the same reason: a ratio outside the ends the
+    // divider can be dragged to outlives this session, and the user could not
+    // have put it there.
+    assertEqual(
+      (await call("getState")).body.splitRatio,
+      DEFAULT_SPLIT_RATIO,
+      "the split starts at its default share",
+    );
+    const dragged = await call("setSplitRatio", 0.35);
+    assertEqual(dragged.status, 200, "the split can be stored");
+    assertEqual(dragged.body.splitRatio, 0.35, "storing returns the new state");
+    assertEqual(
+      (await call("getState")).body.splitRatio,
+      0.35,
+      "the split is remembered",
+    );
+    assertEqual(
+      (await call("setSplitRatio", 0.99)).body.splitRatio,
+      MAX_SPLIT_RATIO,
+      "a split that gives history nothing is pulled back to the top end",
+    );
+    assertEqual(
+      (await call("setSplitRatio", 0)).body.splitRatio,
+      MIN_SPLIT_RATIO,
+      "and one that gives changes nothing to the bottom end",
+    );
+    assertEqual(
+      (await call("setSplitRatio", "half")).body.splitRatio,
+      DEFAULT_SPLIT_RATIO,
+      "a value that is not a number at all falls back to the default",
+    );
+
+    // The two git operations cross this transport like the rest, and what
+    // matters here is the shape of the answer rather than the repository: the
+    // scratch vault above is not a repository, so the answer is null, and a
+    // commit against it fails with a sentence rather than an empty result.
+    const status = await call("vaultStatus");
+    assertEqual(status.status, 200, "the git status can be asked for");
+    assertEqual(
+      status.body,
+      null,
+      "and a vault outside a repository answers null, not an empty list",
+    );
+    const refused = await call("commitFiles", "a message", ["page.md"]);
+    assertEqual(
+      refused.status,
+      400,
+      "a commit outside a repository is refused",
+    );
+    assert(
+      /not inside a git repository/.test(refused.body.message),
+      "and the message names the reason, which is a different one from a failure",
+    );
+    // Amend and push take the same road, and both refuse before git runs: the
+    // point of them is that they reach further, so the guard in front of them
+    // had better be the same one.
+    const amended = await call("amendFiles", "a message", ["page.md"]);
+    assertEqual(
+      amended.status,
+      400,
+      "an amend outside a repository is refused",
+    );
+    assert(
+      /not inside a git repository/.test(amended.body.message),
+      "and says the same thing, rather than inventing a git failure",
+    );
+    const pushed = await call("pushBranch");
+    assertEqual(pushed.status, 400, "a push outside a repository is refused");
+    assert(
+      /not inside a git repository/.test(pushed.body.message),
+      "and so does the push, which reaches somebody else's machine",
+    );
+    assertEqual(
+      (await call("pushBranch", "somewhere else")).status,
+      400,
+      "a push takes no arguments, and one that arrives is refused rather than ignored",
     );
 
     // The editor arrives over this transport as well, so the browser target

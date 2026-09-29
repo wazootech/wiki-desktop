@@ -9,10 +9,47 @@ const MAX_RECENT_VAULTS = 8;
  * Sidebar column bounds in CSS pixels. The webview interpolates these into the
  * page, so the drag handle, the stored value, and the layout token cannot
  * disagree about what is allowed.
+ *
+ * The minimum is the narrowest *usable* column, and the column now contains the
+ * activity bar as well as a view. It used to be 180, which bought 180px of file
+ * list; with a 48px bar inside it the same number would buy 131px, which is not
+ * a file list anyone can scan. So the bar's width is added here rather than
+ * subtracted somewhere in the page, and the number keeps meaning what it meant:
+ * the least room the sidebar's contents have ever been given.
  */
-export const SIDEBAR_MIN_WIDTH = 180;
+export const SIDEBAR_MIN_WIDTH = 230;
 export const SIDEBAR_MAX_WIDTH = 520;
 export const DEFAULT_SIDEBAR_WIDTH = 250;
+
+/**
+ * Width of the activity bar, in CSS pixels: the strip of view buttons that runs
+ * down the left of the sidebar and switches what the pane beside it shows.
+ *
+ * It is inside the sidebar's width rather than beside it, so the column has to
+ * give up this much of the window before the editor gives up any. Exported for
+ * the same reason the sidebar's own bounds are: the page's clamp is a trust
+ * boundary as much as a layout, and it has to be spending the same number the
+ * bar is actually drawn at.
+ */
+export const ACTIVITY_BAR_WIDTH = 48;
+
+/**
+ * Where the changes/history split sits, as the changes pane's share of the
+ * height, and the ends it can be dragged to.
+ *
+ * A share rather than a height, because the split's height belongs to the
+ * window: a height chosen on a tall window is most of a short one, and would
+ * need re-clamping for every window the user ever opens it in. The two bounds
+ * are the bargain: a section squeezed to nothing was not really offered, and
+ * one left with the lot is not a split.
+ *
+ * Exported for the same reason the sidebar's bounds are. The page drags with
+ * them and this file stores with them, and a stored ratio the drag could not
+ * produce would be a ratio no user had ever chosen.
+ */
+export const DEFAULT_SPLIT_RATIO = 0.7;
+export const MIN_SPLIT_RATIO = 0.2;
+export const MAX_SPLIT_RATIO = 0.8;
 
 /**
  * How the app picks between the light and dark palettes. `system` defers to the
@@ -23,6 +60,41 @@ export const DEFAULT_SIDEBAR_WIDTH = 250;
 export const THEME_PREFERENCES = ["system", "light", "dark"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 export const DEFAULT_THEME: ThemePreference = "system";
+
+/**
+ * The views the sidebar switches between, in the order the activity bar draws
+ * them.
+ *
+ * A table like {@link LIST_VIEW_DEFAULTS}, and for the same reason: the bar's
+ * buttons, the panes in the markup, the selected-view setting and the View
+ * commands in the menu all come from this one list, so a view cannot exist in
+ * one of them and not the others.
+ *
+ * Source control is deliberately not here. It would need its own reader — the
+ * listing cannot see `.git`, which is on purpose — and it would have to answer
+ * whether it manages the vault or the repository around it, which the UI cannot
+ * ask. "Recently changed" is the same question a wiki reader actually has, over
+ * data the listing already carries.
+ */
+export const SIDEBAR_VIEWS = ["explorer", "search", "recent"] as const;
+export type SidebarView = (typeof SIDEBAR_VIEWS)[number];
+export const DEFAULT_SIDEBAR_VIEW: SidebarView = "explorer";
+
+/** True for a stored or requested view the app can actually show. */
+export function isSidebarView(value: unknown): value is SidebarView {
+  return typeof value === "string" &&
+    (SIDEBAR_VIEWS as readonly string[]).includes(value);
+}
+
+/**
+ * Coerce a stored or requested view into one the page can apply, falling back to
+ * the file list rather than to a blank pane. Same rule as
+ * {@link coerceTheme}: a settings file written by a build that had a view this
+ * one has not heard of must not be able to leave the sidebar empty.
+ */
+export function coerceSidebarView(value: unknown): SidebarView {
+  return isSidebarView(value) ? value : DEFAULT_SIDEBAR_VIEW;
+}
 
 export interface WindowGeometry {
   width: number;
@@ -113,6 +185,24 @@ export interface AppSettings {
   sidebarCollapsed: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
+  /**
+   * Which view the sidebar was showing, restored on the next launch.
+   *
+   * Stored next to the width and the collapsed flag rather than with the list
+   * view's switches, because it is a place in the window rather than something
+   * about the listing: it is worth the same on every vault, and the file list
+   * stays the answer to which file is open.
+   */
+  sidebarView: SidebarView;
+  /**
+   * The changes pane's share of the changes/history split, restored on the
+   * next launch.
+   *
+   * Stored next to the width because it is the same kind of thing: a place in
+   * the window the reader dragged into place and would otherwise have to drag
+   * into place again on every launch.
+   */
+  splitRatio: number;
   /** Light/dark appearance: `system` follows the OS, or the user pinned one. */
   theme: ThemePreference;
 }
@@ -131,6 +221,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   window: null,
   sidebarCollapsed: false,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+  sidebarView: DEFAULT_SIDEBAR_VIEW,
+  splitRatio: DEFAULT_SPLIT_RATIO,
   theme: DEFAULT_THEME,
   ...LIST_VIEW_DEFAULTS,
 };
@@ -190,6 +282,19 @@ export function coerceTheme(value: unknown): ThemePreference {
       (THEME_PREFERENCES as readonly string[]).includes(value)
     ? value as ThemePreference
     : DEFAULT_THEME;
+}
+
+/**
+ * Clamp a stored or dragged split ratio into the ends the divider can reach.
+ *
+ * Clamped on the way in as well as on the way to the page, for the same reason
+ * the width is: whatever the page sends outlives this session, and a stored
+ * ratio outside these ends would leave a section at a size the drag cannot
+ * return it to.
+ */
+export function clampSplitRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return DEFAULT_SPLIT_RATIO;
+  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio));
 }
 
 /** Clamp a stored or dragged sidebar width into the range the layout allows. */
@@ -351,6 +456,8 @@ function sanitize(value: unknown): AppConfig {
     sidebarCollapsed: record.sidebarCollapsed === true,
     ...sanitizeListViews(record),
     sidebarWidth: clampSidebarWidth(Number(record.sidebarWidth)),
+    sidebarView: coerceSidebarView(record.sidebarView),
+    splitRatio: clampSplitRatio(Number(record.splitRatio)),
     theme: coerceTheme(record.theme),
   };
 }

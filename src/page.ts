@@ -1,12 +1,18 @@
 import {
+  ACTIVITY_BAR_WIDTH,
+  DEFAULT_SIDEBAR_VIEW,
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_SPLIT_RATIO,
   DEFAULT_THEME,
   LIST_VIEW_DEFAULTS,
   type ListViewKey,
   type ListViewSetter,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
   setterFor,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  type SidebarView,
   type ThemePreference,
 } from "./config.ts";
 import { PLEX_MONO_LATIN, PLEX_MONO_LATIN_EXT } from "./plex_mono.ts";
@@ -94,16 +100,6 @@ function listViewCheckbox(view: ListView): string {
           </label>`;
 }
 
-/**
- * The frame every icon in `page` draws in: a stroke-2 glyph that inherits its
- * container's colour.
- *
- * They are inline SVG rather than characters because the glyphs these controls
- * need are not in every font the desktop, browser and CI targets ship, where a
- * missing character renders as a box. Sizing is on the element, not in the
- * page's stylesheet: a bare viewBox with no width renders at 300x150, and these
- * icons must stay independent of the button's `font-size`.
- */
 function chromeIcon(paths: string, size: number = 15): string {
   return '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size +
     '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
@@ -127,6 +123,24 @@ const ICONS = {
   sidebarToggle: chromeIcon(
     '<rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" />',
   ),
+  /*
+   * The activity bar's three views. 20px rather than the 15px of the toolbar
+   * glyphs, because these are the only marks on screen that say which pane is
+   * open: at 15px a strip of them is a column of grey smudges, and the bar is
+   * 48px wide precisely so the mark can be the size of a tab.
+   */
+  explorer: chromeIcon(
+    '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M8 13h8" /><path d="M8 17h5" />',
+    20,
+  ),
+  search: chromeIcon(
+    '<circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />',
+    20,
+  ),
+  recentlyChanged: chromeIcon(
+    '<path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l3 2" />',
+    20,
+  ),
   /** The bar's one tool: an arrow, where a word beside Save was ambiguous. */
   reload: chromeIcon(
     '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />',
@@ -138,6 +152,13 @@ const ICONS = {
   /** Sized for the 18px tab-close box rather than the 28px button default. */
   closeTab: chromeIcon('<path d="M18 6 6 18" /><path d="m6 6 12 12" />', 12),
   disclosure: chromeIcon('<path d="m9 18 6-6-6-6" />', 12),
+  /**
+   * A section header's own disclosure. It points down, which is the state a
+   * section spends most of its life in, and the CSS turns it sideways when the
+   * section is collapsed -- so the rotation is one rule rather than two icons
+   * that have to be kept in step.
+   */
+  sectionChevron: chromeIcon('<path d="m6 9 6 6 6-6" />', 12),
   activeCheck: chromeIcon('<path d="M20 6 9 17l-5-5" />', 11),
   /**
    * The sidebar's own way in, and the only place the folder is drawn: opening
@@ -156,6 +177,240 @@ const ICONS = {
   ),
 } as const;
 
+/**
+ * The sidebar's views, declared once, in the order the activity bar draws them.
+ *
+ * The same arrangement as the list's switches above, and for the same reason:
+ * the bar's buttons, the panes the script switches between, the View commands
+ * in the menu and the stored setting all come from this one list, so a view
+ * cannot be a button with no pane behind it, and a pane cannot be reachable
+ * with no way to reach it.
+ *
+ * The pane's *contents* are not here. Each view draws its own toolbar, listing
+ * and footer in the markup, because those are the things that differ; a table
+ * of them would be a template rather than a list, and the table is here to be
+ * enumerated, not to be rendered.
+ */
+interface PaneView {
+  /** The stored key, and the value the setting and `setSidebarView` use. */
+  key: SidebarView;
+  /**
+   * What the view is called, everywhere the user can read a name for it: the
+   * View menu and the button's own accessible name.
+   */
+  label: string;
+  /**
+   * The button's tooltip — a description of the view rather than its name, so
+   * the bar can say more than the one word the menu already gives.
+   */
+  hint: string;
+  /** The markup the button draws. */
+  icon: string;
+}
+
+const PANES: PaneView[] = [
+  {
+    key: "explorer",
+    label: "Explorer",
+    hint: "Vault files",
+    icon: ICONS.explorer,
+  },
+  {
+    key: "search",
+    label: "Search",
+    hint: "Search every page",
+    icon: ICONS.search,
+  },
+  {
+    key: "recent",
+    label: "Recently changed",
+    hint: "Pages by when they were last edited",
+    icon: ICONS.recentlyChanged,
+  },
+];
+
+/**
+ * One button on the activity bar, drawn from the table above.
+ *
+ * `aria-label` is the view's name and `title` is its hint, rather than both
+ * being the same words: a screen-reader user tabbing the bar and a user reading
+ * the View menu should hear the same thing for the same view, and the tooltip
+ * can afford to say more than that.
+ */
+function activityButton(view: PaneView): string {
+  return `<button class="activity-button" type="button" id="activity-${view.key}"
+            data-view="${view.key}" role="tab" aria-selected="false" tabindex="-1"
+            aria-controls="pane-${view.key}" title="${view.hint}" aria-label="${view.label}"
+          >${view.icon}</button>`;
+}
+
+/**
+ * One pane: the section the bar switches to, wrapping whatever the view draws.
+ *
+ * Hidden in the markup and revealed by the script, so a pane can never be on
+ * screen before the stored view has said which one should be -- and so the
+ * no-JavaScript document is an empty sidebar rather than a wrong one.
+ */
+function paneSection(view: PaneView, body: string): string {
+  return `<section class="pane" id="pane-${view.key}" data-view="${view.key}"
+             role="tabpanel" aria-labelledby="activity-${view.key}" tabindex="-1" hidden>
+            ${body}
+          </section>`;
+}
+
+/** A pane's own name, which the bar's glyph only implies. */
+function paneTitle(view: PaneView): string {
+  return `<div class="pane-title">${view.label}</div>`;
+}
+
+/**
+ * The three panes, drawn once here so the template holds one reference each and
+ * the two never drift: the ids below are the ones the script looks up, and the
+ * switcher pairs them with {@link PANES} by the `data-view` on each section.
+ */
+function paneMarkup(key: SidebarView): string {
+  const view = PANES.find((entry) => entry.key === key);
+  if (view === undefined) throw new Error(`no view named ${key}`);
+  if (key === "explorer") {
+    // The file list as it has always been, with what used to be sidebar chrome
+    // now scoped to this pane: the filter and the three switches act on a
+    // listing, and the create button is the listing's own action.
+    return paneSection(
+      view,
+      `${paneTitle(view)}
+            <div class="view-tools" id="viewTools">
+              <label class="sr-only" for="filter">Filter files</label>
+              <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+              <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
+              <div class="view-tools-checks">${
+        LIST_VIEWS.map(listViewCheckbox).join("\n                ")
+      }</div>
+            </div>
+            <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
+            <div class="view-status">
+              <span id="fileCount">No vault open</span>
+              <span class="transport" id="transportBadge" hidden>Browser dev mode</span>
+            </div>`,
+    );
+  }
+  if (key === "search") {
+    // One query box and a grouped result list. No toolbar beyond the box: there
+    // is nothing to filter by, nothing to create, and no switch that means
+    // anything here -- which is the point of the pane owning its chrome.
+    return paneSection(
+      view,
+      `${paneTitle(view)}
+            <div class="view-tools" id="searchTools">
+              <label class="sr-only" for="searchQuery">Search this vault</label>
+              <input class="filter" id="searchQuery" type="search" placeholder="Search this vault" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="search-results" id="searchResults" role="list" aria-label="Search results"></div>
+            <div class="view-status">
+              <span id="searchStatus">Type to search every page</span>
+            </div>`,
+    );
+  }
+  // Recently changed, as two panes: the files themselves, and the history of
+  // the days they were written on. No toolbar on either, and only one new
+  // operation behind the pair -- the listing already carries each file's
+  // modification time, so both panes are two readings of what the app has
+  // already loaded. The divider between them is draggable, because a vault
+  // with a long tail of old files wants the history a thumb's width and no
+  // more, and because a split the reader cannot move is a layout they have to
+  // live with rather than one they chose.
+  return paneSection(
+    view,
+    `${paneTitle(view)}
+            <div class="split" id="recentSplit">
+              ${
+      splitSection(
+        "changes",
+        "Changes",
+        "Files written most recently",
+        `<ul class="file-list" id="recentList" aria-label="Recently changed files"></ul>
+                <div class="commit-box" id="commitBox">
+                  <div class="commit-state" id="commitState">Reading the vault's git status</div>
+                  <label class="sr-only" for="commitMessage">Message for the ticked files</label>
+                  <input class="commit-input" id="commitMessage" type="text"
+                         placeholder="Commit message" autocomplete="off" spellcheck="true" />
+                  <div class="commit-row commit-actions">
+                    <button class="button button-secondary commit-button commit-amend" id="amendButton" type="button" disabled
+                            aria-describedby="remoteState"
+                            title="Replace the last commit with these files and this message">Amend</button>
+                    <button class="button button-primary commit-button commit-primary" id="commitButton" type="button" disabled>Commit</button>
+                  </div>
+                  <div class="commit-row commit-remote">
+                    <span class="commit-branch" id="remoteState">Reading where this branch stands</span>
+                    <button class="button button-secondary commit-button" id="pushButton" type="button" disabled
+                            aria-describedby="remoteStatus">Push</button>
+                  </div>
+                  <div class="commit-branch-status" id="remoteStatus" role="note"></div>
+                  <div class="commit-note" id="commitNote" role="status"></div>
+                </div>`,
+      )
+    }
+              <div class="pane-divider" id="recentDivider" role="separator" aria-orientation="horizontal"
+                   aria-label="Resize the changes and history panes" aria-controls="changesBody"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="${
+      Math.round(DEFAULT_SPLIT_RATIO * 100)
+    }"
+                   title="Drag to resize, double-click to even them out" tabindex="0"></div>
+              ${
+      splitSection(
+        "history",
+        "History",
+        "Writes grouped by day",
+        '<ol class="activity" id="recentHistory" aria-label="Files changed by day"></ol>',
+      )
+    }
+            </div>
+            <div class="view-status">
+              <span id="recentStatus">No vault open</span>
+            </div>`,
+  );
+}
+
+/**
+ * One collapsible section of a split pane: a header that says what the section
+ * holds and how much of it there is, and the body that scrolls.
+ *
+ * Drawn from a key and a name rather than written out twice, so the changes and
+ * history sections cannot drift into looking like two different controls -- and
+ * so the count badge is in the header because that is the only place a reader
+ * can size a section without opening it.
+ *
+ * The body is markup rather than script-built, because the list inside it is an
+ * element the script looks up by id: a view that filled its own list would be
+ * one more place for a null to hide.
+ */
+function splitSection(
+  key: string,
+  label: string,
+  hint: string,
+  body: string,
+): string {
+  return `<section class="split-pane" id="${key}Pane" aria-label="${label}">
+                <div class="split-head">
+                  <button class="split-toggle" id="${key}Toggle" type="button" aria-expanded="true"
+                          aria-controls="${key}Body" title="${hint}">
+                    ${ICONS.sectionChevron}<span class="split-name">${label}</span>
+                    <span class="split-count" id="${key}Count">0</span>
+                  </button>
+                </div>
+                <div class="split-body" id="${key}Body">${body}</div>
+              </section>`;
+}
+
+/**
+ * The frame every icon in `page` draws in: a stroke-2 glyph that inherits its
+ * container's colour.
+ *
+ * They are inline SVG rather than characters because the glyphs these controls
+ * need are not in every font the desktop, browser and CI targets ship, where a
+ * missing character renders as a box. Sizing is on the element, not in the
+ * page's stylesheet: a bare viewBox with no width renders at 300x150, and these
+ * icons must stay independent of the button's `font-size`.
+ */
 /**
  * The webview document. It is a plain string so the app stays a single
  * self-contained entrypoint: no bundler, and nothing to embed for
@@ -269,6 +524,7 @@ const pageTemplate = `<!DOCTYPE html>
       --toast-bg: #fffdf8;
       --shadow: 0 18px 45px rgba(31, 27, 20, 0.1);
       --sidebar-width: ${DEFAULT_SIDEBAR_WIDTH}px;
+      --activity-bar-width: ${ACTIVITY_BAR_WIDTH}px;
       /* The brand row and the tab bar share this height so the divider under
          them is one continuous line across the window, not two steps. The
          status rows pair up the same way at the bottom edge. */
@@ -377,7 +633,9 @@ const pageTemplate = `<!DOCTYPE html>
     }
     .button:active { transform: translateY(1px); }
     .button:focus-visible, input:focus-visible, .file-button:focus-visible,
-    .dir-button:focus-visible, .tab:focus-visible, .tab-close:focus-visible {
+    .dir-button:focus-visible, .tab:focus-visible, .tab-close:focus-visible,
+    .search-hit-name:focus-visible, .search-match:focus-visible,
+    .activity-button:focus-visible {
       outline: 3px solid var(--focus-ring); outline-offset: 1px;
     }
     .button:disabled { cursor: not-allowed; opacity: .5; box-shadow: none; }
@@ -395,12 +653,99 @@ const pageTemplate = `<!DOCTYPE html>
 
     .sidebar {
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       min-height: 0;
       /* The resize handle is positioned against this box. */
       position: relative;
       border-right: 1px solid var(--line);
       background: var(--panel);
+    }
+
+    /*
+     * The activity bar, and the pane beside it.
+     *
+     * The column is two boxes because the bar and the pane have different jobs
+     * and different lifetimes: the bar belongs to the sidebar and survives every
+     * view switch, while the pane, its toolbar, its listing and its footer all
+     * belong to one view. That is the whole reason the switcher exists -- a new
+     * view is a new pane, not a fourth block in a fixed order.
+     *
+     * The bar is inside the sidebar's width rather than beside it, so the width
+     * clamp below has to spend this much of the window before the editor gives
+     * up any.
+     */
+    .activity-bar {
+      display: flex; flex-direction: column; align-items: center;
+      width: var(--activity-bar-width); flex-shrink: 0;
+      padding: 0 0 9px;
+      border-right: 1px solid var(--line);
+      background: var(--panel-muted);
+    }
+    .activity-tabs {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      width: 100%;
+    }
+    /*
+     * The mark keeps the top row's height so its baseline lines up with the
+     * wordmark beside it and with the tab bar across the seam. The bar draws no
+     * horizontal rule there: it is a column, and the pane's own divider ending
+     * at its edge is what says where the top row stops.
+     */
+    .activity-brand {
+      display: grid; place-items: center;
+      width: 100%; height: var(--topbar-height); flex-shrink: 0;
+      padding: 0; border: 0; border-bottom: 1px solid var(--line);
+      background: transparent; color: inherit; cursor: pointer;
+    }
+    /*
+     * The mark is the sidebar's toggle, and it is the top of the bar it hides.
+     *
+     * A button rather than a div with a listener, because the mark is the one
+     * control in this app that has to be reachable without a pointer: a div is
+     * not focusable and is not in the tab order, and a sidebar that can only be
+     * closed by clicking is a sidebar some readers cannot close. Carrying the
+     * sidebar-toggle class rather than a handler of its own is what keeps one
+     * rule deciding what every toggle says, which is the same reason the tab
+     * bar's copy is that class too.
+     */
+    .activity-brand:hover { background: var(--surface-hover); }
+    .activity-brand:focus-visible { outline: 1px solid var(--brand-marker); outline-offset: -1px; }
+    .activity-button {
+      position: relative;
+      display: grid; place-items: center;
+      width: 40px; height: 40px; margin-top: 6px; padding: 0;
+      border: 0; border-radius: 9px;
+      color: var(--muted); background: transparent;
+    }
+    .activity-button:first-child { margin-top: 7px; }
+    .activity-button:hover { color: var(--text); background: var(--surface-hover); }
+    .activity-button.is-active { color: var(--brand-text); background: var(--brand-soft); }
+    /*
+     * The same rail the file list gives an open row, and for the same reason: a
+     * tint alone is a distinction the eye can miss at the edge of the window.
+     * A positioned bar rather than an inset shadow, because the button's radius
+     * would hook the accent around its corners.
+     */
+    .activity-button.is-active::before {
+      position: absolute; top: 9px; bottom: 9px; left: -4px; width: 2px;
+      border-radius: 999px; background: var(--brand-marker); content: "";
+    }
+    .sidebar-pane {
+      display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0;
+    }
+    .panes { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    /*
+     * Each pane names itself. The activity bar says which view is on in a
+     * column of glyphs, which is a visual answer; this is the one a screen
+     * reader lands on, and the one a user looks for when the bar's marks are
+     * small.
+     */
+    .pane-title {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 13px 6px;
+      color: var(--muted); font-size: 9.5px; font-weight: 750;
+      letter-spacing: .09em; text-transform: uppercase;
     }
 
     /*
@@ -445,13 +790,20 @@ const pageTemplate = `<!DOCTYPE html>
     .app.is-collapsed .tabbar .sidebar-toggle { display: inline-flex; }
     /* The rows' text is taller than the button, so centring would put the two
        copies a fraction of a pixel apart; pin both to the padding edge. */
-    .brand .sidebar-toggle, .tabbar .sidebar-toggle { align-self: flex-start; }
+    .tabbar .sidebar-toggle { align-self: flex-start; }
     /*
      * The official Wazoo mark, inline so the page stays one string with no
      * asset route. Used bare and unrecoloured: the brand guide forbids
      * stretching, rotating, or recolouring the logo assets. Copy of
      * https://wazoo.dev/assets/wazoo.svg (the file the site and its JSON-LD
      * both point at), with the clip-path id namespaced for inlining.
+     */
+    /*
+     * The mark, which the activity bar owns the top slot of. It was the first
+     * thing in the brand row and is now the corner of the strip, so the wordmark
+     * beside it has the row to itself -- which is what the brand block "had room
+     * to give up" means in practice. A span rather than a div because its new
+     * home is a button, and a button's content is phrasing content only.
      */
     .brand-mark { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; }
     .brand-mark svg { width: 100%; height: 100%; }
@@ -472,7 +824,6 @@ const pageTemplate = `<!DOCTYPE html>
       background: var(--panel-muted);
     }
     .vault-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-    .vault-label { color: var(--muted); font-size: 9.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; flex-shrink: 0; }
     .vault-name { font-size: 12.5px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-name.is-placeholder { color: var(--muted); font-weight: 600; }
     /*
@@ -505,18 +856,18 @@ const pageTemplate = `<!DOCTYPE html>
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     /*
-     * The file list's own toolbar: the filter, then the button that creates a
-     * file. Creating lives here rather than in the top bar, which holds the open
-     * document's actions — the same reason it did not join the vault's row of
-     * labeled buttons, which has since become two icons on the vault's own
-     * heading.
+     * A view's own toolbar, drawn inside the pane rather than across the top of
+     * the sidebar. It used to be the file list's, and that was the coupling:
+     * Filter, Assets, Extensions and New file all act on a listing, so with a
+     * switcher they belong to the Explorer view and a view whose content is not
+     * a listing has no use for any of them. Each pane brings its own; one that
+     * needs none (Recently changed) has none.
      *
-     * The row is hidden outright with no vault open. The file list empties then,
-     * so what was left was a filter over nothing, a toggle with nothing to
-     * toggle, and a disabled create button: chrome for an empty list, which is
-     * the part of "closing the vault" that had not been finished.
+     * A view's toolbar is hidden outright with no vault open, for the reason it
+     * was: the listings behind it empty, so what was left was a filter over
+     * nothing and a disabled create button.
      */
-    .file-tools { display: flex; align-items: center; gap: 6px; }
+    .view-tools { display: flex; align-items: center; gap: 6px; }
     .filter {
       flex: 1; min-width: 0; min-height: 28px; padding: 0 9px;
       border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel-muted);
@@ -545,8 +896,8 @@ const pageTemplate = `<!DOCTYPE html>
      * three rows of toolbar at the default width's left-hand end, and a fourth
      * line for the file list in a column the user had made narrower on purpose.
      */
-    .file-tools { flex-wrap: wrap; padding: 8px 10px; }
-    .file-tools .filter { flex-basis: 100px; }
+    .view-tools { flex-wrap: wrap; padding: 0 10px 8px; }
+    .view-tools .filter { flex-basis: 100px; }
     /*
      * A full basis is what pins this to its own row, so the row count does not
      * depend on how far the column happens to be dragged. And it wraps inside
@@ -555,7 +906,7 @@ const pageTemplate = `<!DOCTYPE html>
      * is the one outcome the wrap above exists to prevent — which, at that
      * width, it did not.
      */
-    .file-tools-checks {
+    .view-tools-checks {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
       flex-basis: 100%; flex-shrink: 0;
     }
@@ -591,12 +942,230 @@ const pageTemplate = `<!DOCTYPE html>
     /* Listed rather than hidden, but visibly not one of the wiki's pages. */
     .file-button.is-asset { opacity: .62; }
     .file-dir { display: block; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-time { display: block; color: var(--muted); font-size: 10px; }
     .file-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
-    .sidebar-status {
+
+    /*
+     * A pane split in two: the sections above and below a divider, each with
+     * its own header, its own count, and its own scroll. The heights are set
+     * from the script as a flex ratio rather than as pixels, so the pair still
+     * adds up when the sidebar is resized underneath them and when the pane is
+     * taller or shorter than it was.
+     */
+    .split { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+    .split-pane { display: flex; min-height: 0; flex-direction: column; }
+    #changesPane { flex: 7 1 0; }
+    #historyPane { flex: 3 1 0; }
+    .split-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    /* Collapsed means folded to its header, so the section it shares the column
+       with gets the space. */
+    .split-pane.is-collapsed { flex: 0 0 auto; }
+    .split-pane.is-collapsed .split-body { display: none; }
+
+    .split-head { flex: none; }
+    /*
+     * The commit box at the foot of the changes section: what git has pending,
+     * a line to write the message on, and the buttons that act on both.
+     *
+     * It sits below the list rather than above it because the list is what
+     * the reader is reading and the box is what they do once they have decided.
+     * It is pinned to the bottom of the section rather than scrolling with the
+     * list, because a Commit button that scrolls out of reach halfway down a
+     * long vault is a button nobody finds.
+     *
+     * One row each, top to bottom: state, field, actions, branch. The field
+     * used to share a row with both buttons, and at a 230px sidebar -- which is
+     * the default and not an edge case -- the three of them did not fit: the
+     * field was crushed to about fifteen pixels and the Commit label ran off
+     * the edge of the sidebar and was cut. A field is the one control here that
+     * cannot be abbreviated, so it takes the width and the buttons share what
+     * is left.
+     *
+     * The vertical rhythm: 6px between the field and the buttons, which the
+     * reader does in sequence; 8px where the box changes subject, before the
+     * branch row; 3px under a line of small text. Every control is 28px tall,
+     * so the field and the buttons share a baseline rather than stepping.
+     */
+    .commit-box {
+      flex: none; margin: 0; padding: 8px 8px 9px;
+      border-top: 1px solid var(--line); background: var(--surface-raised);
+    }
+    .commit-state {
+      margin-bottom: 6px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+    }
+    .commit-state.is-error { color: var(--brand-text); }
+    .commit-row { display: flex; gap: 6px; align-items: center; }
+    .commit-input {
+      display: block; width: 100%; min-width: 0; height: 28px; padding: 0 8px;
+      border: 1px solid var(--line); border-radius: 6px;
+      background: var(--panel); color: var(--text-body);
+      font-family: inherit; font-size: 11.5px;
+    }
+    .commit-input:focus-visible { outline: 1px solid var(--brand-marker); outline-offset: -1px; }
+    .commit-actions { margin-top: 6px; }
+    /* Amend keeps the width its word needs and Commit takes the rest, so the
+       primary action is the large one and the two do not swap sizes as the
+       label changes between "Commit" and "Commit 12". Both clip to an
+       ellipsis rather than overflowing the box, which is what a min-width on
+       its own invites in a column this narrow. */
+    .commit-button {
+      flex: none; min-width: 0; height: 28px; padding: 0 9px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* Amend gives up width before Commit does: the primary verb is the one a
+       reader is reaching for, and a 46px floor keeps its own word from
+       disappearing entirely in a column this narrow. */
+    .commit-amend { flex: 0 1 auto; min-width: 46px; }
+    .commit-primary { flex: 1 1 auto; }
+    .commit-remote { margin-top: 8px; }
+    /* Reference rather than status: this names where Push would send the
+       branch, so it truncates instead of wrapping. Wrapped, it ran to eight
+       lines in a 98px column and pushed the History section off the bottom of
+       a 675px window. The full text is in the tooltip, and the status line
+       underneath carries the part that changes what the reader does. */
+    .commit-branch {
+      flex: 1; min-width: 0; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .commit-branch-status {
+      margin-top: 3px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+    }
+    .commit-branch-status:empty { display: none; }
+    .commit-branch-status.is-error { color: var(--brand-text); }
+    /* A vault that is not in a repository has no source control at all, so the
+       box says so once and drops the controls that could never act. A greyed
+       out Amend and a dead Push under a disabled field is three affordances
+       for a feature that is not there. */
+    .commit-box.is-unavailable .commit-amend,
+    .commit-box.is-unavailable .commit-remote,
+    .commit-box.is-unavailable .commit-branch-status { display: none; }
+    /* A detached HEAD is not a branch: there is nowhere for Push to go and no
+       branch name to show, so the row goes rather than saying so in the space
+       of two. */
+    .commit-box.has-no-branch .commit-remote { display: none; }
+    .commit-note {
+      margin-top: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+    }
+    .commit-note:empty { display: none; }
+    .commit-note.is-error { color: var(--brand-text); }
+    /*
+     * A row the reader can tick. The checkbox is a real input rather than a
+     * drawn box so the keyboard, the focus ring and the platform's own
+     * high-contrast rendering all come with it, and it is a label wrapping the
+     * input so the row's file name is its accessible name for free.
+     */
+    .change-check {
+      display: grid; place-items: center; flex: none;
+      width: 22px; align-self: stretch; cursor: pointer;
+    }
+    .change-check input { margin: 0; cursor: pointer; }
+    .file-list > li:has(.change-check) { display: flex; align-items: stretch; }
+    .file-list > li:has(.change-check) .file-button { flex: 1; min-width: 0; }
+    .split-toggle {
+      display: flex; align-items: center; gap: 4px; width: 100%;
+      padding: 5px 8px; border: 0; background: transparent;
+      color: var(--text-body); font-size: 11px; font-weight: 700; text-align: left;
+    }
+    .split-toggle:hover { background: var(--surface-hover); }
+    .split-toggle .icon { flex: none; color: var(--muted); }
+    /* One rule turns the chevron sideways, so there is no second icon to keep
+       in step with the first. */
+    .split-toggle[aria-expanded="false"] .icon { transform: rotate(-90deg); }
+    .split-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* The count is what lets a section be sized without being opened, so it is
+       the one piece of the header that is never truncated. */
+    .split-count {
+      flex: none; min-width: 16px; padding: 0 5px; border-radius: 999px;
+      background: var(--surface-hover); color: var(--muted);
+      font-size: 9.5px; font-weight: 600; line-height: 14px; text-align: center;
+    }
+
+    /*
+     * The divider between the two sections. A real 7px target around a hairline,
+     * because a 1px handle is a handle nobody can find, and it takes the
+     * sidebar resizer's keyboard contract wholesale: it is a separator, it is
+     * focusable, the arrows move it a step and Shift a bigger one, and Home and
+     * End take it to either end.
+     */
+    .pane-divider {
+      flex: none; height: 7px; margin: 0 -7px; cursor: row-resize;
+      background: transparent; touch-action: none;
+    }
+    .pane-divider::after {
+      display: block; height: 1px; margin: 3px 7px;
+      background: var(--line); content: "";
+    }
+    .pane-divider:hover::after, .pane-divider.is-dragging::after { background: var(--brand-marker); }
+    .pane-divider:focus-visible { outline: 1px solid var(--brand-marker); outline-offset: -1px; }
+
+    /*
+     * The history: one entry per day, on a rail, the way a commit graph reads.
+     * The rail is a border on the day column rather than a drawn element per
+     * entry, so it is continuous for free and a day with no files never leaves
+     * a gap in it.
+     */
+    .activity { flex: 1; min-height: 0; margin: 0; padding: 2px 7px 8px; overflow-y: auto; list-style: none; scrollbar-width: thin; }
+    .activity-day { position: relative; padding: 3px 0 3px 15px; }
+    /* The rail: the first day starts it, the last one stops it, and every day in
+       between runs one continuous line. */
+    .activity-day::before {
+      position: absolute; top: 0; bottom: 0; left: 4px; width: 1px;
+      background: var(--line); content: "";
+    }
+    .activity-day:first-child::before { top: 9px; }
+    .activity-day:last-child::before { bottom: auto; height: 9px; }
+    .activity-day:only-child::before { display: none; }
+    /* The commit dot, over the rail. */
+    .activity-day::after {
+      position: absolute; top: 7px; left: 1px; width: 7px; height: 7px;
+      border: 2px solid var(--surface-raised); border-radius: 50%;
+      background: var(--brand-marker); box-sizing: border-box; content: "";
+    }
+    .activity-day:first-child::after { background: var(--brand-text); }
+    .activity-when { display: block; color: var(--text-body); font-size: 10.5px; font-weight: 700; }
+    .activity-files { margin: 1px 0 0; padding: 0; list-style: none; }
+    .activity-files .file-button { padding: 2px 6px; font-size: 11px; }
+
+    /*
+     * A view's footer, inside the pane for the same reason as its toolbar. It
+     * was one row for the whole sidebar, and its one piece of content — "95
+     * files" — means nothing in a search view, so each pane now carries its own
+     * and the word is spent on that view.
+     */
+    .view-status {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       height: var(--statusbar-height); padding: 0 13px;
       border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
     }
+
+    /*
+     * Search results: a file's name, then its matching lines under it.
+     *
+     * Grouped rather than flattened because a hit in a wiki is nearly always
+     * "this page, these lines" — a flat list of lines makes the reader assemble
+     * that grouping from sixty rows, which is the work the grouping is for.
+     */
+    .search-results {
+      flex: 1; min-height: 0; padding: 0 7px 8px; overflow-y: auto; list-style: none;
+      scrollbar-width: thin;
+    }
+    .search-hit { margin-bottom: 5px; }
+    .search-hit-name {
+      display: flex; align-items: baseline; gap: 6px; width: 100%;
+      padding: 4px 8px; border: 0; border-radius: 6px;
+      color: var(--text-body); background: transparent; text-align: left; font-size: 12px;
+    }
+    .search-hit-name:hover { background: var(--surface-hover); }
+    .search-hit-more { color: var(--muted); font-size: 9.5px; }
+    .search-match {
+      display: flex; align-items: baseline; gap: 7px; width: 100%;
+      padding: 3px 8px 3px 14px; border: 0; border-radius: 6px;
+      color: var(--text-soft); background: transparent; text-align: left; font-size: 11px; line-height: 1.35;
+    }
+    .search-match:hover { color: var(--text); background: var(--surface-hover); }
+    .search-line { flex-shrink: 0; color: var(--muted); font-size: 9.5px; }
+    .search-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .search-empty { padding: 12px 9px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
     .transport {
       flex-shrink: 0; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px;
       color: var(--text-soft); background: var(--panel-muted); font-size: 9.5px; font-weight: 650;
@@ -795,13 +1364,17 @@ const pageTemplate = `<!DOCTYPE html>
       .sidebar.is-open { transform: translateX(0); }
       /* The drawer hides the brand row's toggle, so the tabbar keeps one. */
       .tabbar .sidebar-toggle { display: inline-flex; }
+      /* The bar keeps its own width here: it is the only way to change view
+         while the drawer is up, and the scrim only dismisses a click that lands
+         outside the drawer, which a bar button never is. */
+      .activity-bar { padding-bottom: 0; }
       /* The drawer is an overlay whose position is the state itself, so a
          resize handle on its edge would fight the slide-in. */
       .resizer { display: none; }
       /* The drawer overlays the workspace here, so the rows no longer have to
          line up — and a wrapping tab or status bar must be free to grow. */
       .brand, .tabbar { height: auto; min-height: var(--topbar-height); }
-      .sidebar-status, .statusbar { height: auto; min-height: var(--statusbar-height); }
+      .view-status, .statusbar { height: auto; min-height: var(--statusbar-height); }
       .tabbar { flex-wrap: wrap; }
       .save-state { display: none; }
       .statusbar { flex-wrap: wrap; }
@@ -842,9 +1415,9 @@ const pageTemplate = `<!DOCTYPE html>
 <body>
   <main class="app" id="app">
     <aside class="sidebar">
-      <div class="brand">
-        <button class="button button-secondary icon-button sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">${ICONS.sidebarToggle}</button>
-        <div class="brand-mark" aria-hidden="true">
+      <nav class="activity-bar" aria-label="Sidebar views">
+        <button class="activity-brand sidebar-toggle" type="button" title="Hide vault files (Ctrl+B)" aria-label="Hide vault files" aria-expanded="true">
+          <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0.0 0.0 520.0 520.0" fill="none" xmlns="http://www.w3.org/2000/svg">
             <clipPath id="wazooMarkClip">
               <path d="m0 0l520.0 0l0 520.0l-520.0 0l0 -520.0z" clip-rule="nonzero" />
@@ -859,7 +1432,15 @@ const pageTemplate = `<!DOCTYPE html>
               <path fill="#ff9800" fill-rule="evenodd" d="m505.64868 305.6166l0 0c-0.12124634 67.46524 -109.278656 122.224335 -244.35449 122.581085c-135.0758 0.3567505 -245.3866 -53.822754 -246.93633 -121.28354l245.63737 -1.4076538z" />
             </g>
           </svg>
+          </span>
+        </button>
+        <div role="tablist" id="activityBar" aria-orientation="vertical" aria-label="Views">
+        ${PANES.map(activityButton).join("\n        ")}
         </div>
+      </nav>
+
+      <div class="sidebar-pane">
+      <div class="brand">
         <div>
           <div class="brand-name">Wazoo Wiki</div>
           <div class="brand-subtitle">Desktop editor</div>
@@ -868,7 +1449,6 @@ const pageTemplate = `<!DOCTYPE html>
 
       <section class="vault" aria-label="Vault">
         <div class="vault-head" id="vaultHead">
-          <span class="vault-label">Vault</span>
           <span class="vault-name is-placeholder" id="vaultName">No vault open</span>
           <div class="vault-actions">
             <button class="button button-secondary icon-button" id="openVaultButton" type="button" title="Open a vault" aria-label="Open a vault">${ICONS.openVault}</button>
@@ -877,23 +1457,13 @@ const pageTemplate = `<!DOCTYPE html>
         <div class="vault-path" id="vaultPath">Choose the folder that holds your wiki.</div>
       </section>
 
-      <div class="file-tools" id="fileTools">
-        <label class="sr-only" for="filter">Filter files</label>
-        <input class="filter" id="filter" type="search" placeholder="Filter files" autocomplete="off" />
-        <button class="button button-secondary icon-button" id="newFileButton" type="button" title="New file (Ctrl+N)" aria-label="New file" disabled>${ICONS.newFile}</button>
-        <div class="file-tools-checks">${
-  LIST_VIEWS.map(listViewCheckbox).join("\n          ")
-}
-        </div>
+      <div class="panes" id="sidebarPanes">
+        ${PANES.map((view) => paneMarkup(view.key)).join("\n        ")}
+      </div>
       </div>
 
-      <ul class="file-list" id="fileList" aria-label="Vault files"></ul>
-      <div class="sidebar-status">
-        <span id="fileCount">No vault open</span>
-        <span class="transport" id="transportBadge" hidden>Browser dev mode</span>
-      </div>
       <div class="resizer" id="sidebarResizer" role="separator" aria-orientation="vertical"
-           aria-label="Resize the vault sidebar" aria-controls="fileList"
+           aria-label="Resize the vault sidebar" aria-controls="sidebarPanes"
            aria-valuemin="${SIDEBAR_MIN_WIDTH}" aria-valuemax="${SIDEBAR_MAX_WIDTH}" aria-valuenow="${DEFAULT_SIDEBAR_WIDTH}"
            title="Drag to resize, double-click to reset" tabindex="0"></div>
     </aside>
@@ -936,7 +1506,7 @@ const pageTemplate = `<!DOCTYPE html>
           <div class="placeholder-inner">
             <div class="placeholder-icon" aria-hidden="true">${ICONS.noFile}</div>
             <h1>Select a file</h1>
-            <p id="placeholderNoFileText">Pick a file from the sidebar to open it in a tab.</p>
+            <p id="placeholderNoFileText">Pick a file from the Explorer view to open it in a tab.</p>
             <button class="button button-primary" id="emptyNewFileButton" type="button">New file</button>
             <div class="hint"><kbd>Ctrl</kbd> <kbd>N</kbd> makes a file · <kbd>Ctrl</kbd> <kbd>W</kbd> closes a tab · <kbd>Ctrl</kbd> <kbd>Tab</kbd> switches</div>
           </div>
@@ -1042,6 +1612,15 @@ const pageTemplate = `<!DOCTYPE html>
       // above, and this is the same list the script wires up, so the two cannot
       // be different lists.
       const LIST_VIEWS = ${JSON.stringify(LIST_VIEWS)};
+      // And the views, from the same kind of table in the same file. The markup
+      // above drew the bar and the panes from it; this is the list the script
+      // switches between and the menu's View entries are generated from, so
+      // the three cannot be different lists.
+      const PANES = ${
+  JSON.stringify(
+    PANES.map(({ key, label }) => ({ key, label })),
+  )
+};
       const shell = el('app');
       const editorHost = el('editor');
       const editorWrap = el('editorWrap');
@@ -1057,7 +1636,39 @@ const pageTemplate = `<!DOCTYPE html>
       const openVaultButton = el('openVaultButton');
       const emptyNewFileButton = el('emptyNewFileButton');
       const vaultName = el('vaultName');
-      const fileTools = el('fileTools');
+      const viewTools = el('viewTools');
+      const searchTools = el('searchTools');
+      const searchQuery = el('searchQuery');
+      const searchResults = el('searchResults');
+      const searchStatus = el('searchStatus');
+      const recentList = el('recentList');
+      const commitState = el('commitState');
+      const commitMessage = el('commitMessage');
+      const commitButton = el('commitButton');
+      const amendButton = el('amendButton');
+      const pushButton = el('pushButton');
+      const remoteState = el('remoteState');
+      const remoteStatus = el('remoteStatus');
+      const commitNote = el('commitNote');
+      const commitBox = el('commitBox');
+      const recentHistory = el('recentHistory');
+      const recentStatus = el('recentStatus');
+      const recentSplit = el('recentSplit');
+      const recentDivider = el('recentDivider');
+      const changesPane = el('changesPane');
+      const changesToggle = el('changesToggle');
+      const changesCount = el('changesCount');
+      const historyPane = el('historyPane');
+      const historyToggle = el('historyToggle');
+      const historyCount = el('historyCount');
+      // The two sections as one list, because folding one and counting one are
+      // the same two lines each and the divider's arithmetic is a third. The ids
+      // are written out above rather than built from a key on purpose: that is
+      // what lets the page tests check every one of them against the markup.
+      const splitSections = [
+        { pane: changesPane, toggle: changesToggle, count: changesCount },
+        { pane: historyPane, toggle: historyToggle, count: historyCount },
+      ];
       const vaultPath = el('vaultPath');
       const filterInput = el('filter');
       // The three switches, each paired with the elements it owns. One list
@@ -1101,10 +1712,82 @@ const pageTemplate = `<!DOCTYPE html>
       // showing, the tabbar's once it is collapsed, so the control stays in the
       // window's top-left corner either way. Only one is ever displayed.
       const sidebarToggles = document.querySelectorAll('.sidebar-toggle');
+      // The bar's buttons and the panes they switch to, matched by data-view
+      // rather than by id: the two lists are drawn from the same table above,
+      // and a pane with no button would leave it unreachable.
+      const activityBar = el('activityBar');
+      const activityButtons = document.querySelectorAll('.activity-button');
+      const sidebarPanes = document.querySelectorAll('.pane');
 
       // Below this width the sidebar is a drawer rather than a column, so the
       // same button means "slide it in" instead of "collapse the column".
       const narrowWindow = window.matchMedia('(max-width: 640px)');
+
+      /*
+       * The split between the changes list and the history below it, as the
+       * share of the pane the first one takes.
+       *
+       * A ratio rather than a height because the pane belongs to the window: a
+       * height chosen on a tall window is most of a short one. The bounds are
+       * the two ends of that bargain -- a section squeezed to nothing is a
+       * section that was not really offered, and one left with the lot is a
+       * split that is not one. They are imported from the settings file rather
+       * than written here, because the same three numbers are what the stored
+       * ratio is clamped to on the other side of the transport.
+       *
+       * The split is remembered. It used not to be, on the grounds that a split
+       * set once for one session is not a preference -- but the reader who
+       * dragged the history down to a rail did that because of what they were
+       * reading, and they will be reading the same vault tomorrow. A divider
+       * that forgets is a divider dragged once per launch.
+       */
+      /** Below this, the pane cannot be divided at all and the split holds still. */
+      const MIN_SPLIT_PANE_HEIGHT = 72;
+
+      /** Clamp a stored or dragged share to the ends the divider can reach. */
+      function clampSplitRatio(ratio) {
+        // A value the transport never sent must not reach a flexGrow as NaN,
+        // which would drop both sections to their content height.
+        const wanted = Number.isFinite(ratio) ? ratio : ${DEFAULT_SPLIT_RATIO};
+        return Math.min(
+          ${MAX_SPLIT_RATIO},
+          Math.max(${MIN_SPLIT_RATIO}, wanted),
+        );
+      }
+
+      /**
+       * Put the split where this share says, and say where that ended up.
+       *
+       * Separate from the divider's own handler because the stored share
+       * arrives with the launch state, before anything has been dragged:
+       * applying it is a redraw, not an event, and it has no reason to wait
+       * for a pointer to find out what height the window turned out to be.
+       */
+      function applySplit(ratio) {
+        // Rounded to a thousandth before anything else sees it, and returned
+        // rounded rather than raw, because that is the share that gets stored.
+        // Adding 0.1 to 0.7 in binary lands just under it, so an unrounded
+        // share would put 0.30000000000000004 in the settings file and drift a
+        // little further on every nudge.
+        const share = Math.round(clampSplitRatio(ratio) * 1000) / 1000;
+        const grow = Math.round(share * 100) / 10;
+        changesPane.style.flexGrow = String(grow);
+        historyPane.style.flexGrow = String(10 - grow);
+        recentDivider.setAttribute(
+          'aria-valuenow',
+          String(Math.round(share * 100)),
+        );
+        return share;
+      }
+
+      /*
+       * Which history answer is the current one.
+       *
+       * The same guard the search view uses, for the same reason: asking the
+       * backend for the days is a round trip, and a slow earlier answer landing
+       * on a newer one is how a list ends up drawn twice.
+       */
+      let historyToken = 0;
 
       // The editor keeps each open document's own state, so the page only has
       // to name which one is on screen. Everything it needs is this handle:
@@ -1142,6 +1825,8 @@ const pageTemplate = `<!DOCTYPE html>
         recents: [],
         sidebarCollapsed: false,
         sidebarWidth: ${DEFAULT_SIDEBAR_WIDTH},
+        sidebarView: '${DEFAULT_SIDEBAR_VIEW}',
+        splitRatio: ${DEFAULT_SPLIT_RATIO},
         theme: '${DEFAULT_THEME}',
       };
       // Before the stored state arrives, every switch is worth its default, so
@@ -1196,12 +1881,26 @@ const pageTemplate = `<!DOCTYPE html>
           // outright, so the one check that runs in the real webview could not
           // see it either. Found by calling one binding three ways in the real
           // desktop runtime; both a direct call and a spread work.
-          return await bridge[name](...(args || []));
+          const result = await bridge[name](...(args || []));
+          lastCallError = '';
+          return result;
         } catch (error) {
-          showToast((error && error.message) || 'Something went wrong.');
+          lastCallError = (error && error.message) || 'Something went wrong.';
+          showToast(lastCallError);
           return null;
         }
       }
+
+      /**
+       * Why the last call failed, kept so a pane can say it in place.
+       *
+       * A toast is the right answer for something that just went wrong on its
+       * own, and the wrong one for a failure the reader is about to try again:
+       * the commit box needs to carry the reason next to the button, because
+       * a git that refuses for an unconfigured author is a sentence about what
+       * to do next, and a toast that has already faded is not.
+       */
+      let lastCallError = '';
 
       /* Sidebar: collapsing a column on wide windows, a drawer on narrow ones */
 
@@ -1255,6 +1954,84 @@ const pageTemplate = `<!DOCTYPE html>
         if (persist) call('setSidebarCollapsed', [collapsed]);
       }
 
+      /* Views: one switcher, and every pane's own chrome */
+
+      /**
+       * The view whose name the state should hold, or the file list.
+       *
+       * Coerced in the page as well as in the binding, for the same reason the
+       * theme is: the stored state is a value from a settings file, and a view
+       * this build has no pane for would leave the sidebar showing nothing at
+       * all. An unknown name is a file list, which is the one answer that is
+       * always there.
+       */
+      function knownView(view) {
+        return PANES.some((entry) => entry.key === view) ? view : '${DEFAULT_SIDEBAR_VIEW}';
+      }
+
+      /**
+       * Show one view's pane and hide the rest. This is the whole of the
+       * switcher: nothing here knows what any pane contains, so a view is
+       * added by writing a pane and a row in the table, and the switcher is not
+       * edited.
+       *
+       * The choice is worth keeping -- it is where the user was, the way the
+       * sidebar's width and collapsed state are -- so it is written to the
+       * settings unless this is just applying stored state.
+       */
+      function setSidebarView(view, persist) {
+        const next = knownView(view);
+        vault.sidebarView = next;
+        for (const button of activityButtons) {
+          const active = button.dataset.view === next;
+          button.classList.toggle('is-active', active);
+          button.setAttribute('aria-selected', String(active));
+          // Roving tabindex: the bar is one tab stop, and the arrows move
+          // within it, which is what a row of role="tab" buttons owes its user.
+          button.tabIndex = active ? 0 : -1;
+        }
+        for (const pane of sidebarPanes) pane.hidden = pane.dataset.view !== next;
+        // Redrawn on arrival rather than kept: a search scan is milliseconds on
+        // a wiki-sized vault, and it is the only way the results can never be
+        // describing a file that has since been saved over.
+        if (next === 'search') runSearch();
+        if (next === 'recent') renderRecent();
+        if (persist) {
+          call('setSidebarView', [next]);
+          refreshMenu();
+        }
+      }
+
+      /** The bar's own click: switch view, or fold the sidebar away if it is already on. */
+      function chooseView(view) {
+        if (view === vault.sidebarView && !narrowWindow.matches) {
+          toggleSidebar();
+          return;
+        }
+        setSidebarView(view, true);
+      }
+
+      function wireActivityBar() {
+        for (const button of activityButtons) {
+          button.addEventListener('click', () => chooseView(button.dataset.view));
+        }
+        activityBar.addEventListener('keydown', (event) => {
+          const step = event.key === 'ArrowDown' ? 1
+            : event.key === 'ArrowUp' ? -1
+            : 0;
+          if (step === 0) return;
+          event.preventDefault();
+          const buttons = Array.from(activityButtons);
+          const current = buttons.indexOf(document.activeElement);
+          const next = (current + step + buttons.length) % buttons.length;
+          // Moving the focus is not moving the view: arrow keys across a bar
+          // land on a button and say so, and Enter or Space takes it. Switching
+          // under the keyboard as the focus moves would make the arrows feel
+          // like they were skipping steps.
+          buttons[next].focus();
+        });
+      }
+
       /**
        * Apply one of the list's switches, and tell the two controls that show
        * it.
@@ -1301,11 +2078,19 @@ const pageTemplate = `<!DOCTYPE html>
       // The editor needs room for a readable line, so the column gives up space
       // before the workspace does on a narrow window.
       const WORKSPACE_FLOOR = 360;
+      // The activity bar is inside the column rather than beside it, so the
+      // floor is spent before the column can be asked to grow: a sidebar
+      // dragged out to 520px on a 900px window would otherwise leave the editor
+      // 380px, which is the width this floor exists to prevent.
+      const ACTIVITY_BAR_WIDTH = ${ACTIVITY_BAR_WIDTH};
 
       function widestSidebarThatFits() {
         return Math.max(
           ${SIDEBAR_MIN_WIDTH},
-          Math.min(${SIDEBAR_MAX_WIDTH}, window.innerWidth - WORKSPACE_FLOOR),
+          Math.min(
+            ${SIDEBAR_MAX_WIDTH},
+            window.innerWidth - WORKSPACE_FLOOR - ACTIVITY_BAR_WIDTH,
+          ),
         );
       }
 
@@ -1462,16 +2247,21 @@ const pageTemplate = `<!DOCTYPE html>
         renderFiles();
       }
 
-      async function openFile(path) {
+      async function openFile(path, line) {
         setSidebarOpen(false);
         const existing = tabs.findIndex((tab) => tab.path === path);
         if (existing !== -1) {
           selectTab(existing);
-          return;
+        } else {
+          const payload = await call('readFile', [path]);
+          if (payload === null) return;
+          openPayload(payload);
         }
-        const payload = await call('readFile', [path]);
-        if (payload === null) return;
-        openPayload(payload);
+        // A search result names a line, and the jump has to follow the open
+        // rather than lead it: the editor holds one document at a time, so a
+        // jump issued first would land on whatever was on screen and leave the
+        // line the user clicked in a file they were not looking at.
+        if (typeof line === 'number' && line > 0) editorApi?.goToLine(line);
       }
 
       /**
@@ -1615,17 +2405,36 @@ const pageTemplate = `<!DOCTYPE html>
         openVaultButton.title = open ? 'Open another vault' : 'Open a vault';
         openVaultButton.setAttribute('aria-label', open ? 'Open another vault' : 'Open a vault');
         // The list empties with the vault, so the row that filters and creates
-        // from it has nothing to act on and goes with it.
-        fileTools.hidden = !open;
+        // from it has nothing to act on and goes with it. Search and Recently
+        // changed hide their toolbars the same way; their panes stay, and say
+        // why they are empty.
+        viewTools.hidden = !open;
+        searchTools.hidden = !open;
         newFileButton.disabled = !open;
+        renderRecent();
         refreshMenu();
+      }
+
+      /**
+       * The files the listing is offering right now, with the Assets switch
+       * applied. Shared rather than written twice: the Explorer list and the
+       * Recently changed sort are the same set in a different order, and a
+       * second copy of the switch's rule would be one that could disagree.
+       */
+      function listedFiles() {
+        if (hasAssetFiles() && vault.showAssets) return files;
+        return files.filter((file) => file.scope !== 'asset');
+      }
+
+      function hasAssetFiles() {
+        return files.some((file) => file.scope === 'asset');
       }
 
       function renderFiles() {
         // The vault's own config says which files are the wiki's pages. Its
         // static files are one tick away by default, because a build output
         // folder beside 400 pages is not what a wiki looks like.
-        const hasAssets = files.some((file) => file.scope === 'asset');
+        const hasAssets = hasAssetFiles();
         // The switch reads the state rather than the checkbox, so the stored
         // preference survives a vault that has nothing to offer: the checkbox
         // is a mirror of the state, never the other way round, which is what
@@ -1633,9 +2442,7 @@ const pageTemplate = `<!DOCTYPE html>
         for (const view of listViews) {
           if (view.needsAssets) view.label.hidden = !hasAssets;
         }
-        const listed = hasAssets && vault.showAssets
-          ? files
-          : files.filter((file) => file.scope !== 'asset');
+        const listed = listedFiles();
         const query = filterInput.value.trim().toLowerCase();
         const visible = query
           ? listed.filter((file) => file.path.toLowerCase().indexOf(query) !== -1)
@@ -1714,8 +2521,934 @@ const pageTemplate = `<!DOCTYPE html>
         if (placeholderNoFile.hidden === false) {
           placeholderNoFileText.textContent = visible.length === 0
             ? 'This vault has no files yet.'
-            : 'Pick a file from the sidebar to open it in a tab.';
+            : 'Pick a file from the Explorer view to open it in a tab.';
         }
+        // The recently changed list draws the same rows, so the open and active
+        // rails on it follow the tab strip -- but only while it is the pane on
+        // screen, because rebuilding it on every keystroke of the Explorer's
+        // filter would be a list of thousands rebuilt to be looked at by nobody.
+        if (vault.sidebarView === 'recent') renderRecent();
+      }
+
+      /* Search and Recently changed: the other two panes */
+
+      /**
+       * One keystroke is not one search. The scan itself is a walk of a few
+       * hundred kilobytes and needs nothing around it, but a vault at the
+       * listing's 5000-file bound is a different matter, and firing a scan per
+       * character is the one thing that would make the window stutter. A short
+       * wait, and a token so a slow earlier answer cannot land on top of a
+       * newer one.
+       */
+      const SEARCH_DEBOUNCE_MS = 150;
+      let searchTimer;
+      let searchToken = 0;
+
+      function scheduleSearch() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
+      }
+
+      async function runSearch() {
+        const query = searchQuery.value.trim();
+        const token = (searchToken += 1);
+        if (vault.root === null) {
+          searchResults.textContent = '';
+          searchStatus.textContent = 'No vault open';
+          return;
+        }
+        if (query === '') {
+          searchResults.textContent = '';
+          searchStatus.textContent = 'Type to search every page';
+          return;
+        }
+        const hits = await call('search', [query]);
+        // A response that is no longer the question is discarded rather than
+        // drawn: rendering it would show results for a string the box no longer
+        // holds.
+        if (token !== searchToken) return;
+        renderSearch(Array.isArray(hits) ? hits : [], query);
+      }
+
+      function renderSearch(hits, query) {
+        searchResults.textContent = '';
+        const total = hits.reduce((sum, hit) => sum + hit.matches.length, 0);
+        searchStatus.textContent = total === 0
+          ? 'No page contains "' + query + '"'
+          : total + (total === 1 ? ' match in ' : ' matches in ') + hits.length +
+            (hits.length === 1 ? ' file' : ' files');
+        if (hits.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'search-empty';
+          empty.textContent = 'Searches the text of every file in this vault. ' +
+            'Names, not just pages, so a word in a .yml is found too.';
+          searchResults.appendChild(empty);
+          return;
+        }
+
+        for (const hit of hits) {
+          const group = document.createElement('div');
+          group.className = 'search-hit';
+          group.setAttribute('role', 'listitem');
+
+          const name = document.createElement('button');
+          name.type = 'button';
+          name.className = 'search-hit-name';
+          name.title = hit.path;
+          const label = document.createElement('span');
+          label.textContent = baseName(hit.path);
+          name.appendChild(label);
+          // Said rather than implied: a file holding more matches than the row
+          // carries must not look like that was all of them.
+          if (hit.truncated) {
+            const more = document.createElement('span');
+            more.className = 'search-hit-more';
+            more.textContent = 'more matches';
+            name.appendChild(more);
+          }
+          // The file's own row opens its first match, which is what a reader
+          // who clicked the page's name rather than a line wanted.
+          name.addEventListener('click', () => openFile(hit.path, hit.matches[0].line));
+          group.appendChild(name);
+
+          for (const match of hit.matches) {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'search-match';
+            row.title = hit.path + ':' + match.line;
+            const at = document.createElement('span');
+            at.className = 'search-line';
+            at.textContent = match.line;
+            const preview = document.createElement('span');
+            preview.className = 'search-preview';
+            preview.textContent = match.text;
+            row.appendChild(at);
+            row.appendChild(preview);
+            row.addEventListener('click', () => openFile(hit.path, match.line));
+            group.appendChild(row);
+          }
+          searchResults.appendChild(group);
+        }
+      }
+
+      /**
+       * The listing, newest write first, with when that was in words under each
+       * name. This is the question a wiki reader opens the app with -- what is
+       * new in here -- and it needed no operation behind it: the walk already
+       * records each file's modification time for exactly this.
+       *
+       * Both sections are redrawn on arrival rather than kept, and the history
+       * asks the backend for its days rather than bucketing the listing here:
+       * which day a write belongs to is decided once, in src/vault.ts, where it
+       * is tested, and a second copy of that rule in this string would be one
+       * more thing to keep in step.
+       */
+      function renderRecent() {
+        const recent = recentFiles();
+        if (vault.root === null) {
+          recentStatus.textContent = 'No vault open';
+        } else if (recent.length === 0) {
+          recentStatus.textContent = 'No files in this vault';
+        } else {
+          recentStatus.textContent = latestSentence(recent[0].modified);
+        }
+        changesCount.textContent = String(recent.length);
+        renderChanges(recent);
+        renderHistory();
+        // The ticks are git's answer rather than the listing's, and the working
+        // tree moves without the app hearing about it, so this is asked for
+        // every time the pane is drawn rather than once at launch.
+        refreshGitStatus();
+      }
+
+      /**
+       * The listing as this view wants it: newest write first.
+       *
+       * One function rather than a sort at each of the two places that need
+       * it, because the list is drawn twice — once by the pane, and once more
+       * by a status arriving — and a second sort is a second answer to which
+       * file is "most recent".
+       */
+      function recentFiles() {
+        return listedFiles().slice().sort((left, right) =>
+          right.modified - left.modified
+        );
+      }
+
+      /*
+       * What git has pending for this vault, and what the reader has ticked.
+       *
+       * gitPending is null until the first status lands, and null again
+       * whenever the answer is "this folder is not a repository" -- which is
+       * not the same as an empty map, because a vault outside a repository and
+       * a repository with nothing to commit are two different sentences and
+       * the pane has to be able to say which one it is.
+       *
+       * ticked is per session and never stored: it is a decision about files
+       * that are changing underneath it, and a stored tick would be a stored
+       * claim about a working tree that no longer exists.
+       */
+      let gitPending = null;
+      let ticked = new Set();
+      let gitPendingTotal = 0;
+      let gitNote = '';
+      let gitNoteIsError = false;
+      let committing = false;
+      let amending = false;
+      let pushing = false;
+      let gitToken = 0;
+      /*
+       * Where the branch stands against the remote, or null when there is no
+       * repository to ask. Every field inside it can be null for a different
+       * reason -- no branch, no upstream, no count -- and the box says which,
+       * because "nothing to push" and "we do not know whether there is anything
+       * to push" are not the same sentence and only the first one is an answer
+       * the button can act on.
+       */
+      let gitRemote = null;
+
+      /**
+       * Ask git what is pending, then redraw the list's ticks and the box.
+       *
+       * Token-guarded for the same reason the history is: opening the pane and
+       * a save landing together can put two statuses in flight, and the slower
+       * one would otherwise draw its answer under a list that has already moved
+       * on. Only the newest answer is allowed to write.
+       *
+       * A failure is a sentence in the box rather than an exception: a vault
+       * with no git installed, or a git that will not answer, is an ordinary
+       * state for a reader to be in, and the rest of the pane still works.
+       */
+      async function refreshGitStatus() {
+        const token = (gitToken += 1);
+        if (vault.root === null) {
+          gitPending = null;
+          gitPendingTotal = 0;
+          gitRemote = null;
+          ticked = new Set();
+          updateCommitBox();
+          return;
+        }
+        const result = await call('vaultStatus', []);
+        if (token !== gitToken) return;
+        if (result === null) {
+          // Null is also how a failed call comes back, so the distinction is
+          // made by whether anything was pending a moment ago: a folder that
+          // has never been a repository and a git that just failed both leave
+          // nothing pending, and the note carries the difference.
+          gitPending = null;
+          gitPendingTotal = 0;
+          gitRemote = null;
+          ticked = new Set();
+          // A null answer is either "not a repository", which needs no note
+          // because the state line already says it, or a call that failed,
+          // which does. The two are told apart by the message being there.
+          setGitNote(lastCallError, lastCallError !== '');
+          updateCommitBox();
+          return;
+        }
+        gitPending = new Map(
+          result.changes.map((change) => [change.path, change]),
+        );
+        gitPendingTotal = result.total;
+        gitRemote = result.remote;
+        // Ticks follow git: a path that no longer has a pending change cannot
+        // stay ticked, because committing it would be committing nothing. A tick
+        // the reader placed on a file that is still pending is left alone,
+        // because that is a decision they made and re-deciding it for them
+        // would be the app second-guessing a person on every refresh.
+        for (const path of [...ticked]) {
+          if (!gitPending.has(path)) ticked.delete(path);
+        }
+        // Everything git has pending starts ticked. Unticking is the decision
+        // and ticking is the absence of one, which is the right way round: the
+        // reader still has to write a message and press the button, and a box
+        // that has to be ticked once per file before anything can happen is a
+        // box nobody reaches. A tick the reader placed stays placed as long as
+        // the file is still pending, because that is a decision they made.
+        for (const path of gitPending.keys()) ticked.add(path);
+        updateCommitBox();
+        renderChanges(recentFiles());
+      }
+
+      /** What the box says about the repository, above the message line. */
+      function updateCommitBox() {
+        const paths = [...ticked];
+        // One readiness for all three verbs. They take the same ticked files
+        // and the same message, so a box that let one of them through while
+        // the others were disabled would be saying the gesture is not ready
+        // and then doing it anyway.
+        const ready = gitPending !== null &&
+          paths.length > 0 &&
+          commitMessage.value.trim() !== '' &&
+          !committing &&
+          !pushing;
+        commitButton.disabled = !ready;
+        // The count is on the button without the noun: at the default sidebar
+        // width "Commit 1 file" does not fit beside Amend, and what the
+        // overflow did to it was cut the word off mid-label. The state line
+        // above says what the files are, so the button can say how many.
+        commitButton.textContent = committing
+          ? 'Committing'
+          : paths.length > 0
+          ? 'Commit ' + paths.length
+          : 'Commit';
+        commitButton.title = ready
+          ? 'Commit ' + paths.length +
+            (paths.length === 1 ? ' ticked file' : ' ticked files') +
+            ' with this message'
+          : 'Write a message, and tick a file, to commit';
+        // An amend is a commit that replaces the last one, so it is ready on
+        // exactly the same terms -- except when the last commit is already
+        // somewhere else, where replacing it is not an edit anybody else can
+        // see. The backend refuses that too; this is the button admitting it
+        // before the reader writes a message they cannot use.
+        amendButton.disabled = !ready || (gitRemote !== null && gitRemote.published);
+        amendButton.textContent = amending ? 'Amending' : 'Amend';
+        amendButton.title = amendButton.disabled && gitRemote !== null &&
+            gitRemote.published
+          ? 'The last commit is already on ' + gitRemote.upstream +
+            ', so it cannot be replaced. Commit the file instead.'
+          : 'Replace the last commit with these files and this message';
+        pushButton.disabled = pushing ||
+          committing ||
+          gitRemote === null ||
+          gitRemote.upstream === null ||
+          !(gitRemote.ahead > 0);
+        pushButton.textContent = pushing
+          ? 'Pushing'
+          : gitRemote !== null && gitRemote.ahead > 0
+          ? 'Push ' + gitRemote.ahead
+          : 'Push';
+        pushButton.title = pushButton.disabled && gitRemote !== null &&
+            gitRemote.behind > 0
+          ? 'Pull first: the remote has ' + gitRemote.behind +
+            (gitRemote.behind === 1 ? ' commit' : ' commits') + ' this does not.'
+          : 'Push ' + (gitRemote === null ? '' : gitRemote.branch) +
+            ' to ' + (gitRemote === null ? 'its remote' : gitRemote.upstream);
+
+        // A vault with no repository has no commit, no amend and no branch,
+        // so the box says that once and drops the controls that could never
+        // act. They are hidden rather than disabled because a greyed-out
+        // Amend beside a greyed-out Commit is two controls offering nothing.
+        commitBox.classList.toggle(
+          'is-unavailable',
+          vault.root === null || gitPending === null,
+        );
+        // A detached HEAD is not a branch: there is nowhere for Push to go and
+        // no branch name to show, so the row goes rather than saying so in the
+        // space of two.
+        commitBox.classList.toggle(
+          'has-no-branch',
+          gitRemote !== null && gitRemote.branch === null,
+        );
+
+        if (vault.root === null) {
+          commitState.textContent = 'Open a vault to commit to a repository.';
+          commitState.classList.remove('is-error');
+        } else if (gitPending === null) {
+          commitState.textContent = 'Not a git repository, so there is nothing to commit.';
+          commitState.classList.remove('is-error');
+        } else if (gitPending.size === 0) {
+          commitState.textContent = 'Nothing pending. Every file is committed.';
+          commitState.classList.remove('is-error');
+        } else {
+          // Two numbers, because they answer two questions: what git has, and
+          // what this commit would take. "3 changed" with two of them unticked
+          // would be true and useless.
+          const shown = gitPending.size;
+          const counted = gitPendingTotal > shown
+            ? 'first ' + shown + ' of ' + gitPendingTotal + ' changed'
+            : (shown === 1 ? '1 changed' : shown + ' changed');
+          const chosen = paths.length === 0
+            ? 'none ticked'
+            : paths.length === shown && shown === gitPendingTotal
+            ? 'all ticked'
+            : paths.length + ' of ' + gitPendingTotal + ' ticked';
+          commitState.textContent = counted + ' · ' + chosen;
+          commitState.classList.remove('is-error');
+        }
+        remoteState.textContent = remoteLabel();
+        remoteState.title = remoteState.textContent;
+        remoteStatus.textContent = remoteStatusLine();
+        remoteStatus.classList.toggle('is-error', remoteIsError());
+        if (gitNote !== '') commitNote.textContent = gitNote;
+        else commitNote.textContent = '';
+        commitNote.classList.toggle('is-error', gitNoteIsError);
+      }
+
+      /**
+       * The branch and where it goes, in the fewest words that still name both.
+       *
+       * Reference rather than status, and truncated rather than wrapped: the
+       * full sentence this used to be ran to eight lines in a 98px column and
+       * cost the History section its place. The status line underneath carries
+       * what changes what the reader does, and the tooltip carries what the
+       * truncation cut.
+       */
+      function remoteLabel() {
+        if (vault.root === null || gitRemote === null) return '';
+        if (gitRemote.branch === null) return 'detached HEAD';
+        if (gitRemote.upstream === null) return gitRemote.branch;
+        return gitRemote.branch + ' → ' + gitRemote.upstream;
+      }
+
+      /**
+       * What about the branch the reader can act on, and nothing else.
+       *
+       * Fragments rather than sentences, because this is a line of 10.5px type
+       * beside two buttons and every word here costs a wrap. "Behind" in
+       * particular is not this app's problem to fix -- it cannot pull -- so it
+       * says what the next step is, because a line that says "1 behind" and
+       * leaves the reader guessing whether Push will work is the sort of thing
+       * that gets discovered by being refused.
+       *
+       * The order is the order of what stops the reader: behind stops a push,
+       * a missing upstream stops there being a push at all, and a published
+       * last commit stops an amend. What is merely true -- commits waiting to
+       * go -- is on the Push button already, so it is not repeated here, and
+       * the amend fragment says only the fact: the button above it is visibly
+       * off, and the reason in the tooltip is one line long.
+       */
+      function remoteStatusLine() {
+        if (vault.root === null || gitRemote === null) return '';
+        if (gitRemote.branch === null) return 'no branch to push from';
+        const parts = [];
+        if (gitRemote.behind > 0) {
+          parts.push(
+            gitRemote.behind === 1
+              ? '1 behind · pull first'
+              : gitRemote.behind + ' behind · pull first',
+          );
+        }
+        if (gitRemote.upstream === null) {
+          parts.push('never pushed · nowhere to push to');
+        }
+        if (gitRemote.published) {
+          parts.push('last commit already pushed');
+        }
+        return parts.join(' · ');
+      }
+
+      /**
+       * Whether the branch line is saying something went wrong.
+       *
+       * A detached HEAD and a missing upstream are both ordinary states, so
+       * neither is dressed up as a failure; only the case where git would not
+       * answer at all is, because that one is a real fault in the setup rather
+       * than a fact about the repository.
+       */
+      function remoteIsError() {
+        return gitRemote === null && gitPending !== null;
+      }
+
+      function setGitNote(text, isError) {
+        gitNote = text;
+        gitNoteIsError = isError;
+      }
+
+      /**
+       * Commit the ticked files with what the message line says.
+       *
+       * The paths go over rather than a "commit everything" flag, because that
+       * is the whole promise the checkbox makes: a commit from here can only
+       * contain what the reader ticked. The button is disabled until there is
+       * both a message and a tick, and the message is checked again in the
+       * backend, because a disabled button is a hint and not a boundary.
+       */
+      async function commitTicked() {
+        if (committing) return;
+        const paths = [...ticked];
+        const message = commitMessage.value.trim();
+        if (paths.length === 0 || message === '') return;
+        committing = true;
+        setGitNote('Committing ' + paths.length + ' files.', false);
+        updateCommitBox();
+        const result = await call('commitFiles', [message, paths]);
+        committing = false;
+        if (result === null) {
+          setGitNote(
+            lastCallError === ''
+              ? 'The commit did not go through.'
+              : lastCallError,
+            true,
+          );
+          updateCommitBox();
+          return;
+        }
+        // The message line is emptied on success and kept on failure. A commit
+        // that worked should not leave its own words under the cursor waiting
+        // to be committed again, and one that failed should leave them exactly
+        // where they were, because they are still the thing to fix.
+        commitMessage.value = '';
+        // "1 file" rather than "1 files": the button already counts properly,
+        // and a note that miscounts the commit it just made is the sort of
+        // thing a reader trusts about the next one.
+        const howMany = result.committed.length === 1
+          ? '1 file'
+          : result.committed.length + ' files';
+        setGitNote(
+          result.hash === ''
+            ? 'Committed ' + howMany + '.'
+            : 'Committed ' + howMany + ' as ' + result.hash + '.',
+          false,
+        );
+        ticked = new Set();
+        renderRecent();
+      }
+
+      /**
+       * Fold the ticked files into the last commit, with this message.
+       *
+       * The usual reason to amend is a subject line somebody would rather not
+       * live with, and the reader is standing in the pane with the files
+       * already ticked. Leaving to amend means leaving the app, and reaching
+       * for a terminal over a working tree this app has open, which is the
+       * arrangement where a message and a commit end up disagreeing.
+       *
+       * Refused when the last commit is already on the remote -- a disabled
+       * button above and a sentence from git's own history check behind it,
+       * because a button's disabled state is a hint and not a boundary. It
+       * replaces the previous message, which is the other thing worth knowing:
+       * the note says so after the fact rather than a confirmation first,
+       * since a second dialog in a pane this small is a worse place to put it.
+       */
+      async function amendTicked() {
+        if (committing || pushing) return;
+        const paths = [...ticked];
+        const message = commitMessage.value.trim();
+        if (paths.length === 0 || message === '') return;
+        committing = true;
+        amending = true;
+        setGitNote('Replacing the last commit with ' + paths.length + ' files.', false);
+        updateCommitBox();
+        const result = await call('amendFiles', [message, paths]);
+        committing = false;
+        amending = false;
+        if (result === null) {
+          setGitNote(
+            lastCallError === ''
+              ? 'The amend did not go through.'
+              : lastCallError,
+            true,
+          );
+          updateCommitBox();
+          return;
+        }
+        // Cleared for the same reason the commit box is: the words are in the
+        // commit now, and leaving them under the cursor invites a second
+        // commit with the same subject.
+        commitMessage.value = '';
+        setGitNote(
+          'Replaced the last commit' +
+            (result.hash === '' ? '.' : ' with ' + result.hash + '.'),
+          false,
+        );
+        ticked = new Set();
+        renderRecent();
+      }
+
+      /**
+       * Push this branch to the remote its configuration already names.
+       *
+       * No arguments go over, deliberately: the destination is read out of git
+       * on the other side rather than chosen here, so there is nothing for a
+       * mis-click to aim and nothing for anything else to aim either. There is
+       * no force either, which means a branch that is behind will be refused
+       * with git's reason rather than resolved -- the reader can pull, or say
+       * so, but this app does not throw somebody else's commit away.
+       *
+       * A second status is asked for afterwards rather than the counts being
+       * guessed at: what "up to date" means is git's answer, not ours.
+       */
+      async function pushTicked() {
+        if (committing || pushing) return;
+        if (gitRemote === null || gitRemote.upstream === null) return;
+        if (!(gitRemote.ahead > 0)) return;
+        const ahead = gitRemote.ahead;
+        pushing = true;
+        setGitNote(
+          'Pushing ' + ahead + (ahead === 1 ? ' commit' : ' commits') +
+            ' to ' + gitRemote.upstream + '.',
+          false,
+        );
+        updateCommitBox();
+        const result = await call('pushBranch', []);
+        pushing = false;
+        if (result === null) {
+          setGitNote(
+            lastCallError === '' ? 'The push did not go through.' : lastCallError,
+            true,
+          );
+          updateCommitBox();
+          return;
+        }
+        setGitNote('Pushed ' + result.branch + ' to ' + result.remote + '.', false);
+        // The counts in the branch line are the only thing that has changed and
+        // only git knows the new ones, so the status is asked for again rather
+        // than decremented here.
+        refreshGitStatus();
+      }
+
+      /**
+       * The changes section: the listing itself, newest write first.
+       *
+       * Split out of {@link renderRecent} only so the two sections can be
+       * redrawn without each other -- saving a file moves one list and leaves
+       * the other's days alone until the next arrival.
+       *
+       * The tick on each row is git's answer, not the listing's: a file the
+       * reader wrote thirty seconds ago may be identical to the one in the
+       * last commit, and offering to commit it would be offering to write an
+       * empty commit. So the list keeps saying what it says -- when the file
+       * was written -- and only the files git has something pending for get a
+       * box at all.
+       */
+      function renderChanges(recent) {
+        recentList.textContent = '';
+        if (recent.length === 0) {
+          const empty = document.createElement('li');
+          empty.className = 'file-empty';
+          empty.textContent = vault.root === null
+            ? 'Open a vault to see what changed in it.'
+            : 'This folder has no files yet.';
+          recentList.appendChild(empty);
+          return;
+        }
+
+        const openPaths = new Set(tabs.map((tab) => tab.path));
+        const active = activeTab();
+        for (const file of recent) {
+          const item = document.createElement('li');
+          // The tick is drawn only where git has something pending, rather than
+          // on every row. A box beside a file with no pending change is a box
+          // that cannot do anything, and a list of 135 of them buries the two
+          // that can. Its absence is the answer: that file has nothing to
+          // commit.
+          if (gitPending !== null && gitPending.has(file.path)) {
+            item.appendChild(changeTick(file.path));
+          }
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'file-button';
+          if (active !== null && active.path === file.path) {
+            button.classList.add('is-active');
+            button.setAttribute('aria-current', 'true');
+          } else if (openPaths.has(file.path)) {
+            button.classList.add('is-open');
+          }
+          if (file.scope === 'asset') button.classList.add('is-asset');
+          button.title = file.path;
+          const name = document.createElement('span');
+          name.className = 'file-name';
+          name.textContent = listedName(file);
+          const when = document.createElement('span');
+          when.className = 'file-time';
+          when.textContent = relativeTime(file.modified);
+          // The exact date in the title, because "3 days ago" is the answer to
+          // "how long ago" and not to "when".
+          when.title = new Date(file.modified).toLocaleString();
+          button.appendChild(name);
+          button.appendChild(when);
+          button.addEventListener('click', () => openFile(file.path));
+          item.appendChild(button);
+          recentList.appendChild(item);
+        }
+      }
+
+      /**
+       * The checkbox on one row of the changes list.
+       *
+       * A label wrapping a real input rather than a drawn box, so the row's
+       * name is the accessible name, the platform's own focus ring and
+       * high-contrast rendering come with it, and a click on the box does not
+       * have to be reimplemented. The label is what makes the whole 22px
+       * column a target, which is the difference between ticking a list and
+       * aiming at it.
+       */
+      function changeTick(path) {
+        const label = document.createElement('label');
+        label.className = 'change-check';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = ticked.has(path);
+        const change = gitPending.get(path);
+        // git's own two-letter code in the tooltip, so the tick says why it is
+        // there. The list is the vault's files and git's codes are a different
+        // vocabulary; this is where the two meet.
+        label.title = change.status.replace(/ /g, '') + ': ' + gitMeaning(change);
+        label.setAttribute(
+          'aria-label',
+          'Commit ' + path + ' (' + gitMeaning(change) + ')',
+        );
+        input.addEventListener('change', () => {
+          if (input.checked) ticked.add(path);
+          else ticked.delete(path);
+          updateCommitBox();
+        });
+        label.appendChild(input);
+        return label;
+      }
+
+      /** What one of git's status codes means, in the app's own words. */
+      function gitMeaning(change) {
+        const code = change.status.trim();
+        if (code === '??') return 'new file, not added yet';
+        if (code === 'A') return 'added to the index';
+        if (code === 'M') return 'edited';
+        if (code === 'D') return 'deleted';
+        if (code === 'R') return 'renamed';
+        if (code === 'C') return 'copied';
+        return change.staged ? 'staged' : 'edited on disk';
+      }
+
+      /**
+       * The other half of the split: the same writes as days, newest day
+       * first, on a rail.
+       *
+       * It is drawn from the vaultActivity operation, so the empty state has
+       * to be handled here as well as the full one: a closed vault, or a folder
+       * the walk could not date a single file in, is a history with nothing in
+       * it, and the section says which of the two it is rather than showing an
+       * empty rail.
+       */
+      async function renderHistory() {
+        const token = (historyToken += 1);
+        recentHistory.textContent = '';
+        const days = vault.root === null
+          ? []
+          : await call('vaultActivity', []);
+        // The scan is a round trip, so two arrivals can be in flight at once --
+        // switching to this view and the listing landing together. Without this
+        // the slower one lands on top of the newer one and the rail grows a
+        // second copy of every day, under a badge still counting one set.
+        if (token !== historyToken) return;
+        historyCount.textContent = String(days.length);
+        if (days.length === 0) {
+          const empty = document.createElement('li');
+          empty.className = 'file-empty';
+          empty.textContent = vault.root === null
+            ? 'Open a vault to see its history.'
+            : 'Nothing in this vault has a date yet.';
+          recentHistory.appendChild(empty);
+          return;
+        }
+        for (const day of days) {
+          const item = document.createElement('li');
+          item.className = 'activity-day';
+          const when = document.createElement('span');
+          when.className = 'activity-when';
+          when.textContent = dayLabel(day.day);
+          when.title = new Date(day.day).toLocaleDateString();
+          const files = document.createElement('ul');
+          files.className = 'activity-files';
+          for (const file of day.files) {
+            files.appendChild(historyRow(file));
+          }
+          item.appendChild(when);
+          item.appendChild(files);
+          recentHistory.appendChild(item);
+        }
+      }
+
+      /**
+       * One file in the history. The same open action as the changes list, and
+       * the same active and open marks, so a file reads the same in both
+       * sections -- otherwise the history would be a second, quieter truth
+       * about which document is on screen.
+       */
+      function historyRow(file) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'file-button';
+        const active = activeTab();
+        if (active !== null && active.path === file.path) {
+          button.classList.add('is-active');
+          button.setAttribute('aria-current', 'true');
+        } else if (tabs.some((tab) => tab.path === file.path)) {
+          button.classList.add('is-open');
+        }
+        if (file.scope === 'asset') button.classList.add('is-asset');
+        button.title = file.path;
+        const name = document.createElement('span');
+        name.className = 'file-name';
+        name.textContent = listedName(file);
+        button.appendChild(name);
+        button.addEventListener('click', () => openFile(file.path));
+        item.appendChild(button);
+        return item;
+      }
+
+      /**
+       * A day's name, in the words a reader would use for it.
+       *
+       * Today and yesterday are named rather than dated, because a history's
+       * first two entries are the ones being read and "Today" is the answer to
+       * "is any of this mine?". Past that it is the weekday and the date, and
+       * past a week the weekday stops earning its space.
+       */
+      function dayLabel(day) {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+          .getTime();
+        const days = Math.round((today - day) / 86400000);
+        if (days <= 0) return 'Today';
+        if (days === 1) return 'Yesterday';
+        const date = new Date(day);
+        if (days < 7) {
+          return date.toLocaleDateString(undefined, { weekday: 'long' });
+        }
+        return date.toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric',
+        });
+      }
+
+      /**
+       * Move the divider between the two sections, and fold or open either of
+       * them.
+       *
+       * The divider keeps the sidebar resizer's contract rather than inventing
+       * one: a pointer drag that holds capture for its length, arrows to nudge
+       * it, Shift for a bigger nudge, Home and End for the ends, and a
+       * double-click to even the two out. It is a separator, so that is what it
+       * says it is.
+       *
+       * The split is a ratio rather than a height, because the pane's height
+       * belongs to the window: a height remembered from a tall window would be
+       * most of a short one. And it is not remembered at all -- a split the
+       * reader set once for one session is not a preference, and the one
+       * setting it would add is a setting with nothing to be right about.
+       */
+      function wireSplit() {
+        /** The two sections, as a share of the pane, clamped to what fits. */
+        function setSplit(ratio, persist) {
+          const pane = recentSplit.getBoundingClientRect().height;
+          // A pane too short to divide leaves the ratio alone rather than
+          // setting a negative height, which is how a split ends up with one
+          // section pushed off the top of the window.
+          if (pane < MIN_SPLIT_PANE_HEIGHT * 2) return;
+          vault.splitRatio = applySplit(ratio);
+          // Stored once the gesture is over, not once per pointermove: a drag
+          // across a tall pane is hundreds of moves, and the setting is a
+          // decision the reader makes by letting go.
+          if (persist) call('setSplitRatio', [vault.splitRatio]);
+        }
+
+        /** Where the divider sits now, as the same share setSplit takes. */
+        function splitRatio() {
+          const top = changesPane.getBoundingClientRect().height;
+          const bottom = historyPane.getBoundingClientRect().height;
+          const total = top + bottom;
+          return total === 0 ? ${DEFAULT_SPLIT_RATIO} : top / total;
+        }
+
+        for (const section of splitSections) {
+          section.toggle.addEventListener('click', () =>
+            toggleSection(section)
+          );
+        }
+
+        let dragging = false;
+        function endDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          recentDivider.classList.remove('is-dragging');
+          if (recentDivider.hasPointerCapture(event.pointerId)) {
+            recentDivider.releasePointerCapture(event.pointerId);
+          }
+          setSplit(splitRatio(), true);
+        }
+
+        recentDivider.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          dragging = true;
+          recentDivider.focus();
+          // The drag would otherwise select the text it passes over.
+          event.preventDefault();
+          recentDivider.classList.add('is-dragging');
+          try {
+            recentDivider.setPointerCapture(event.pointerId);
+          } catch {
+            // A synthetic pointer has no active id to capture. The drag still
+            // works while the pointer is over the handle, which is what keeps
+            // this driveable from a test or a script.
+          }
+        });
+
+        recentDivider.addEventListener('pointermove', (event) => {
+          if (!dragging) return;
+          const top = recentSplit.getBoundingClientRect().top;
+          const height = recentSplit.getBoundingClientRect().height;
+          setSplit((event.clientY - top) / height);
+        });
+
+        recentDivider.addEventListener('pointerup', endDrag);
+        recentDivider.addEventListener('pointercancel', endDrag);
+
+        recentDivider.addEventListener('dblclick', () => {
+          setSplit(${DEFAULT_SPLIT_RATIO}, true);
+        });
+
+        recentDivider.addEventListener('keydown', (event) => {
+          const step = event.shiftKey ? 0.1 : 0.02;
+          if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            setSplit(
+              splitRatio() + (event.key === 'ArrowDown' ? step : -step),
+              true,
+            );
+          } else if (event.key === 'Home' || event.key === 'End') {
+            event.preventDefault();
+            setSplit(
+              event.key === 'Home' ? ${MIN_SPLIT_RATIO} : ${MAX_SPLIT_RATIO},
+              true,
+            );
+          }
+        });
+      }
+
+      /**
+       * Fold a section to its header, or open it again.
+       *
+       * The badge stays put when the section is folded, which is the whole
+       * point of having one: a collapsed history still says how many days are
+       * in it, so folding it is a way of reading the list and not a way of
+       * losing it.
+       */
+      function toggleSection(section) {
+        const folded = section.toggle.getAttribute('aria-expanded') === 'true';
+        section.toggle.setAttribute('aria-expanded', String(!folded));
+        section.pane.classList.toggle('is-collapsed', folded);
+        recentDivider.hidden = splitSections.every((entry) =>
+          entry.pane.classList.contains('is-collapsed')
+        );
+      }
+
+      function latestSentence(modified) {
+        if (!modified) return 'No dates in this vault';
+        return 'Latest: ' + relativeTime(modified);
+      }
+
+      function relativeTime(stamp) {
+        // A file system that will not say when is not a reason to print NaN.
+        if (!stamp) return 'Unknown date';
+        const seconds = Math.round((Date.now() - stamp) / 1000);
+        if (seconds < 60) return 'Just now';
+        const minutes = Math.round(seconds / 60);
+        if (minutes < 60) return counted(minutes, 'minute') + ' ago';
+        const hours = Math.round(minutes / 60);
+        if (hours < 24) return counted(hours, 'hour') + ' ago';
+        const days = Math.round(hours / 24);
+        if (days < 31) return counted(days, 'day') + ' ago';
+        // Past a month "29 days ago" stops being useful, so the date itself
+        // takes over and this is no longer a guess.
+        return new Date(stamp).toLocaleDateString();
+      }
+
+      function counted(amount, noun) {
+        return amount + ' ' + noun + (amount === 1 ? '' : 's');
       }
 
       function showEditor() {
@@ -1738,12 +3471,20 @@ const pageTemplate = `<!DOCTYPE html>
         if (vault.root === null) {
           files = [];
           renderFiles();
+          // The matches were about the vault that just closed. Left on screen
+          // they would be rows that open a folder this app no longer has open.
+          runSearch();
           return;
         }
         const result = await call('listFiles');
         if (result === null) return;
         files = result;
         renderFiles();
+        // The same for every other listing: a new file, a reloaded vault, a
+        // vault that was edited on disk. A search result names a line in a
+        // particular version of a file, so keeping the old answers across any
+        // of those is a result pointing at text that has moved.
+        runSearch();
       }
 
       async function saveFile() {
@@ -1971,6 +3712,7 @@ const pageTemplate = `<!DOCTYPE html>
         vault = state;
         setTheme(state.theme, false);
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
+        setSidebarView(state.sidebarView, false);
         // Every switch, from one loop and one rule. The stored state is already
         // a boolean for all three; anything else means a caller sent a partial
         // state, and the switch's own default is the honest answer for that.
@@ -1979,6 +3721,10 @@ const pageTemplate = `<!DOCTYPE html>
           view.input.checked = typeof stored === 'boolean' ? stored : view.default;
         }
         applySidebarWidth();
+        // The split comes back with the state, so the divider is where the
+        // reader left it before the first paint of this session rather than
+        // snapping to the default under their hands.
+        vault.splitRatio = applySplit(vault.splitRatio);
         renderVault();
         renderFiles();
         showPlaceholder();
@@ -2310,6 +4056,18 @@ const pageTemplate = `<!DOCTYPE html>
         // one keystroke apart from each other on purpose.
         { id: 'replace', group: 'File', label: 'Replace in page', keys: 'Ctrl+H', canRun: () => activeTab() !== null, run: () => findInPage(true) },
         { id: 'toggle-sidebar', group: 'View', label: 'Toggle vault files', keys: 'Ctrl+B', canRun: () => true, run: toggleSidebar },
+        // One menu item per view, from the same table the bar draws, so the two
+        // surfaces cannot offer different views -- and a check mark rather than
+        // a second, separate "which view" switch to keep in step with it.
+        ...PANES.map((view) => ({
+          id: 'view-' + view.key,
+          group: 'View',
+          label: view.label,
+          keys: '',
+          canRun: () => true,
+          isActive: () => vault.sidebarView === view.key,
+          run: () => setSidebarView(view.key, true),
+        })),
         // Three choices rather than three commands, so each one reports whether
         // it is the active one and the menu can show that.
         { id: 'theme-system', group: 'Appearance', label: 'Match the system', keys: '', canRun: () => true, isActive: () => vault.theme === 'system', run: () => setTheme('system', true) },
@@ -2566,6 +4324,8 @@ const pageTemplate = `<!DOCTYPE html>
         for (const toggle of sidebarToggles) {
           toggle.addEventListener('click', toggleSidebar);
         }
+        wireActivityBar();
+        wireSplit();
         // The two layouts keep different states for the same control — a
         // collapsed column on a wide window, a closed drawer on a narrow one —
         // so crossing the breakpoint has to re-derive the labels. Without this
@@ -2594,9 +4354,35 @@ const pageTemplate = `<!DOCTYPE html>
         });
         newFileButton.addEventListener('click', createFile);
         emptyNewFileButton.addEventListener('click', createFile);
+        commitMessage.addEventListener('input', updateCommitBox);
+        // Enter commits from the message line, for the same reason Enter saves
+        // in the editor: the reader has finished writing it, and the button is
+        // the only other thing to reach for. The button's own disabled state is
+        // the check, so a line with nothing ticked and Enter does nothing
+        // rather than committing something unintended. It commits rather than
+        // amends, and that is the safe way round: a commit somebody did not
+        // mean is a second commit, an amend somebody did not mean is a commit
+        // that no longer exists.
+        commitMessage.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          commitTicked();
+        });
+        commitButton.addEventListener('click', commitTicked);
+        amendButton.addEventListener('click', amendTicked);
+        pushButton.addEventListener('click', pushTicked);
         saveButton.addEventListener('click', saveFile);
         reloadButton.addEventListener('click', reloadFile);
         filterInput.addEventListener('input', renderFiles);
+        searchQuery.addEventListener('input', scheduleSearch);
+        // Enter searches now rather than waiting out the debounce, which is the
+        // one case where the delay is the user's own.
+        searchQuery.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          clearTimeout(searchTimer);
+          runSearch();
+        });
         // The setting lives in the sidebar, next to the list it draws, as well
         // as the Appearance menu. Both controls drive the same state, so this
         // syncs the checkbox and refreshes the menu's own check mark.
@@ -2683,6 +4469,11 @@ const pageTemplate = `<!DOCTYPE html>
       }
 
       if (!window.bindings) el('transportBadge').hidden = false;
+      // The panes ship hidden and the bar's buttons ship unchecked, so the
+      // stored view has to be applied before anything is on screen rather than
+      // when the state arrives. If that call then fails, this is the answer
+      // that leaves a usable window rather than an empty one.
+      setSidebarView(vault.sidebarView, false);
       wire();
       init();
     })();

@@ -2,6 +2,8 @@ import { basename } from "node:path";
 
 import {
   clampSidebarWidth,
+  clampSplitRatio,
+  coerceSidebarView,
   coerceTheme,
   homeDirectory,
   LIST_VIEW_DEFAULTS,
@@ -12,17 +14,31 @@ import {
   listViewValue,
   loadConfig,
   setterFor,
+  type SidebarView,
   type ThemePreference,
   updateConfig,
   withRecentVault,
 } from "./config.ts";
 import {
+  amendFiles,
+  commitFiles,
+  type CommitResult,
+  type GitStatus,
+  gitStatus,
+  pushBranch,
+  type PushResult,
+} from "./git.ts";
+import {
+  activityByDay,
+  type ActivityDay,
   assertVaultRoot,
   browseDirectory,
   createVaultFile,
   type DirectoryListing,
   listVaultFiles,
   readVaultFile,
+  type SearchHit,
+  searchVaultFiles,
   VaultError,
   type VaultFile,
   type VaultFileContents,
@@ -40,6 +56,10 @@ export interface VaultStateBase {
   sidebarCollapsed: boolean;
   /** Width of the file sidebar column in CSS pixels. */
   sidebarWidth: number;
+  /** Which sidebar view was showing, from the activity bar's list. */
+  sidebarView: SidebarView;
+  /** The changes pane's share of the changes/history split, 0.2 to 0.8. */
+  splitRatio: number;
   /** Light/dark appearance the user last chose, `system` if they never did. */
   theme: ThemePreference;
 }
@@ -72,12 +92,70 @@ export type WikiBindings =
     createFile(path: string, content?: string): Promise<VaultFileContents>;
     /** List subfolders of `path` for the in-app vault picker. */
     browse(path: string | null): Promise<DirectoryListing>;
+    /**
+     * Every line of every listed file containing `query`, grouped by file.
+     *
+     * The whole of the search backend, and one operation rather than several
+     * because there is nothing to keep between calls: the listing is already
+     * loaded, so a search is a scan that returns matches.
+     */
+    search(query: string): Promise<SearchHit[]>;
+    /**
+     * The listing as a history: writes grouped under the day they happened.
+     *
+     * Its own operation because the day a write belongs to is decided once, in
+     * src/vault.ts, and the page is a string that cannot import it. Reading it
+     * here is the same trade the search view makes: the pane asks for what it
+     * draws rather than re-deriving it from a listing it happens to hold.
+     */
+    vaultActivity(): Promise<ActivityDay[]>;
+    /**
+     * What the vault's repository has pending, or null when it is not in one.
+     *
+     * Null is an answer rather than a failure: most vaults are not
+     * repositories, and the pane has to be able to say "not a repository" and
+     * "nothing pending" as two different things.
+     */
+    vaultStatus(): Promise<GitStatus | null>;
+    /**
+     * Commit the given vault-relative files with the given message.
+     *
+     * Takes the paths rather than trusting the index, so a commit from the
+     * changes pane can only ever contain what the reader ticked.
+     */
+    commitFiles(message: string, paths: string[]): Promise<CommitResult>;
+    /**
+     * Fold the given files into the last commit, replacing it.
+     *
+     * The same path rule as commitFiles, plus git's own: a last commit the
+     * remote already has is refused rather than replaced, because replacing it
+     * is not an edit anyone else can see.
+     */
+    amendFiles(message: string, paths: string[]): Promise<CommitResult>;
+    /**
+     * Push the vault's branch to the remote its configuration already names.
+     *
+     * No arguments on purpose. The destination is read out of git rather than
+     * taken from the page, so there is nothing for a reader to aim wrong and
+     * nothing for anything else to aim either.
+     */
+    pushBranch(): Promise<PushResult>;
     openVault(path: string): Promise<VaultState>;
     closeVault(): Promise<VaultState>;
     /** Remember whether the sidebar is collapsed, so it survives a restart. */
     setSidebarCollapsed(collapsed: boolean): Promise<VaultState>;
     /** Remember the sidebar column's width, so it survives a restart. */
     setSidebarWidth(width: number): Promise<VaultState>;
+    /** Remember which view the sidebar is showing, so it survives a restart. */
+    setSidebarView(view: string): Promise<VaultState>;
+    /**
+     * Remember where the changes/history split sits, so it survives a restart.
+     *
+     * Clamped for the same reason the width is: the page is a caller like any
+     * other, and a stored ratio outside the ends the divider can be dragged to
+     * is a split the user could not have put there and could not undo.
+     */
+    setSplitRatio(ratio: number): Promise<VaultState>;
     /** Remember the appearance, so it survives a restart. */
     setTheme(theme: string): Promise<VaultState>;
   }
@@ -122,6 +200,20 @@ export function createVaultApi(): VaultApi {
     browse: guard(async (path: string | null) =>
       await browseDirectory(path ?? homeDirectory())
     ),
+    search: guard(async (query: string) =>
+      await searchVaultFiles(await requireVaultRoot(), query)
+    ),
+    vaultActivity: guard(async () =>
+      activityByDay(await listVaultFiles(await requireVaultRoot()))
+    ),
+    vaultStatus: guard(async () => await gitStatus(await requireVaultRoot())),
+    commitFiles: guard(async (message: string, paths: string[]) =>
+      await commitFiles(await requireVaultRoot(), message, paths)
+    ),
+    amendFiles: guard(async (message: string, paths: string[]) =>
+      await amendFiles(await requireVaultRoot(), message, paths)
+    ),
+    pushBranch: guard(async () => await pushBranch(await requireVaultRoot())),
     openVault: guard(openVault),
     closeVault: guard(async () => {
       await updateConfig({ vaultRoot: null });
@@ -136,6 +228,17 @@ export function createVaultApi(): VaultApi {
       // Clamped here as well as in the webview: this is a trust boundary, and
       // a stored width outside the bounds would distort every future launch.
       await updateConfig({ sidebarWidth: clampSidebarWidth(width) });
+      return await readState();
+    }),
+    setSidebarView: guard(async (view: string) => {
+      // Coerced for the same reason the theme is: whatever the page sends
+      // outlives this session, and a view the page cannot draw would leave the
+      // sidebar showing nothing at all.
+      await updateConfig({ sidebarView: coerceSidebarView(view) });
+      return await readState();
+    }),
+    setSplitRatio: guard(async (ratio: number) => {
+      await updateConfig({ splitRatio: clampSplitRatio(Number(ratio)) });
       return await readState();
     }),
     setTheme: guard(async (theme: string) => {
@@ -223,6 +326,8 @@ async function readState(): Promise<VaultState> {
     sidebarCollapsed: config.sidebarCollapsed,
     ...listViewsOf(config),
     sidebarWidth: config.sidebarWidth,
+    sidebarView: config.sidebarView,
+    splitRatio: config.splitRatio,
     theme: config.theme,
   };
   if (!config.vaultRoot) {

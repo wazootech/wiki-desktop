@@ -1,22 +1,34 @@
 import { join } from "node:path";
 
 import {
+  ACTIVITY_BAR_WIDTH,
   clampSidebarWidth,
+  clampSplitRatio,
+  coerceSidebarView,
   coerceTheme,
   configDir,
   DEFAULT_CONFIG,
+  DEFAULT_SIDEBAR_VIEW,
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_SPLIT_RATIO,
   DEFAULT_THEME,
   homeDirectory,
   LIST_VIEW_DEFAULTS,
   type ListViewKey,
   listViewValue,
   loadConfig,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  SIDEBAR_VIEWS,
   updateConfig,
   withRecentVault,
 } from "./config.ts";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) {
@@ -69,6 +81,41 @@ Deno.test("clampSidebarWidth keeps a stored width inside the layout's range", ()
   );
 });
 
+Deno.test("clampSplitRatio keeps a stored share inside the divider's range", () => {
+  // The same argument as the width, for the same reason: the stored ratio
+  // outlives the session that produced it, and a share outside the ends the
+  // divider is drawn with is a split the user could not have dragged into place
+  // and could not drag back out of.
+  assertEqual(
+    clampSplitRatio(0.35),
+    0.35,
+    "a share in range is kept, and not rounded, because the drag was",
+  );
+  assertEqual(
+    clampSplitRatio(0),
+    MIN_SPLIT_RATIO,
+    "a split with nothing above the divider is raised to the bottom end",
+  );
+  assertEqual(
+    clampSplitRatio(1),
+    MAX_SPLIT_RATIO,
+    "and one with nothing below it is lowered to the top end",
+  );
+  assertEqual(
+    clampSplitRatio(Number.NaN),
+    DEFAULT_SPLIT_RATIO,
+    "a missing or corrupt share falls back to the default",
+  );
+  // The bounds are the divider's, so a setting file edited by hand cannot
+  // widen them: a stored 0.9 is a split whose history pane is a rule and a
+  // header, which is not a split.
+  assertEqual(
+    clampSplitRatio(MAX_SPLIT_RATIO + 0.1),
+    MAX_SPLIT_RATIO,
+    "a share past the top end is pulled back to it",
+  );
+});
+
 Deno.test("coerceTheme only ever yields a preference the page can apply", () => {
   // The stored value outlives the window that wrote it, and this one is baked
   // into the document before its first paint: an unrecognised value has to mean
@@ -87,6 +134,68 @@ Deno.test("coerceTheme only ever yields a preference the page can apply", () => 
     coerceTheme({ theme: "dark" }),
     "system",
     "an object falls back rather than being read as its contents",
+  );
+});
+
+Deno.test("the sidebar's narrowest column still holds a usable view", () => {
+  // The minimum used to be the width of a file list. The column now holds the
+  // activity bar as well, so leaving the number alone would have quietly halved
+  // what the user gets at the bottom of the drag: 180px of column, 48px of bar,
+  // and 131px of list. The constant is the narrowest *usable* column, so it has
+  // to have moved with what the column holds.
+  assert(
+    SIDEBAR_MIN_WIDTH - ACTIVITY_BAR_WIDTH >= 180,
+    `the minimum still buys at least the 180px of view the old minimum was sized for (it buys ${
+      SIDEBAR_MIN_WIDTH - ACTIVITY_BAR_WIDTH
+    }px)`,
+  );
+  assert(
+    SIDEBAR_MIN_WIDTH > ACTIVITY_BAR_WIDTH,
+    "and the column is wider than the bar alone",
+  );
+});
+
+Deno.test("coerceSidebarView only ever yields a view the sidebar can show", () => {
+  // The same trust boundary as the appearance: a settings file written by a
+  // build that had a view this one has not heard of must not be able to leave
+  // the sidebar empty, because a view is chosen by hiding every other pane.
+  assertEqual(
+    DEFAULT_SIDEBAR_VIEW,
+    "explorer",
+    "the file list is the default view",
+  );
+  assertEqual(
+    DEFAULT_CONFIG.sidebarView,
+    DEFAULT_SIDEBAR_VIEW,
+    "a fresh config opens on the file list",
+  );
+  for (const view of SIDEBAR_VIEWS) {
+    assertEqual(coerceSidebarView(view), view, `${view} is kept`);
+  }
+  assertEqual(coerceSidebarView("Explorer"), "explorer", "case matters");
+  assertEqual(
+    coerceSidebarView("source-control"),
+    "explorer",
+    "an unknown view falls back",
+  );
+  assertEqual(coerceSidebarView(""), "explorer", "an empty string falls back");
+  assertEqual(
+    coerceSidebarView(null),
+    "explorer",
+    "a missing value falls back",
+  );
+  assertEqual(coerceSidebarView(42), "explorer", "a number falls back");
+  assertEqual(
+    coerceSidebarView({ view: "search" }),
+    "explorer",
+    "an object falls back rather than being read as its contents",
+  );
+  // A view removed from the table must not linger in a stored file, or the
+  // next read would coerce it back to the file list and quietly disagree with
+  // whatever wrote it.
+  assert(
+    !SIDEBAR_VIEWS.includes("source-control" as (typeof SIDEBAR_VIEWS)[number]),
+    "the removed view is not in the table",
   );
 });
 
@@ -140,6 +249,35 @@ async function writeConfigFile(home: string, value: unknown): Promise<void> {
     typeof value === "string" ? value : JSON.stringify(value),
   );
 }
+
+Deno.test("the selected view round-trips through the settings file", async () => {
+  // The point of storing it: the user comes back to the view they left, the
+  // way the width and the collapsed flag already do. A view that reset to the
+  // file list on every launch would make the second one of these two views
+  // something nobody ever saw twice.
+  await withScratchHome(async (home) => {
+    const stored = await updateConfig({ sidebarView: "search" });
+    assertEqual(stored.sidebarView, "search", "the patch is applied");
+    assertEqual(
+      (await loadConfig()).sidebarView,
+      "search",
+      "and it is there for the next launch",
+    );
+    assertEqual(
+      (await updateConfig({ sidebarView: "recent" })).sidebarView,
+      "recent",
+      "a second switch replaces it rather than accumulating",
+    );
+    // And a value no build can honour is corrected on the way in, not on the
+    // way out, so the state the page is handed is always drawable.
+    await writeConfigFile(home, { sidebarView: "source-control" });
+    assertEqual(
+      (await loadConfig()).sidebarView,
+      DEFAULT_SIDEBAR_VIEW,
+      "a view this build does not have is read as the file list",
+    );
+  });
+});
 
 Deno.test("loadConfig reads what is on disk, not a snapshot from startup", async () => {
   // The desktop window and the dev server are separate processes. A cached

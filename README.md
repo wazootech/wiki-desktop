@@ -28,7 +28,7 @@ deno task check        # type-check (uses --desktop for the Deno.BrowserWindow t
 deno task test         # unit tests
 deno task check:appearance  # drives both palettes in the real desktop webview
 
-WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env
+WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env --allow-run=git
                        # adds one opt-in test: every page in that vault has to
                        # survive read → editor → save with its bytes intact
 
@@ -103,11 +103,11 @@ pre-paint path here is the real one, not a model of it.
 | File                      | Role                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.ts`             | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.                                                                                                                                                                                                          |
-| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — sidebar file list, tab strip, editor, vault picker.                                                                                                                                                                                                                                      |
+| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — the activity bar and its panes (Explorer, Search, Recently changed), tab strip, editor, vault picker.                                                                                                                                                                                    |
 | `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                                                                                                                                                                                                                    |
-| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation. Every path from the webview passes through here.                                                                                                                                                                                                                   |
+| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation and the whole-text search behind the Search view. Every path from the webview passes through here.                                                                                                                                                                  |
 | `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.                                                                                                                                                                                                     |
-| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state and width, appearance, and the file list's three switches as one table).                                                                                                                                                         |
+| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state, width and selected view, appearance, and the file list's three switches as one table).                                                                                                                                          |
 | `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
 | `src/editor.ts`           | The editor's document model, its find panel, and its theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                             |
 | `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag, and the formatter as `window.WikiFormat` beside it — the page is a classic script with no import to reach either by.                                                                                                                                |
@@ -121,6 +121,110 @@ pre-paint path here is the real one, not a model of it.
 - **Vault** — a folder the user picks. Its absolute path is stored in the app
   config, so the app reopens where you left off. Nothing is written except files
   you explicitly save.
+- **The sidebar switches between views** — a 48px activity bar down the left
+  chooses what the pane beside it shows, and each pane brings its own toolbar,
+  listing and footer. The resizer, the drawer behaviour and the brand stay with
+  the sidebar, and the selected view is stored beside the width and the
+  collapsed flag. Two consequences worth knowing: the bar is inside the
+  sidebar's width, so the minimum column had to grow by the bar's width and the
+  width clamp subtracts it before the editor's floor; and at drawer width the
+  bar is the only way to change view while the drawer is up, which is fine
+  because its buttons are inside the drawer and so never hit the dismissing
+  scrim.
+- **Three views, and the third was chosen over source control** — Explorer (the
+  file list, unchanged), Search, and Recently changed. Search is one new
+  operation, `searchVaultFiles`, that walks the listing, reads the text files
+  and returns matches grouped by file; a NUL in the opening bytes means "not
+  text" and skips the file, and the `MAX_EDITABLE_BYTES` and `MAX_VAULT_FILES`
+  bounds already on the walk are what keep it to milliseconds on a wiki-sized
+  vault. Recently changed is a sort of the listing by modification time, so it
+  needed no operation at all — the walk now records each file's time. A fourth
+  view for source control was considered and left out: it would have to be a
+  second inventory of the vault's files, and a reader who wants commits wants a
+  commit log, which is the thing this app still does not have. What the changes
+  view does instead is let a reader commit, which is the half of source control
+  a wiki editor actually reaches for.
+- **The changes view can commit, and the tick on a row is git's to give** — the
+  list says when a file was written, which the walk already knows, and git says
+  whether there is anything to commit about it, which only git knows. So a row
+  gets a checkbox only where git reports a pending change, and a checkbox beside
+  a file with nothing pending would be one that cannot do anything. Each pending
+  file starts ticked, because unticking is the decision and ticking is the
+  absence of one; the reader still writes a message and presses the button. The
+  paths go to the backend rather than a "commit everything" flag, so a commit
+  from the pane can only ever contain what was ticked, and a file somebody else
+  staged in another window is left where it was.
+- **The box can amend and push, and refuses to force either idea** — amend is
+  the same gesture as commit with a different verb, so it takes the same ticked
+  paths and the same message line and sits beside the Commit button rather than
+  on a row of its own. The usual reason to amend is a subject line somebody
+  would rather not live with, and the reader is already standing there with the
+  files ticked; leaving to amend means leaving the app, and reaching for a
+  terminal over a working tree this app has open. It is refused for exactly one
+  thing: a last commit the remote already has, because replacing that is not an
+  edit anybody else can see, it is a divergence. The button greys out and the
+  branch line says which commit it is; the backend refuses it again, because a
+  disabled button is a hint and not a boundary. A commit that is not pushed yet
+  is squarely amendable, which is the case that is actually common. Push takes
+  **no arguments at all**. The destination is read out of `branch.<name>.remote`
+  and `branch.<name>.merge` on the other side rather than chosen by the page, so
+  there is nothing for a mis-click to aim and nothing for anything else to aim
+  either; a branch with no upstream is refused rather than guessed at, because a
+  wiki's repository is as likely to be a colleague's personal one as anything
+  else. There is no `--force`, no `--all` and no refspec anybody typed, so a
+  branch that is behind is refused with git's own reason rather than resolved —
+  the pane says "1 commit behind, so pull before pushing" and names the step it
+  cannot take itself. What "up to date" means is git's answer, so the status is
+  asked for again after a push rather than decremented in the page.
+- **`GitStatus` carries where the branch stands, so the box need not guess** —
+  `remoteInfo` asks git for the branch, its upstream, the two counts and whether
+  HEAD is already an ancestor of the upstream, which is the question behind the
+  amend refusal. Every field can be null for a different reason — a detached
+  HEAD, a branch never pushed, an upstream this clone has not fetched — and the
+  pane says which, because "nothing to push" and "we cannot tell whether there
+  is anything to push" are different sentences and only the first is an answer
+  the button can act on. It rides along with the status rather than being its
+  own operation, because the two go out of date together.
+- **`src/git.ts` shells out to git, and is the only file that does** —
+  reimplementing the index, the packs and the merge machinery is not a thing a
+  wiki editor should carry, so the app asks git instead. The tasks therefore
+  grant `--allow-run=git` and nothing else, which is a narrower permission than
+  the `--allow-run` this app was built without: a test asserts the binding layer
+  itself launches no process, and git is the one caller of `Deno.Command` in the
+  tree. `git` is also the app's first dependency on a program being _installed_,
+  so "git is not on the PATH" and "this folder is not a repository" are two
+  different sentences and neither stops the rest of the app — the second is the
+  normal state of most vaults. Two things about the arrangement are deliberate
+  rather than incidental. Every path is checked by `normalizeVaultPath` before
+  it is used and lands after a `--`, so a wiki file called `-n.md` is a file and
+  a file whose name is a shell command is a name. And the commit uses the
+  _pathspec_ form of `git commit`, not `git add` followed by a bare commit: it
+  builds the commit from HEAD plus the named files and leaves the index alone,
+  so a commit from here cannot sweep up something another window staged, and
+  cannot be surprised by the order the two operations happened in.
+- **The changes view is two panes, because a source control panel is two
+  things** — a source control panel answers "what changed" and "what changed
+  when" at once, and one pane can only be one of those. So the view is split:
+  **Changes** (the listing, newest write first, with the time under each name)
+  above a draggable divider, and **History** (the same writes as days, newest
+  day first, on a rail) below it. Each header folds its own section and carries
+  its own count, so a folded section is still sizeable without being opened, and
+  the divider keeps the sidebar resizer's contract — arrows to nudge, Shift for
+  a bigger nudge, Home and End for the ends, double-click to even them out. The
+  split is a ratio rather than a height, because the pane's height belongs to
+  the window, and it is remembered: the share is stored in the app config beside
+  the sidebar width and put back before the first paint of the next launch. It
+  used not to be, on the grounds that a split set once is not a preference — but
+  the reader who dragged the history down to a rail did it because of what they
+  were reading, and they will be reading the same vault tomorrow.
+- **The history is days, not commits** — `activityByDay` in `src/vault.ts`
+  buckets the listing under each file's local midnight, dropping a file the
+  filesystem could not date rather than filing it under the epoch. It is one
+  function, tested there, reached through the `vaultActivity` operation, because
+  the page is a string that cannot import it and a second copy of the rule would
+  be a second answer to "what day is this" with only one of them under test.
+  There is no commit graph, for the same reason there is no source control: the
+  only history a wiki reader has is when each file was last written.
 - **The vault's own config says what a page is** — `wiki.yml` (or `wiki.yaml`,
   `wiki.json`) is read before the walk and gives every listed file a scope:
   `input` under `wiki.input` (the wiki's pages), `asset` under `wiki.assets`
@@ -169,7 +273,8 @@ pre-paint path here is the real one, not a model of it.
 - **Bindings** — `win.bind(name, handler)` exposes Deno functions to the webview
   as `bindings.name(args)`. They run in-process (no socket IPC) and inherit the
   runtime's permissions, so the tasks start Deno with
-  `--allow-read --allow-write --allow-env`.
+  `--allow-read --allow-write --allow-env` and, for the one operation that
+  shells out to git, `--allow-run=git`.
 
   **The page calls them with a spread, never `.apply`.** One function reaches
   every operation: `bridge[name](...(args || []))`. The desktop runtime hands
@@ -306,11 +411,11 @@ pre-paint path here is the real one, not a model of it.
 
   **Reveal in Explorer is deliberately not there.** `deno desktop` has no
   file-manager API — `Deno.BrowserWindow` offers `bind`, `executeJs` and menus,
-  and nothing else — so it would mean a `Deno.Command` and `--allow-run` on the
-  desktop tasks, for a permission the app is otherwise built without on purpose.
-  Copying the path is the part a user can act on from the clipboard, so that is
-  what shipped; a test asserts the binding layer launches no process, so the
-  decision cannot be quietly reversed.
+  and nothing else — so it would mean a `Deno.Command` and a wider `--allow-run`
+  on the desktop tasks than the one scoped to git. Copying the path is the part
+  a user can act on from the clipboard, so that is what shipped; a test asserts
+  the binding layer launches no process of its own, so the decision cannot be
+  quietly reversed by a second caller appearing there.
 - **The vault header carries one action, and the rest are menu entries** — it
   was a row of two full-width labelled buttons stacked under the vault's name,
   so the sidebar's first read was `Open vault…` directly beneath a vault that
@@ -486,10 +591,10 @@ pre-paint path here is the real one, not a model of it.
   the document that is showing and the page decides what to do, because the page
   is a classic script with no import to hand and is the part that knows the
   vault. A target outside the vault opens the folder browser at the folder it
-  named. External links go to `window.open`: the app runs without `--allow-run`,
-  and handing a URL to the OS would mean granting a permission to every task so
-  it could shell out per platform. In the desktop webview that opens a window
-  rather than the system browser.
+  named. External links go to `window.open`: the app grants `--allow-run` for
+  git alone, and handing a URL to the OS would mean a permission every task
+  carries so it can shell out per platform. In the desktop webview that opens a
+  window rather than the system browser.
 - **Line endings** — the editor's document holds LF only, and the file keeps the
   ending it arrived with. `src/vault.ts` converts on the way in and back on the
   way out, so fixing a typo in a CRLF page is a one-line diff rather than a

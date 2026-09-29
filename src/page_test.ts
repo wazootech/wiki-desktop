@@ -9,14 +9,29 @@
 import { join } from "node:path";
 
 import {
+  ACTIVITY_BAR_WIDTH,
   DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_SPLIT_RATIO,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  SIDEBAR_VIEWS,
 } from "./config.ts";
 import { page, pageForTheme } from "./page.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+function assertEqual(actual: unknown, expected: unknown, message: string) {
+  if (actual !== expected) {
+    throw new Error(
+      `${message}: expected ${JSON.stringify(expected)}, got ${
+        JSON.stringify(actual)
+      }`,
+    );
+  }
 }
 
 Deno.test("every element the script looks up exists in the markup", () => {
@@ -32,6 +47,250 @@ Deno.test("every element the script looks up exists in the markup", () => {
   assert(
     missing.length === 0,
     `the script looks up ids the markup does not define: ${missing.join(", ")}`,
+  );
+});
+
+Deno.test("every view has a button and a pane, and the pane is behind it", () => {
+  // The switcher's whole contract: a view is a pane, and the bar's buttons are
+  // how you get to it. A view in the table with no pane is a button that reveals
+  // nothing, and a pane with no button is a view nobody can reach — so the two
+  // lists are compared rather than trusted.
+  for (const view of SIDEBAR_VIEWS) {
+    assert(
+      page.includes(`data-view="${view}" id="pane-${view}"`) ||
+        page.includes(`id="pane-${view}" data-view="${view}"`),
+      `the ${view} view has a pane`,
+    );
+    assert(
+      page.includes(`id="activity-${view}"`),
+      `and a button on the bar`,
+    );
+    assert(
+      page.includes(`aria-controls="pane-${view}"`),
+      `the ${view} button says which pane it opens`,
+    );
+    // The bar, the View menu and the pane's own title have to call a view the
+    // same thing: three names for one view is three answers to "where am I?"
+    const menu = page.slice(page.indexOf("const commands = ["));
+    assert(
+      menu.includes(`...PANES.map((view) => ({`),
+      "the menu's entries come from the same table",
+    );
+  }
+  // The button's accessible name is the view's name and the tooltip says more,
+  // rather than both being the tooltip -- which is how a screen-reader user
+  // ended up hearing "Vault files" on the bar and "Explorer" in the menu for
+  // the same view.
+  for (
+    const button of page.matchAll(/<button class="activity-button"[\s\S]*?>/g)
+  ) {
+    const name = button[0].match(/aria-label="([^"]+)"/)?.[1];
+    const hint = button[0].match(/title="([^"]+)"/)?.[1];
+    assert(name !== undefined && hint !== undefined, "the button is named");
+    // The menu is drawn from the table the script was handed, so comparing the
+    // name against that injected list is comparing it against the menu's own
+    // source rather than against a copy of it.
+    assert(
+      page.includes(`"label":"${name}"`),
+      `the bar and the View menu both call this view "${name}"`,
+    );
+    assert(
+      hint !== name && hint.length > name.length,
+      `and the tooltip on "${name}" says more than the name does`,
+    );
+  }
+  const buttons = [...page.matchAll(/class="activity-button"/g)].length;
+  const panes = [...page.matchAll(/class="pane"/g)].length;
+  assertEqual(
+    `${buttons} buttons, ${panes} panes`,
+    `${SIDEBAR_VIEWS.length} buttons, ${SIDEBAR_VIEWS.length} panes`,
+    "one of each per view, and no others",
+  );
+
+  // Hidden in the markup, so a view is never on screen before the stored one
+  // has been applied, and a document with no script is an empty sidebar rather
+  // than a wrong one.
+  for (const pane of page.matchAll(/<section class="pane"[^>]*>/g)) {
+    assert(
+      pane[0].includes("hidden"),
+      `every pane ships hidden: ${pane[0]}`,
+    );
+  }
+  // The panes share a stack, and the switcher finds them by data-view rather
+  // than by id, so a pane added to the table cannot be left unaddressable.
+  assert(
+    /const sidebarPanes = document\.querySelectorAll\('\.pane'\)/.test(page),
+    "the switcher finds the panes by their class",
+  );
+  assert(
+    /for \(const pane of sidebarPanes\) pane\.hidden = pane\.dataset\.view !== next;/
+      .test(page),
+    "and shows exactly the one that was asked for",
+  );
+});
+
+Deno.test("the view is a stored setting, and the menu offers the same list", () => {
+  assert(
+    /call\('setSidebarView', \[next\]\)/.test(page),
+    "choosing a view is written to the app config",
+  );
+  assert(
+    /setSidebarView\(state\.sidebarView, false\)/.test(page),
+    "and the stored one is applied, without being written straight back",
+  );
+  // One list for the bar, the panes and the menu, generated from the same
+  // table: a menu that could offer a view the bar had no button for would be a
+  // command that switches nothing.
+  assert(
+    /\.\.\.PANES\.map\(\(view\) => \(\{\s*id: 'view-' \+ view\.key,/.test(page),
+    "the View menu has one entry per view, from the same table",
+  );
+  assert(
+    /isActive: \(\) => vault\.sidebarView === view\.key,/.test(page),
+    "and each one says whether it is the view on screen",
+  );
+  // A view the page cannot draw falls back to the file list rather than
+  // leaving the sidebar with every pane hidden, which is what hiding the other
+  // panes by name would do with an unknown one.
+  assert(
+    /function knownView\(view\)/.test(page) &&
+      /PANES\.some\(\(entry\) => entry\.key === view\)/.test(page),
+    "an unknown view falls back to the file list",
+  );
+});
+
+Deno.test("the sidebar's chrome belongs to a view, not to the sidebar", () => {
+  // The load-bearing coupling the switcher is for. Filter, the three switches
+  // and New file all act on a listing, and "95 files" means nothing in a search
+  // view -- so the toolbar and the footer are inside a pane, and there is no
+  // sidebar-level pair left for a second view to have to be smuggled past.
+  assert(
+    page.includes('class="view-tools" id="viewTools"') &&
+      page.includes('class="view-status"'),
+    "each pane draws its own toolbar and its own footer",
+  );
+  assert(
+    (page.match(/class="view-status"/g) ?? []).length ===
+      SIDEBAR_VIEWS.length,
+    "one footer per view",
+  );
+  assert(
+    !page.includes('class="sidebar-status"') &&
+      !page.includes('class="file-tools"'),
+    "and the sidebar-level ones are gone, not merely renamed",
+  );
+  // The listing is inside the Explorer pane rather than beside it, which is
+  // what makes "a new view is a new pane" true rather than aspirational.
+  const explorer = page.slice(
+    page.indexOf('id="pane-explorer"'),
+    page.indexOf('id="pane-search"'),
+  );
+  assert(
+    explorer.includes('id="fileList"') &&
+      explorer.includes('id="viewTools"') &&
+      explorer.includes('id="fileCount"'),
+    "the file list, its toolbar and its count all live in the Explorer pane",
+  );
+  // A search result names a line in one version of one file, so the answers are
+  // re-derived every time the listing moves. Without this, closing a vault left
+  // rows on screen that open a folder the app no longer has open, and creating
+  // a file left results pointing at text that had shifted under them.
+  assert(
+    /async function loadFiles\(\)[\s\S]*?runSearch\(\);[\s\S]*?return;[\s\S]*?await call\('listFiles'\)[\s\S]*?runSearch\(\);/
+      .test(page),
+    "both a closed vault and a reloaded listing re-derive the results",
+  );
+
+  // The resizer, the drawer and the brand are the sidebar's, and the issue
+  // called those the part that needs no change: they are outside every pane.
+  const panes = page.slice(page.indexOf('<div class="panes"'));
+  assert(
+    panes.includes('id="sidebarResizer"'),
+    "the resize handle stays with the sidebar rather than joining a view",
+  );
+  assert(
+    page.indexOf('id="sidebarResizer"') >
+        page.indexOf('id="panes"') ||
+      page.indexOf('id="sidebarResizer"') < page.indexOf('<div class="panes"'),
+    "and sits beside the panes, not inside one",
+  );
+  // Recently changed needs no toolbar at all, which is the claim that the
+  // chrome is per-view rather than per-sidebar: a view that wants none has none.
+  const recent = page.slice(
+    page.indexOf('id="pane-recent"'),
+    page.indexOf('id="sidebarResizer"'),
+  );
+  assert(
+    !recent.includes("view-tools"),
+    "a view with no toolbar of its own has none",
+  );
+});
+
+Deno.test("the width clamp spends the activity bar before the editor does", () => {
+  // The bar is inside the sidebar's width, so a clamp that does not know about
+  // it would let a 520px sidebar sit in a window with 660px of editor and
+  // 360px of nothing -- which is the floor the whole clamp exists to hold.
+  assert(
+    new RegExp(
+      `window\\.innerWidth - WORKSPACE_FLOOR - ACTIVITY_BAR_WIDTH`,
+    ).test(page),
+    "the editor's floor is measured after the bar's width",
+  );
+  assert(
+    new RegExp(`const ACTIVITY_BAR_WIDTH = ${ACTIVITY_BAR_WIDTH};`).test(page),
+    "and the bar is the width the stylesheet draws it at",
+  );
+  assert(
+    new RegExp(`--activity-bar-width: ${ACTIVITY_BAR_WIDTH}px`).test(
+      page.slice(0, page.indexOf("</style>")),
+    ),
+    "one number for both, rather than one written twice",
+  );
+  // Dragging measures the sidebar's own left edge, and the bar did not move the
+  // sidebar's left edge -- so the existing measurement is still the right one
+  // and did not have to change.
+  assert(
+    /const left = sidebar\.getBoundingClientRect\(\)\.left;/.test(page),
+    "the drag still measures the sidebar's own edge",
+  );
+});
+
+Deno.test("a search result opens its file at the line it named", () => {
+  // The reason a result can be clicked at all: the operation returns a line,
+  // and the line is the point. Opening the file and dropping the reader at line
+  // one would make every result a small errand.
+  assert(
+    /openFile\(hit\.path, match\.line\)/.test(page),
+    "a matching line opens that file at that line",
+  );
+  assert(
+    /openFile\(hit\.path, hit\.matches\[0\]\.line\)/.test(page),
+    "and a file's own row opens its first match",
+  );
+  assert(
+    /if \(typeof line === 'number' && line > 0\) editorApi\?\.\w+\(line\);/
+      .test(page),
+    "the jump follows the open rather than leading it",
+  );
+  // Grouped by file, because a hit in a wiki is "this page, these lines".
+  assert(
+    /className = 'search-hit'/.test(page) && page.includes("search-hit-name"),
+    "results are grouped under the file they are in",
+  );
+  assert(
+    /if \(hit\.truncated\)/.test(page) &&
+      page.includes("more matches"),
+    "a file with more matches than it shows says so",
+  );
+  // And the view refreshes on arrival rather than keeping a stale answer, which
+  // is the only way results cannot describe a file since saved over.
+  assert(
+    /if \(next === 'search'\) runSearch\(\);/.test(page),
+    "arriving at the search view runs it again",
+  );
+  assert(
+    /if \(token !== searchToken\) return;/.test(page),
+    "and a slow earlier answer cannot land on a newer question",
   );
 });
 
@@ -56,6 +315,23 @@ Deno.test("the tab strip's classes are all styled", () => {
     "menu-item",
     "menu-item-label",
     "menu-keys",
+    "activity-bar",
+    "activity-button",
+    "activity-tabs",
+    "activity-brand",
+    "sidebar-pane",
+    "pane-title",
+    "view-tools",
+    "view-status",
+    "search-results",
+    "search-hit",
+    "search-hit-name",
+    "search-hit-more",
+    "search-match",
+    "search-line",
+    "search-preview",
+    "search-empty",
+    "file-time",
   ];
   const unstyled = classes.filter((name) =>
     !page.includes(`.${name}`) ||
@@ -137,9 +413,10 @@ function readTokens(css: string): Set<string> {
 }
 
 Deno.test("collapsing never strands the only way to reopen", () => {
-  // The toggle in the brand row disappears with the sidebar, so the tabbar
+  // The mark at the top of the activity bar is the sidebar's toggle, and it
+  // disappears with the sidebar along with everything else in it, so the tabbar
   // must reveal its own when collapsed — and in the drawer layout too, where
-  // the brand row is parked off-screen.
+  // the whole sidebar is parked off-screen.
   const style = page.slice(0, page.indexOf("</style>"));
   const narrow = style.slice(style.indexOf("@media (max-width: 640px)"));
 
@@ -154,12 +431,23 @@ Deno.test("collapsing never strands the only way to reopen", () => {
     /\.tabbar\s+\.sidebar-toggle\s*\{[^}]*display:\s*inline-flex/.test(narrow),
     "the drawer layout shows a toggle too",
   );
+  // One per layout state, and counted by the class that decides what a toggle
+  // does rather than by the button family's styling, because the sidebar's is
+  // now the brand mark and not a member of that family.
   assert(
-    (page.match(
-      /class="button button-secondary icon-button sidebar-toggle"/g,
-    ) ?? [])
-      .length === 2,
+    (page.match(/class="[^"]*\bsidebar-toggle\b[^"]*"/g) ?? []).length === 2,
     "there is one toggle per layout state",
+  );
+  assert(
+    /<button class="activity-brand sidebar-toggle"/.test(page),
+    "and the sidebar's is the mark at the top of the activity bar",
+  );
+  // It is a button rather than a div with a listener on it, because a div is
+  // not focusable and is not in the tab order: a sidebar that can only be
+  // closed by clicking is one some readers cannot close at all.
+  assert(
+    !/<div class="activity-brand/.test(page),
+    "and it is reachable from the keyboard",
   );
   // The tooltip is the one of the two labels a mouse user reads, and the two
   // toggles shipped with opposite wording — each right for the layout it
@@ -193,13 +481,17 @@ Deno.test("no two icon-only buttons draw the same glyph", () => {
   // app menu were, both ☰. The toggle draws a panel, the bar's reload is an
   // arrow, the file list's create button is a +, the menu keeps ☰, and the
   // vault's own button is a folder.
+  //
+  // The brand mark is not in this list, and should not be added to it: it is a
+  // logo at the top of the activity bar rather than a glyph in the band of
+  // chrome these share, so it has nothing to be confused with.
   const iconButtons = [
     ...page.matchAll(/<button ([^>]*)>([\s\S]*?)<\/button>/g),
   ]
     .map(([, attrs, inner]) => ({ attrs, inner: inner.trim() }))
     .filter(({ attrs }) => /\bicon-button\b/.test(attrs));
 
-  assert(iconButtons.length === 6, "the app has six icon-only buttons");
+  assert(iconButtons.length === 5, "the app has five icon-only buttons");
   const by = (pattern: RegExp) =>
     iconButtons.filter(({ attrs }) => pattern.test(attrs));
   const toggles = by(/\bsidebar-toggle\b/);
@@ -208,15 +500,9 @@ Deno.test("no two icon-only buttons draw the same glyph", () => {
   const reloads = by(/id="reloadButton"/);
   const opens = by(/id="openVaultButton"/);
   assert(
-    toggles.length === 2 && menus.length === 1 && creates.length === 1 &&
+    toggles.length === 1 && menus.length === 1 && creates.length === 1 &&
       reloads.length === 1 && opens.length === 1,
-    "one app menu, one create button, one reload, one toggle per state, and one button for the vault",
-  );
-  // The two toggles are never on screen together, so only a shared source keeps
-  // them identical when one is edited.
-  assert(
-    toggles[0].inner === toggles[1].inner,
-    "the two toggles draw different icons",
+    "one app menu, one create button, one reload, one toggle, and one button for the vault",
   );
   assert(toggles[0].inner.startsWith("<svg"), "the toggle draws a panel");
   const glyphs = [
@@ -341,6 +627,21 @@ Deno.test("the vault's path row is spent only when there is no vault", () => {
   assert(
     /\.vault-actions \{[^}]*margin-left: auto/.test(page),
     "the button sits at the far end of the name's row",
+  );
+  // And the row does not label itself. The section already carries
+  // aria-label="Vault" for assistive tech and the name beside the folder glyph
+  // is the row's own heading, so a 9.5px uppercase VAULT next to "docs" was a
+  // label for a value that was never ambiguous — and the fourth copy of the
+  // pane eyebrow, on the one row of the sidebar that does not need one. The
+  // pane titles keep theirs because the activity bar shows only glyphs and the
+  // pane is the thing that has to spell its own name out.
+  assert(
+    !/vault-label/.test(page) &&
+      /<section class="vault" aria-label="Vault">/.test(page) &&
+      /<div class="vault-head" id="vaultHead">\s*<span class="vault-name/.test(
+        page,
+      ),
+    "the vault row names the vault, and the section keeps the name for a screen reader",
   );
 });
 
@@ -478,7 +779,29 @@ Deno.test("the vault header's menu is the command list, not a second copy", asyn
   );
   assert(
     !/Deno\.Command|reveal|openExternal/i.test(bindings),
-    "the binding layer launches no process to do it",
+    "the binding layer launches no process of its own to do it",
+  );
+  // src/git.ts is the app's one caller of Deno.Command, and it is the reason
+  // the tasks carry --allow-run at all. If a second caller turns up, the
+  // permission the app was built without is quietly wider than the reason for
+  // it, and this is the test that says so.
+  const sources = ["bindings.ts", "config.ts", "vault.ts", "wiki_config.ts"];
+  const callers: string[] = [];
+  for (const name of sources) {
+    const text = await Deno.readTextFile(join(import.meta.dirname!, name));
+    if (/Deno\.Command/.test(text)) callers.push(name);
+  }
+  assertEqual(
+    callers.join(", "),
+    "",
+    "and nothing outside src/git.ts runs a process",
+  );
+  const git = await Deno.readTextFile(join(import.meta.dirname!, "git.ts"));
+  const launchers = git.match(/new Deno\.Command\("[^"]+"/g) ?? [];
+  assertEqual(
+    launchers.join(", "),
+    'new Deno.Command("git"',
+    "so the one launcher in the tree runs git, and nothing else",
   );
   // With no vault open the menu has nothing to act on, and a menu of one
   // greyed-out item is a worse answer than no menu.
@@ -555,11 +878,11 @@ Deno.test("the vault's one button is named for the state it acts on", () => {
   // from it has nothing to act on: it was a filter over nothing and a disabled
   // create button, the part of closing a vault that had not been finished.
   assert(
-    /<div class="file-tools" id="fileTools">/.test(page),
-    "the file list's toolbar is something the page can hide",
+    /<div class="view-tools" id="viewTools">/.test(page),
+    "the Explorer view's toolbar is something the page can hide",
   );
   assert(
-    /fileTools\.hidden = !open;/.test(page),
+    /viewTools\.hidden = !open;/.test(page),
     "and it goes when the vault it acts on does",
   );
 });
@@ -700,11 +1023,11 @@ Deno.test("every list switch is reachable from the list it changes", () => {
   // sidebar's toolbar has, so the row wraps. Grouping keeps them together: left
   // free they split across lines one checkbox each.
   assert(
-    /\.file-tools-checks \{[^}]*display: flex/.test(page),
+    /\.view-tools-checks \{[^}]*display: flex/.test(page),
     "the checkboxes wrap as a group rather than one per line",
   );
   assert(
-    /\.file-tools \{ flex-wrap: wrap/.test(page),
+    /\.view-tools \{ flex-wrap: wrap/.test(page),
     "and the toolbar is allowed to wrap at all",
   );
 });
@@ -730,7 +1053,7 @@ Deno.test("what each switch changes is still its own", () => {
   // the stored preference survives a vault with nothing to list — reading the
   // checkbox is what made this one per-session in all but name.
   assert(
-    /const listed = hasAssets && vault\.showAssets/.test(page),
+    /if \(hasAssetFiles\(\) && vault\.showAssets\) return files;/.test(page),
     "the list of files reads showAssets from the state",
   );
   assert(
@@ -920,8 +1243,8 @@ Deno.test("the top bar labels one command and icons another", () => {
   // It only fits beside the filter because the input yields room: fixed at
   // width:100% the button is pushed out of the row.
   assert(
-    /\.file-tools\s*\{[^}]*display:\s*flex/.test(style),
-    "the file list's toolbar is a flex row",
+    /\.view-tools\s*\{[^}]*display:\s*flex/.test(style),
+    "a view's toolbar is a flex row",
   );
   assert(
     /\.filter\s*\{[^}]*flex:\s*1/.test(style),
@@ -1064,8 +1387,8 @@ Deno.test("the brand row and the tab bar share one height", () => {
   // The same pairing at the bottom edge, where the two rows also have to agree
   // on a height or their border-tops land on different pixels.
   assert(
-    /\.sidebar-status\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
-    "the sidebar status row takes the shared status height",
+    /\.view-status\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
+    "a view's status row takes the shared status height",
   );
   assert(
     /\.statusbar\s*\{[^}]*height:\s*var\(--statusbar-height\)/.test(style),
@@ -1077,6 +1400,13 @@ Deno.test("the brand row and the tab bar share one height", () => {
   assert(
     /\.brand,\s*\.tabbar\s*\{[^}]*height:\s*auto/.test(narrow),
     "the drawer layout lets both rows grow again",
+  );
+  // The activity bar took the mark out of the brand row, and the mark's slot is
+  // the only thing in the bar that has to line up with the tab bar across the
+  // seam -- so it is held to the same token rather than sized by eye.
+  assert(
+    /\.activity-brand\s*\{[^}]*height:\s*var\(--topbar-height\)/.test(style),
+    "the activity bar's top row takes the shared top bar height",
   );
 });
 
@@ -1849,5 +2179,455 @@ Deno.test("every global the entrypoint calls is defined by the page", async () =
     `the entrypoint calls globals the page never defines: ${
       undefined_.join(", ")
     }`,
+  );
+});
+
+Deno.test("the changes view is two panes with a divider between them", () => {
+  // The panel is a source control panel, and a source control panel is two
+  // things at once: what changed, and the history it changed in. One pane can
+  // only be one of those, so the split is the feature rather than a detail of
+  // it -- and the divider has to sit between the two, not above or below them.
+  const split = page.slice(
+    page.indexOf('id="recentSplit"'),
+    page.indexOf('id="sidebarResizer"'),
+  );
+  assert(
+    split.includes('id="changesPane"') && split.includes('id="historyPane"'),
+    "the view has a changes pane and a history pane",
+  );
+  assert(
+    split.indexOf('id="changesPane"') < split.indexOf('id="recentDivider"') &&
+      split.indexOf('id="recentDivider"') < split.indexOf('id="historyPane"'),
+    "and the divider is between them",
+  );
+  assert(
+    split.includes('role="separator"') &&
+      split.includes('aria-orientation="horizontal"'),
+    "the divider says it is a horizontal separator, as it is",
+  );
+  assert(
+    split.includes('aria-controls="changesBody"') &&
+      split.includes('aria-controls="historyBody"'),
+    "each pane's header says which body it folds",
+  );
+  // A section with a header and no way to fold it is a header that lies about
+  // being a control, so the fold is wired for both and not just the first.
+  assert(
+    page.includes("{ pane: changesPane, toggle: changesToggle") &&
+      page.includes("{ pane: historyPane, toggle: historyToggle"),
+    "both sections are wired, not just the top one",
+  );
+  assert(
+    page.includes("changesCount.textContent = String(recent.length)") &&
+      page.includes("historyCount.textContent = String(days.length)"),
+    "each header's badge counts its own section",
+  );
+});
+
+Deno.test("the split is a bounded ratio, and a divider the keyboard can move", async () => {
+  // A split remembered in pixels is a split sized for the window it was set
+  // in, and a divider nobody can move without a mouse is a layout the reader
+  // has to live with. Both were true of the sidebar's own resizer, which is
+  // why this one keeps that contract instead of inventing another.
+  assert(
+    MIN_SPLIT_RATIO < DEFAULT_SPLIT_RATIO &&
+      DEFAULT_SPLIT_RATIO < MAX_SPLIT_RATIO,
+    "the split has ends and a middle",
+  );
+  // The bounds live in the settings file, and the page draws with them rather
+  // than with numbers of its own. A second copy here would be a range the
+  // stored ratio is clamped to that the divider cannot be dragged to. The
+  // rendered page has the numbers in it, so the source is what says where they
+  // came from.
+  const source = await Deno.readTextFile(
+    join(import.meta.dirname!, "page.ts"),
+  );
+  assert(
+    source.includes("${MAX_SPLIT_RATIO}") &&
+      source.includes("${MIN_SPLIT_RATIO}") &&
+      source.includes("${DEFAULT_SPLIT_RATIO}"),
+    "and the page spends the shared bounds, not its own",
+  );
+  assert(
+    !source.includes("SPLIT_SHARE"),
+    "and has no second copy of them to drift",
+  );
+  assert(
+    page.includes(`aria-valuenow="${Math.round(DEFAULT_SPLIT_RATIO * 100)}"`),
+    "and the divider opens where the stored middle says it does",
+  );
+  assert(
+    /function clampSplitRatio\([\s\S]*?Math\.min\(\s*\$\{MAX_SPLIT_RATIO\},\s*Math\.max\(\$\{MIN_SPLIT_RATIO\}/
+      .test(source),
+    "and a drag is clamped to them, so neither section can be squeezed away",
+  );
+  assert(
+    page.includes("changesPane.style.flexGrow") &&
+      page.includes("historyPane.style.flexGrow"),
+    "the two are a share of the pane rather than a height in pixels",
+  );
+  const wiring = page.slice(
+    page.indexOf("function wireSplit()"),
+    page.indexOf("function toggleSection("),
+  );
+  for (const key of ["ArrowUp", "ArrowDown", "Home", "End", "dblclick"]) {
+    assert(
+      wiring.includes(key),
+      `the divider answers ${key}, like the sidebar's own handle`,
+    );
+  }
+});
+
+Deno.test("the split is remembered, like the sidebar's width", () => {
+  // The ratio is the same kind of thing as the width: a place in the window the
+  // reader dragged into position. It used to be kept for the session only, on
+  // the grounds that a split set once is not a preference -- but the reader who
+  // dragged the history down to a rail did it because of what they were
+  // reading, and they will be reading the same vault tomorrow.
+  assert(
+    page.includes("call('setSplitRatio', [vault.splitRatio])"),
+    "letting go of the divider stores where it was left",
+  );
+  // What is stored is what is drawn, to a thousandth: an unrounded share
+  // drifts a little further on every nudge and puts 0.30000000000000004 in the
+  // settings file.
+  assert(
+    /function applyRatio|function applySplit[\s\S]*?Math\.round\(clampSplitRatio\(ratio\) \* 1000\) \/ 1000[\s\S]*?return share;/
+      .test(page),
+    "and the stored share is the rounded one the divider is drawn at",
+  );
+  assert(
+    page.includes("vault.splitRatio = applySplit(vault.splitRatio)"),
+    "and the stored share is put back before the first paint of the session",
+  );
+  // Once per gesture, not once per pointermove: a drag down a tall pane is
+  // hundreds of moves and the setting is a decision the reader makes by
+  // letting go.
+  const drag = page.slice(
+    page.indexOf("addEventListener('pointermove'"),
+    page.indexOf("addEventListener('pointerup'"),
+  );
+  assert(
+    drag.length > 0 && !drag.includes("setSplitRatio") &&
+      !/setSplit\([^)]*true\)/.test(drag),
+    "a drag stores its ending rather than every pixel it passed over",
+  );
+  assert(
+    /function endDrag[\s\S]*?setSplit\(splitRatio\(\), true\)/.test(page),
+    "and it is the letting go that does it",
+  );
+});
+
+Deno.test("the history is drawn from the one place a day is decided", () => {
+  // src/vault.ts decides which day a write belongs to, and it is tested there.
+  // A second copy of that rule inside the page string would be a second answer
+  // to "what day is this", and only one of them would be under test.
+  assert(
+    page.includes("call('vaultActivity', [])"),
+    "the history asks the backend for its days",
+  );
+  assert(
+    !page.includes("setHours(0, 0, 0, 0)"),
+    "and does not bucket the listing a second time here",
+  );
+  // An empty history is a state the pane has to be able to draw: a closed vault
+  // and a folder with nothing dated in it are different sentences, and both
+  // are reachable without anything going wrong.
+  assert(
+    page.includes("'Open a vault to see its history.'") &&
+      page.includes("'Nothing in this vault has a date yet.'"),
+    "and says which of the two empty histories it is",
+  );
+});
+
+Deno.test("the changes pane can commit, and the tick is git's to give", () => {
+  // The list says when a file was written; git says whether there is anything
+  // to commit about it. Those are different questions and only the second one
+  // can be answered by the walk, so the tick waits for git rather than being
+  // drawn from the listing — otherwise the box offers to commit a file whose
+  // contents are identical to the last commit's.
+  assert(
+    page.includes("call('vaultStatus', [])"),
+    "the pane asks the backend what git has pending",
+  );
+  assert(
+    page.includes("call('commitFiles', [message, paths])"),
+    "and hands the ticked paths over rather than a commit-everything flag",
+  );
+  // A disabled button is a hint and not a boundary, so the backend has to
+  // refuse the same two things again: no message, and nothing ticked.
+  assert(
+    page.includes("message === ''") && page.includes("paths.length === 0"),
+    "the page refuses an empty message and an empty selection",
+  );
+  // Enter from the message line, for the same reason Enter saves in the editor.
+  assert(
+    /commitMessage\.addEventListener\('keydown'[\s\S]*?commitTicked\(\)/.test(
+      page,
+    ),
+    "Enter in the message line commits",
+  );
+  // The state line is where the three honest answers live: a vault that is not
+  // in a repository, a repository with nothing pending, and one with changes.
+  for (
+    const sentence of [
+      "'Not a git repository, so there is nothing to commit.'",
+      "'Nothing pending. Every file is committed.'",
+      "'Open a vault to commit to a repository.'",
+    ]
+  ) {
+    assert(
+      page.includes(sentence),
+      `the box says "${sentence}" when that is the answer`,
+    );
+  }
+  // A truncated list that does not say it is truncated is a list lying about
+  // what is staged.
+  assert(
+    page.includes("'first ' + shown + ' of ' + gitPendingTotal + ' changed'") &&
+      page.includes("gitPendingTotal = result.total"),
+    "and says how much of a long status it is not showing",
+  );
+  // Success clears the message, failure keeps it: the words are either done
+  // with or still the thing to fix.
+  assert(
+    page.includes("commitMessage.value = '';"),
+    "a commit that worked does not leave its own words under the cursor",
+  );
+});
+
+Deno.test("the commit box is one box, drawn from one list of elements", () => {
+  // The controls are looked up by id, so each one has to be written out
+  // in the markup — the same rule the panes follow. And they are wired from
+  // those same ids, rather than being queried again where they are used.
+  const ids = [
+    "commitState",
+    "commitMessage",
+    "commitButton",
+    "amendButton",
+    "pushButton",
+    "remoteState",
+    "remoteStatus",
+    "commitNote",
+  ];
+  for (const id of ids) {
+    assert(
+      page.includes(`id="${id}"`) && page.includes(`el('${id}')`),
+      `${id} is in the markup and looked up from it`,
+    );
+  }
+  assert(
+    /<label class="sr-only" for="commitMessage">/.test(page),
+    "the message line is labelled, not just given a placeholder",
+  );
+  assert(
+    /id="commitMessage"[\s\S]{0,200}placeholder=/.test(page) &&
+      /id="commitButton"[^>]*disabled/.test(page) &&
+      /id="amendButton"[^>]*disabled/.test(page) &&
+      /id="pushButton"[^>]*disabled/.test(page),
+    "and all three buttons start disabled rather than enabled-then-refused",
+  );
+  // The box reads as one column, top to bottom, and the order is part of that:
+  // state, then the field, then the two verbs, then the branch.
+  const order = [
+    "commitState",
+    "commitMessage",
+    "amendButton",
+    "commitButton",
+    "remoteState",
+    "pushButton",
+    "remoteStatus",
+    "commitNote",
+  ].map((id) => page.indexOf(`id="${id}"`));
+  assert(
+    order.every((at, index) =>
+      at > 0 && (index === 0 || at > order[index - 1])
+    ),
+    "the box reads top to bottom: state, field, Amend, Commit, branch, Push, branch status, note",
+  );
+  // The field and the two buttons shared a row once, and at the default 230px
+  // sidebar that crushed the field to about fifteen pixels and ran the Commit
+  // label off the edge of the sidebar. A field is the one control in here that
+  // cannot be abbreviated, so it must not be a child of an action row.
+  assert(
+    !/<div class="commit-row[^"]*">\s*<label class="sr-only" for="commitMessage">/
+      .test(
+        page,
+      ) &&
+      !/class="commit-input"[^>]*style=/.test(page),
+    "the message field is not inside an action row, and nothing sizes it by hand",
+  );
+  // Every control in the box is 28px tall, so the field and the buttons share a
+  // baseline. The field was 26 while the buttons were 28, which is a two-pixel
+  // step across every commit in the app's UI.
+  assert(
+    /\.commit-input \{[^}]*height: 28px/.test(page) &&
+      /\.commit-button \{[^}]*height: 28px/.test(page),
+    "the field and the buttons are the same height",
+  );
+  // The branch name truncates rather than wrapping. Wrapped, it ran to eight
+  // lines in a 98px column and cost the History section its place; the status
+  // line underneath is where the sentence the reader acts on now lives.
+  assert(
+    /\.commit-branch \{[^}]*white-space: nowrap[^}]*text-overflow: ellipsis/
+      .test(
+        page,
+      ),
+    "the branch reference is one line with an ellipsis and a tooltip, not a paragraph",
+  );
+  // Controls that could never act are hidden rather than greyed out.
+  assert(
+    page.includes("'is-unavailable'") &&
+      /is-unavailable \.commit-amend[\s\S]*?is-unavailable \.commit-remote/
+        .test(
+          page,
+        ) &&
+      page.includes("'has-no-branch'"),
+    "a vault with no repository, or a detached HEAD, drops the row and the amend button rather than disabling them",
+  );
+  // Everything spends space only when it has something to say: an empty status
+  // line and an empty note both collapse, so a box at rest is four rows.
+  assert(
+    page.includes(".commit-branch-status:empty { display: none; }") &&
+      page.includes(".commit-note:empty { display: none; }"),
+    "a line with nothing in it costs nothing",
+  );
+  // The rhythm, in one place rather than scattered: 6px between the field and
+  // the buttons the reader reaches for next, 8px where the subject changes,
+  // 3px under a line of small text, 5px under a note.
+  for (
+    const [selector, gap] of [
+      [".commit-row", "gap: 6px"],
+      [".commit-actions", "margin-top: 6px"],
+      [".commit-remote", "margin-top: 8px"],
+      [".commit-branch-status", "margin-top: 3px"],
+      [".commit-note", "margin-top: 5px"],
+    ] as const
+  ) {
+    const rule = new RegExp(
+      `\\${selector} \\{[^}]*${gap.replace(" ", " ")}`,
+    ).exec(page);
+    assert(rule !== null, `${selector} keeps its place in the rhythm: ${gap}`);
+  }
+});
+
+Deno.test("the commit box can amend and push, and says when neither is a thing", () => {
+  // Amend is the same gesture as Commit with a different verb, so it takes the
+  // same arguments — the ticked paths, not a flag that means "all of it".
+  assert(
+    page.includes("call('amendFiles', [message, paths])"),
+    "an amend carries the ticked paths over, exactly as a commit does",
+  );
+  // A push carries nothing at all. The destination is read out of git's own
+  // configuration on the other side, so there is nothing here to aim wrong and
+  // nothing for anything else to aim either.
+  assert(
+    page.includes("call('pushBranch', [])"),
+    "a push names no remote and no refspec, because the page does not choose them",
+  );
+  assert(
+    !/call\('pushBranch',\s*\[(?!\])/.test(page),
+    "and it cannot be given one, even by a future edit to this file",
+  );
+  // No force, anywhere in the page. A wiki's repository is as likely to be
+  // somebody else's, and this is the one place in the app where a wrong click
+  // would be irreversible for a reader who is not looking for it.
+  assert(
+    !page.includes("--force") && !page.includes("force-with-lease"),
+    "nothing in the page can turn a push into a forced one",
+  );
+  // One readiness for all three verbs, so the box cannot say the gesture is not
+  // ready and then do it anyway.
+  assert(
+    page.includes("!committing &&\n          !pushing;"),
+    "the message and the ticks gate Commit and Amend together, and a push in flight gates them too",
+  );
+  assert(
+    /pushButton\.disabled = pushing \|\|\s*committing \|\|/.test(page),
+    "the branch cannot be pushed while a commit, an amend or another push is in flight",
+  );
+  // The last commit being already published is the one amend has to refuse, and
+  // the button admits it before the reader writes a message they cannot use.
+  assert(
+    /amendButton\.disabled = !ready \|\| \(gitRemote !== null && gitRemote\.published\)/
+      .test(page),
+    "Amend is disabled once the last commit is on the remote, because replacing it is not an edit anybody else can see",
+  );
+  assert(
+    page.includes("'last commit already pushed'") &&
+      page.includes("so it cannot be replaced. Commit the file instead."),
+    "and the branch status says which commit it is, with the button's own reason in its tooltip, rather than just greying the button out",
+  );
+  // Every way the push can be impossible is a fragment the reader can act on,
+  // because a disabled button with nothing next to it is a button they have to
+  // guess about.
+  for (
+    const sentence of [
+      "'1 behind · pull first'",
+      "behind · pull first'",
+      "'never pushed · nowhere to push to'",
+      "'detached HEAD'",
+      "'no branch to push from'",
+    ]
+  ) {
+    assert(
+      page.includes(sentence),
+      `the branch status can say "${sentence}", which is a different situation each time`,
+    );
+  }
+  // Being behind is not this app's problem to fix — it has no pull — so it says
+  // so, rather than leaving the reader to find out by being refused.
+  assert(
+    page.includes("'1 behind · pull first'") &&
+      page.includes(" behind · pull first'") &&
+      page.includes("'Pull first: the remote has '"),
+    "and it names pulling as the next step, in the line and in the button's own reason",
+  );
+  // What "up to date" means is git's answer, so the counts are asked for again
+  // after a push rather than decremented here.
+  assert(
+    /async function pushTicked\(\)[\s\S]*?refreshGitStatus\(\);/.test(page),
+    "a push re-reads the status instead of subtracting one from a number it guessed at",
+  );
+  // Enter commits, never amends. A commit somebody did not mean is a second
+  // commit; an amend somebody did not mean is a commit that no longer exists.
+  const enter = /commitMessage\.addEventListener\('keydown',[\s\S]*?\n\s*\}\);/
+    .exec(
+      page,
+    );
+  assert(enter !== null, "the message line has a keydown handler");
+  assert(
+    enter![0].includes("commitTicked()") &&
+      !enter![0].includes("amendTicked()"),
+    "Enter in the message line commits and does not amend",
+  );
+  // Both actions refuse the same empty message and empty selection as the
+  // commit, before a call goes out at all.
+  for (const action of ["amendTicked", "pushTicked"]) {
+    const body = new RegExp(
+      `async function ${action}\\(\\)[\\s\\S]*?\\n      \\}`,
+    ).exec(page);
+    assert(body !== null, `${action} exists`);
+    assert(
+      body![0].includes("if (committing || pushing) return;"),
+      `${action} will not start while another operation is in flight`,
+    );
+  }
+  assert(
+    /async function amendTicked\(\)[\s\S]*?if \(paths\.length === 0 \|\| message === ''\) return;/
+      .test(page),
+    "and amend refuses an empty message and an empty selection before it calls anything",
+  );
+  // A note for the reader either way, because a silent failure here is a
+  // commit that appears to have happened.
+  assert(
+    page.includes("'The amend did not go through.'") &&
+      page.includes("'The push did not go through.'"),
+    "both say so in the box when the call comes back empty",
+  );
+  assert(
+    page.includes("'Replaced the last commit'") &&
+      page.includes("'Pushed ' + result.branch + ' to ' + result.remote + '.'"),
+    "and say what they did when it worked, naming the branch for a push",
   );
 });

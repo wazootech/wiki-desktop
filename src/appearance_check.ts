@@ -186,6 +186,7 @@ function injectedHead(c: AppearanceCase): string {
         recents: [],
         sidebarCollapsed: false,
         sidebarWidth: 250,
+        splitRatio: 0.7,
         theme: window.__servedTheme,
       });
     },

@@ -1,13 +1,13 @@
 {
   "$schema": "https://docs.deno.com/runtime/desktop/",
   "tasks": {
-    "dev": "deno desktop --hmr --allow-read --allow-write --allow-env src/main.ts",
-    "build": "deno desktop --output wiki-desktop --allow-read --allow-write --allow-env src/main.ts",
-    "dev:web": "deno run --allow-read --allow-write --allow-env --allow-net src/dev_server.ts",
+    "dev": "deno desktop --hmr --allow-read --allow-write --allow-env --allow-run=git src/main.ts",
+    "build": "deno desktop --output wiki-desktop --allow-read --allow-write --allow-env --allow-run=git src/main.ts",
+    "dev:web": "deno run --allow-read --allow-write --allow-env --allow-net --allow-run=git src/dev_server.ts",
     "build:editor": "deno bundle --platform browser --minify --quiet src/editor_entry.ts -o src/editor_bundle.js",
     "check": "deno check --desktop src/main.ts src/dev_server.ts src/editor.ts src/editor_entry.ts src/appearance_check.ts src/wiki_config.ts src/format.ts",
     "check:appearance": "deno desktop --hmr --allow-read --allow-write --allow-env --allow-net src/appearance_check.ts",
-    "test": "deno test --allow-read --allow-write --allow-env --allow-net"
+    "test": "deno test --allow-read --allow-write --allow-env --allow-net --allow-run=git"
   },
   "imports": {
     "@codemirror/lang-html": "npm:@codemirror/lang-html@^6.4.12",
