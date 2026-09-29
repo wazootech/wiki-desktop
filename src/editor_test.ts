@@ -12,8 +12,16 @@
  */
 import { join } from "node:path";
 
+import { addCursorAbove, addCursorBelow } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
+import {
+  selectNextOccurrence,
+  selectSelectionMatches,
+} from "@codemirror/search";
+import { EditorState, type Extension } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
+
+import { editorKeymap } from "./editor.ts";
 import { linkHrefAt, resolveLinkTarget } from "./markdown_links.ts";
 import { toEditorText } from "./vault.ts";
 
@@ -184,6 +192,122 @@ Deno.test("find is the editor's own panel, themed, and reachable from outside", 
     /\.cm-searchMatch\.cm-searchMatch-selected"?:\s*\{[\s\S]{0,120}?var\(--brand-marker\)/
       .test(source),
     "the current match carries the brand, so it is told apart from the rest",
+  );
+});
+
+/**
+ * The search extension's chords, as an exact list, read off a real state.
+ *
+ * `@codemirror/search` is the one import that brings chords this app did not
+ * choose. Spread whole, it put go-to-line, select-the-next-occurrence and
+ * select-them-all into the editor with nothing in the test suite to notice,
+ * because the test that guards the app's own chords checks chords the app
+ * announced — and a chord that was never announced is invisible to it. This is
+ * that list, pinned, minus the three the app refuses: what is left is the four
+ * entries the README describes.
+ *
+ * The keymap facet is readable from an `EditorState` with no view and no DOM,
+ * which is what lets a ranking be tested here at all.
+ */
+Deno.test("the search chords are exactly the set this app chose", () => {
+  const groups = EditorState.create({ doc: "", extensions: editorKeymap })
+    .facet(keymap);
+  const find = groups.find((group) =>
+    group.some((binding) => binding.key === "Mod-f")
+  );
+  assert(find !== undefined, "the find panel's chords are registered at all");
+
+  const expected = [
+    "Mod-f", // open the panel
+    "Escape", // close it
+    "Mod-g", // the next match
+    "F3", // the next match, the other half of the pair
+  ];
+  assertEqual(
+    [...find!].map((binding) => binding.key).sort().join(","),
+    [...expected].sort().join(","),
+    "the panel answers these chords and no others",
+  );
+
+  // Looked for in every map rather than only in the one it came from: if a
+  // future `@codemirror/commands` ever binds it, the app would be offering
+  // go-to-line again, from a place nobody would think to look for it.
+  assert(
+    !groups.some((group) =>
+      group.some((binding) => binding.key === "Mod-Alt-g")
+    ),
+    "go-to-line is refused, and is not reachable by chord from any keymap",
+  );
+});
+
+/**
+ * The chords and the facet have to agree, and this is what makes them.
+ *
+ * Four of the chords these keymaps bring mean nothing without
+ * `EditorState.allowMultipleSelections`: without that facet `EditorState`
+ * collapses any multi-range selection with `asSingle()`, so Ctrl+D selects the
+ * next occurrence and gets a single range back, and the arrow pair moves the
+ * caret instead of adding one. Measured in the running app before it was written
+ * down — a word selected plus Ctrl+D and a keystroke replaced one occurrence and
+ * not two — which is why this app refuses them instead of leaving four keys that
+ * promise a cursor and move nothing.
+ *
+ * Both halves are asserted together, because either one alone would pass with
+ * the other broken: a refusal is only correct while the facet is off, so turning
+ * the mode on has to fail here and make the chords come back deliberately. Two
+ * of the four come from the search keymap and two from the default keymap, so
+ * neither list can be missed by editing one.
+ */
+Deno.test("no chord is bound for a feature the editor has not turned on", () => {
+  const state = EditorState.create({ doc: "", extensions: editorKeymap });
+  const bound = state.facet(keymap).flat().map((binding) => binding.run);
+
+  // By command, because which keys these are is not the point of the refusal.
+  const needASecondSelection = [
+    [selectNextOccurrence, "Mod-d"],
+    [selectSelectionMatches, "Mod-Shift-l"],
+    [addCursorAbove, "Mod-Alt-ArrowUp"],
+    [addCursorBelow, "Mod-Alt-ArrowDown"],
+  ] as const;
+  for (const [command, key] of needASecondSelection) {
+    assert(
+      !bound.includes(command),
+      `${key} is not bound, because the editor cannot make a second cursor`, //
+    );
+  }
+
+  assertEqual(
+    state.facet(EditorState.allowMultipleSelections),
+    false,
+    "and the facet that would make one real is still off",
+  );
+});
+
+/**
+ * The find chords outrank the general keymaps because they are declared to, not
+ * because of where they sit in an array.
+ *
+ * That is the difference between a ranking and a coincidence. Spreading
+ * `searchKeymap` first inside a single `keymap.of` works, and is not fragile by
+ * itself, but it makes "find wins" a fact about an index — one the next person
+ * to add a binding has to notice before they can place it. `Prec.high` says it
+ * where the chords are declared, and this is what says so out loud.
+ */
+Deno.test("the find chords outrank the general keymaps by declaration", () => {
+  const findAnswersFirst = (extensions: readonly Extension[]) =>
+    EditorState.create({ doc: "", extensions }).facet(keymap)[0]
+      .some((binding) => binding.key === "Mod-f");
+
+  assert(
+    findAnswersFirst(editorKeymap),
+    "find's Ctrl+F is the first binding CodeMirror is offered",
+  );
+  // The same extension list, backwards. A ranking that is really a ranking
+  // changes nothing here; one that was only ever an array index would put the
+  // general keymaps first and stop Ctrl+F reaching the panel.
+  assert(
+    findAnswersFirst([...editorKeymap].reverse()),
+    "and still first with the extensions reversed, so the ranking is declared and not an index",
   );
 });
 

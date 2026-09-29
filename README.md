@@ -386,6 +386,62 @@ pre-paint path here is the real one, not a model of it.
   flag rides on the editor root rather than the panel, because the root is there
   synchronously when `openFind` runs and the panel's own element appears in a
   later update.
+- **Find and replace come with more than their two chords, and the app picks
+  which** — `searchKeymap` is registered **minus three entries**. What it
+  brings: `F3` and `Ctrl+G` step to the next match, `Shift+F3` and
+  `Ctrl+Shift+G` to the previous, `Escape` closes the panel, and `Enter` and
+  `Shift+Enter` work inside the field. Two of the three it drops are the
+  multi-selection pair, `Ctrl+D` (select the next occurrence) and `Ctrl+Shift+L`
+  (select every one of them), because they do not work here: `EditorState`
+  collapses a selection of more than one range with `asSingle()` unless
+  `allowMultipleSelections` is set, and this app never sets it, so `Ctrl+D`
+  dispatches a second occurrence and gets a single range back. That was measured
+  in the running app rather than reasoned about — a word selected plus `Ctrl+D`
+  and a keystroke replaced **one** occurrence and not two — and the same is true
+  of the default keymap's `Ctrl+Alt+ArrowUp` and `Ctrl+Alt+ArrowDown`, which
+  moved the caret from `Ln 13, Col 4` to `Ln 14, Col 1` and added no second
+  cursor. `Ctrl+Alt+G` (go to a line) is the other refusal, and it goes for a
+  smaller reason: line numbers are in the gutter so it is not meaningless, but
+  find is already how a reader moves around a page and it has three ways into
+  next and previous, while the jump a wiki author actually reaches for is to a
+  heading — not built yet, and `followLink` in `src/page.ts` says so when it is
+  asked for. It is also the only three-modifier chord of the set, which is the
+  most collision-prone part of a keyboard. All five refusals are matched by
+  **the command a binding runs, not the key it sits on**, so a CodeMirror
+  release that rebinds one still has it dropped. None of this is in the menu's
+  shortcut column, because that column is for the chords the page's own keydown
+  handler implements and these are CodeMirror's; advertising them from a list
+  that does not own them is how a label and the thing it labels drift apart. The
+  surviving set is pinned by a test that reads the resolved keymap out of a real
+  `EditorState` instead of matching a string in `src/editor.ts`, and the
+  refusals are pinned by a second test that asserts _both_ halves — no bound
+  command needs a second selection, and the facet that would make one real is
+  off — so turning the mode on fails a test rather than quietly changing what
+  four keys do.
+- **Multiple cursors are off, and the editor says so by binding nothing for
+  them** — that is a decision rather than an omission, and the cost of it is the
+  part worth keeping: four working chords are refused by command identity,
+  against whatever `@codemirror` binds next, so that no key promises a cursor
+  the editor cannot make. It is one line to reverse
+  (`EditorState.allowMultipleSelections.of(true)`) and nothing else has to
+  change for it — `drawSelection` already renders extra carets, the theme
+  already paints `.cm-cursor`, and `highlightSelectionMatches` already tints
+  every occurrence of the selected word, which is what `Ctrl+Shift+L` would
+  select. So this is a product call rather than an architectural one, and what
+  the app does not have is a multi-cursor story: until it has one, the honest
+  thing for the keyboard to do is nothing. The status bar is the one place a
+  mode like this would show up as an absence — it reports the primary cursor
+  (`selection.main`), not a count.
+- **Which keymap answers a chord is declared, not positional** — the find chords
+  are wrapped in `Prec.high` rather than spread first inside a single
+  `keymap.of`. The behaviour is the same; what changes is that "find wins" stops
+  being a fact about an array index. The version before this ranked them by
+  position, which works and is not fragile on its own, but it means the next
+  extension to bring bindings has to notice the ordering before it can work out
+  where to place itself. `Prec` is the API CodeMirror has for saying it where
+  the chords are declared, and the test that guards it reverses the editor's
+  extension list and asserts the find chords still come first — a property a
+  positional keymap could not have.
 - **Fenced code is highlighted by its language** — `src/fence_languages.ts` maps
   a fence's info string to a grammar for the twelve languages this vault
   actually uses (`bash`, `yaml`, `python`, `json`, `toml`, `powershell`,
