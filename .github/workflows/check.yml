@@ -74,7 +74,12 @@ jobs:
       # supposed to turn this job red — that is the drift it exists to catch,
       # and pinning would hide it until someone remembered to look.
       - name: install the wiki CLI
-        run: pip install wazootech-wiki
+        run: |
+          pip install wazootech-wiki
+          # setup-python puts scripts on the PATH, but proving it here means a
+          # broken install is reported as a broken install rather than as a
+          # failing test three steps later.
+          wiki --version
 
       - name: the app and `wiki check` agree
         # WIKI_AGREEMENT_REQUIRED turns "the CLI is missing" from a printed note

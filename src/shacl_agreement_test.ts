@@ -92,20 +92,33 @@ function cliRequired(): boolean {
   return Deno.env.get("WIKI_AGREEMENT_REQUIRED") === "1";
 }
 
-/** The `wiki` binary, or null when it cannot be run. */
+/**
+ * The `wiki` binary, or null when it cannot be run.
+ *
+ * Three quite different things stop this and they are worth telling apart,
+ * because "it didn't work" sent me looking in the wrong place once already: a
+ * missing `--allow-run=wiki` raises `NotCapable`, a binary that is not on the
+ * PATH raises `NotFound` — on Linux, which is where CI runs — and a binary that
+ * is installed but broken exits non-zero instead of throwing at all.
+ */
 async function wikiCommand(): Promise<string | null> {
   try {
     const found = await new Deno.Command("wiki", {
       args: ["--version"],
       stdout: "piped",
-      stderr: "null",
+      stderr: "piped",
     }).output();
-    return found.success ? "wiki" : null;
+    if (found.success) return "wiki";
+    console.log(
+      `  wiki --version exited ${found.code}: ` +
+        new TextDecoder().decode(found.stderr).trim(),
+    );
+    return null;
   } catch (error) {
-    // Two quite different reasons land here, and the message says which,
-    // because "not on the PATH" sent someone looking at their shell when the
-    // real problem was a missing `--allow-run=wiki` in the task.
-    if (error instanceof Deno.errors.NotCapable) {
+    if (
+      error instanceof Deno.errors.NotCapable ||
+      error instanceof Deno.errors.NotFound
+    ) {
       return null;
     }
     throw error;
@@ -407,8 +420,8 @@ Deno.test({
     const command = await wikiCommand();
     if (command === null) {
       const note =
-        "the wiki CLI is not runnable here — not installed, or the test was " +
-        "run without --allow-run=wiki";
+        "the wiki CLI is not runnable here — not installed, not permitted " +
+        "(--allow-run=wiki), or installed and broken";
       if (cliRequired()) {
         throw new Error(
           `${note}, and WIKI_AGREEMENT_REQUIRED=1 says that is a failure. Run ` +
