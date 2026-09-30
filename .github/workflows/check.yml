@@ -87,4 +87,11 @@ jobs:
         # this job would be green for having checked nothing.
         env:
           WIKI_AGREEMENT_REQUIRED: "1"
-        run: deno task test:agreement
+        # `--allow-run=wiki` alone is not enough on a hosted runner. Deno
+        # resolves the name through PATH and then checks what it resolved
+        # against, and setup-python puts console scripts under
+        # /opt/hostedtoolcache, where the by-name grant does not match what
+        # Deno found — the spawn is refused as NotCapable with the binary
+        # plainly on PATH. Granting the resolved path as well is what makes
+        # this run; the name is kept for a runner that does resolve by name.
+        run: deno task test:agreement --allow-run="$(command -v wiki)"
