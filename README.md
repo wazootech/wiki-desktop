@@ -31,9 +31,10 @@ deno task check:appearance  # drives both palettes in the real desktop webview
 deno task test:agreement  # the frontmatter form against the real `wiki` CLI,
                           # over testdata/shacl-vault/ — needs `wiki` on the
                           # PATH, which is why it is a task of its own and a CI
-                          # job of its own. CI calls `deno test` directly rather
-                          # than this task, because the task's own
-                          # --allow-run cannot be extended from outside
+                          # job of its own. CI calls `deno test` directly and
+                          # with a wider --allow-run, because pip's console
+                          # script is a symlink Deno's by-name check will not
+                          # follow on a hosted runner
 
 WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env --allow-run=git
                        # adds one opt-in test: every page in that vault has to

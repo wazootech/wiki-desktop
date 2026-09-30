@@ -91,14 +91,14 @@ jobs:
         # hardcodes --allow-run=wiki and an appended flag arrives as a trailing
         # argument instead of a flag — it cannot be added to from outside.
         #
-        # The grant is the name and the resolved path in one comma-separated
-        # value, and both are needed. Deno resolves the name through PATH and
-        # then checks what it resolved against, and setup-python puts console
-        # scripts under /opt/hostedtoolcache, where a by-name grant does not
-        # match what Deno found: the spawn is refused as NotCapable with the
-        # binary plainly on PATH. A path grant on its own is not enough either,
-        # since the test spawns by name.
+        # `--allow-run` with no value, which grants spawning any subprocess,
+        # because the two narrow grants both fail here. `--allow-run=wiki` is
+        # refused as NotCapable with the binary plainly on PATH, and so is the
+        # path `command -v` prints; pip installs a console script that is a
+        # symlink into site-packages, and Deno's check does not follow it. That
+        # is a wide grant for a job that exists to run one test file against
+        # one known binary, and it is scoped to this job rather than to
+        # `deno task test`, which keeps the narrower grant for local use.
         run: >-
-          deno test --allow-read --allow-write --allow-env
-          --allow-run="wiki,$(command -v wiki)"
+          deno test --allow-read --allow-write --allow-env --allow-run
           src/shacl_agreement_test.ts
