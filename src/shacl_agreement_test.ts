@@ -93,6 +93,35 @@ function cliRequired(): boolean {
 }
 
 /**
+ * Where `wiki` is, if it is anywhere, according to `PATH`.
+ *
+ * Written out rather than shelled out to `which` because the question this
+ * answers is Deno's: a spawn can fail on permission while the binary sits on
+ * the PATH in plain sight, and knowing the two answers differ is the whole
+ * diagnosis. GitHub's runners install Python console scripts somewhere Deno's
+ * name-based permission check does not always accept, and the failure that
+ * causes looks identical to a missing install unless this is printed.
+ */
+function wikiOnPath(): string | null {
+  const path = Deno.env.get("PATH") ?? "";
+  const names = Deno.build.os === "windows"
+    ? ["wiki.exe", "wiki.cmd", "wiki"]
+    : ["wiki"];
+  for (const dir of path.split(Deno.build.os === "windows" ? ";" : ":")) {
+    if (dir === "") continue;
+    for (const name of names) {
+      const candidate = `${dir}/${name}`;
+      try {
+        if (Deno.statSync(candidate).isFile) return candidate;
+      } catch {
+        // Not there, or not readable; the next directory is worth trying.
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * The `wiki` binary, or null when it cannot be run.
  *
  * Three quite different things stop this and they are worth telling apart,
@@ -119,6 +148,11 @@ async function wikiCommand(): Promise<string | null> {
       error instanceof Deno.errors.NotCapable ||
       error instanceof Deno.errors.NotFound
     ) {
+      // The one line that turns "it did not work" into a cause.
+      console.log(
+        `  ${error.constructor.name} spawning 'wiki'; PATH says: ` +
+          `${wikiOnPath() ?? "not found"}`,
+      );
       return null;
     }
     throw error;
