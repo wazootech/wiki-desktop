@@ -270,9 +270,13 @@ pre-paint path here is the real one, not a model of it.
   entered, so its contents cost nothing and cannot reappear a level down.
   `other` files stay listed rather than hidden, because `input` is about
   indexing rather than permission and the vault's own root `README.md` has to
-  stay openable. A missing, unparseable, or non-mapping config produces exactly
-  the listing there was before — a broken config must not be able to hide a
-  vault's files.
+  stay openable. A config that does not mention `input` means `wiki/`, because
+  that is what `wiki` itself reads in that case; writing `input: []` means no
+  input directory at all, which is a different statement and is honoured as one.
+  A missing, unparseable, or non-mapping config produces exactly the listing
+  there was before — a broken config must not be able to hide a vault's files —
+  and leaves that same default in place, since a page's name has to be the one
+  the build would give it whether or not the reader could see the config.
 - **Colours come from `wazoo.dev/DESIGN.md`, not from this file** — the two
   palettes in `src/page.ts` are that file's twelve tokens spread over the roles
   the app needs: Eggshell and Ink for light, Void and Surface for dark, Sunset

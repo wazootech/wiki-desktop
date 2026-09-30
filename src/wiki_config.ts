@@ -53,9 +53,37 @@ export interface WikiConfig {
   source: string | null;
 }
 
-/** What a vault without a usable config looks like: every file, unchanged. */
+/**
+ * Where a vault's pages live when the config does not say.
+ *
+ * This is `wiki`'s own default, established against `wiki 0.1.23` rather than
+ * assumed: a vault whose `wiki.yml` has no `input` key is indexed from `wiki/`,
+ * and a page at `wiki/Thing.md` is given the focus node `wiki:Thing` — the
+ * input directory is not part of the name.
+ *
+ * The app defaulted to no input directory at all, which made it name that same
+ * page `wiki/wiki/Thing`. A validation result is addressed by its focus node, so
+ * the two spellings are two different subjects and a message about one of them
+ * says nothing about the other.
+ */
+export const DEFAULT_INPUT_DIRECTORIES: readonly string[] = ["wiki"];
+
+/**
+ * What a vault without a usable config looks like.
+ *
+ * Its `inputs` is the default rather than none, because that is what `wiki`
+ * indexes when it has nothing to go on: a vault with no `wiki.yml` at all is
+ * still read from `wiki/`, and still names a page there without the directory
+ * in front of it. An app that listed such a page as belonging to nowhere would
+ * give it a different name from the one the build does, which is the one a
+ * validation message has to match.
+ *
+ * The config being unreadable is a separate matter and is not a reason to
+ * forget the default: the app carries on listing the whole vault, and the
+ * folder it calls the page folder is still the one `wiki` would call it that.
+ */
 export const EMPTY_WIKI_CONFIG: WikiConfig = {
-  inputs: [],
+  inputs: [...DEFAULT_INPUT_DIRECTORIES],
   assets: [],
   excludes: [],
   context: {},
@@ -112,7 +140,7 @@ export function parseWikiConfig(
   const wiki = isRecord(document.wiki) ? document.wiki : {};
   const graph = isRecord(document.graph) ? document.graph : {};
   return {
-    inputs: pathList(wiki.input),
+    inputs: inputDirectories(wiki.input),
     assets: pathList(wiki.assets),
     excludes: pathList(wiki.exclude),
     context: prefixMap(graph.context),
@@ -224,6 +252,26 @@ function normalizeConfigPath(value: string): string {
 }
 
 /** A string, or a list of them, as vault-relative paths. */
+/**
+ * `wiki.input`, which is not the same thing when it is missing as when it is
+ * empty.
+ *
+ * The distinction is the CLI's and it is observable: a config with no `input`
+ * key is indexed from `wiki/`, while one that writes `input: []` indexes nothing
+ * at all. So an absent key takes {@link DEFAULT_INPUT_DIRECTORIES} and a present
+ * one is taken as written, empty included — collapsing the two would either
+ * invent pages for a vault that asked for none, or lose the default for every
+ * vault that never mentioned it.
+ *
+ * A key present with no value parses as null rather than undefined, and that is
+ * a present key: `input:` on its own line means the same as `input: []`, since
+ * both say nothing should be indexed.
+ */
+function inputDirectories(value: unknown): string[] {
+  if (value === undefined) return [...DEFAULT_INPUT_DIRECTORIES];
+  return pathList(value);
+}
+
 function pathList(value: unknown): string[] {
   const values = Array.isArray(value) ? value : [value];
   const paths: string[] = [];
