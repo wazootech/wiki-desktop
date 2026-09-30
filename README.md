@@ -31,7 +31,10 @@ deno task check:appearance  # drives both palettes in the real desktop webview
 deno task test:agreement  # the frontmatter form against the real `wiki` CLI,
                           # over testdata/shacl-vault/ — needs `wiki` on the
                           # PATH, which is why it is a task of its own and a CI
-                          # job of its own
+                          # job of its own. CI adds the resolved path to the
+                          # permission, comma-separated in one value: a second
+                          # --allow-run replaces the first, and a path grant
+                          # alone does not match a spawn by name
 
 WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env --allow-run=git
                        # adds one opt-in test: every page in that vault has to
