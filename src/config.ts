@@ -62,6 +62,24 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 export const DEFAULT_THEME: ThemePreference = "system";
 
 /**
+ * Which view a page's frontmatter is shown in.
+ *
+ * A **view state**, like the appearance and the sidebar's switches, rather than
+ * a per-document editing mode: it is one answer for the whole app, stored
+ * beside the other window preferences, and it is never a parse failure. A page
+ * whose frontmatter is malformed opens, shows raw, and saves unchanged whatever
+ * this says — which is also why the panel can always fall back rather than
+ * refusing.
+ *
+ * `auto` is the recommendation and it defers to what the vault declares:
+ * structured where a shape targets the page's class, raw otherwise, so a reader
+ * who wants raw always does not have to say so per file.
+ */
+export const FRONTMATTER_MODES = ["auto", "structured", "raw"] as const;
+export type FrontmatterMode = (typeof FRONTMATTER_MODES)[number];
+export const DEFAULT_FRONTMATTER_MODE: FrontmatterMode = "auto";
+
+/**
  * The views the sidebar switches between, in the order the activity bar draws
  * them.
  *
@@ -205,6 +223,15 @@ export interface AppSettings {
   splitRatio: number;
   /** Light/dark appearance: `system` follows the OS, or the user pinned one. */
   theme: ThemePreference;
+  /**
+   * Whether frontmatter is shown as a form or as the YAML it is.
+   *
+   * Stored here rather than per tab because it is a preference about how this
+   * reader likes to work, not a mode a document is in: opening a page in
+   * structured mode and switching to raw would otherwise leave that page in a
+   * mode no other page was in.
+   */
+  frontmatterMode: FrontmatterMode;
 }
 
 /**
@@ -224,6 +251,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   sidebarView: DEFAULT_SIDEBAR_VIEW,
   splitRatio: DEFAULT_SPLIT_RATIO,
   theme: DEFAULT_THEME,
+  frontmatterMode: DEFAULT_FRONTMATTER_MODE,
   ...LIST_VIEW_DEFAULTS,
 };
 
@@ -282,6 +310,21 @@ export function coerceTheme(value: unknown): ThemePreference {
       (THEME_PREFERENCES as readonly string[]).includes(value)
     ? value as ThemePreference
     : DEFAULT_THEME;
+}
+
+/**
+ * Coerce a stored or requested frontmatter mode into one the panel can apply.
+ *
+ * An unknown value falls back to `auto` rather than to a mode that might not
+ * exist, for the reason every stored setting here is believed only when it is
+ * one of the values this build knows: a settings file written by a later build
+ * must not be able to put this one in a state it cannot draw.
+ */
+export function coerceFrontmatterMode(value: unknown): FrontmatterMode {
+  return typeof value === "string" &&
+      (FRONTMATTER_MODES as readonly string[]).includes(value)
+    ? value as FrontmatterMode
+    : DEFAULT_FRONTMATTER_MODE;
 }
 
 /**
@@ -459,6 +502,7 @@ function sanitize(value: unknown): AppConfig {
     sidebarView: coerceSidebarView(record.sidebarView),
     splitRatio: clampSplitRatio(Number(record.splitRatio)),
     theme: coerceTheme(record.theme),
+    frontmatterMode: coerceFrontmatterMode(record.frontmatterMode),
   };
 }
 

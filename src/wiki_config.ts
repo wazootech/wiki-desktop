@@ -10,10 +10,20 @@
  * one this module cannot read, lists its files exactly as it did before — which
  * is why a malformed document yields an empty config rather than an error. The
  * config is a description of the vault, not something the app can enforce.
+ *
+ * `graph.context` is read for the frontmatter form rather than the listing, and
+ * it is the one section here that is not about which files are pages. It is the
+ * prefix map that makes a page's bare `softwareVersion` and a shape's
+ * `sh:path: schema:softwareVersion` the same property, so an app that cannot
+ * resolve it has two unrelated lists of strings where one vocabulary should be
+ * (wazootech/wiki-desktop#8). It is a description, read as one: a value that is
+ * not a string is not a prefix.
  */
 import { join } from "node:path";
 
 import { parse as parseYaml } from "@std/yaml";
+
+import { documentIri } from "./shapes.ts";
 
 /** Where a file sits relative to what the vault calls its pages. */
 export type VaultScope = "input" | "asset" | "other";
@@ -25,6 +35,20 @@ export interface WikiConfig {
   assets: string[];
   /** `wiki.exclude` — path globs left out of the listing entirely. */
   excludes: string[];
+  /**
+   * `graph.context` — the CURIE prefix map, verbatim: `schema` to
+   * `https://schema.org/`, `sh` to the SHACL namespace, and `@vocab` for the
+   * bare keys. Read whole rather than filtered, because the form resolves terms
+   * the listing never sees and a prefix dropped here is a property the app
+   * cannot match.
+   */
+  context: Record<string, string>;
+  /**
+   * `graph.base_iri` — where a document's IRI starts. Null when the config does
+   * not declare one, which is not the same as having none: the graph falls back
+   * to `graph.context`'s `wiki` prefix, and {@link documentIri} does the same.
+   */
+  baseIri: string | null;
   /** The config file these came from, or null when none of them parsed. */
   source: string | null;
 }
@@ -34,8 +58,19 @@ export const EMPTY_WIKI_CONFIG: WikiConfig = {
   inputs: [],
   assets: [],
   excludes: [],
+  context: {},
+  baseIri: null,
   source: null,
 };
+
+/**
+ * The IRI the graph gives a page, re-exported from `src/shapes.ts`.
+ *
+ * It lives with the term resolver because the webview needs it as well, and
+ * this module reaches for `node:path`; the implementation is the same one the
+ * editor and the tests use.
+ */
+export { documentIri };
 
 /** The filenames `wiki` itself accepts, in the order it looks for them. */
 const CONFIG_FILE_NAMES = ["wiki.yml", "wiki.yaml", "wiki.json"];
@@ -59,8 +94,9 @@ export async function readWikiConfig(root: string): Promise<WikiConfig> {
 /**
  * Parse a config document, or null when it is not one we can read.
  *
- * Only `wiki.input`, `wiki.assets`, and `wiki.exclude` are interpreted; the
- * rest of the file (graph, site, fmt, check) belongs to the `wiki` toolchain.
+ * `wiki.input`, `wiki.assets`, `wiki.exclude` and `graph.context` are
+ * interpreted; the rest of the file (site, fmt, check, lint) belongs to the
+ * `wiki` toolchain.
  */
 export function parseWikiConfig(
   text: string,
@@ -74,11 +110,32 @@ export function parseWikiConfig(
   }
   if (!isRecord(document)) return null;
   const wiki = isRecord(document.wiki) ? document.wiki : {};
+  const graph = isRecord(document.graph) ? document.graph : {};
   return {
     inputs: pathList(wiki.input),
     assets: pathList(wiki.assets),
     excludes: pathList(wiki.exclude),
+    context: prefixMap(graph.context),
+    baseIri: typeof graph.base_iri === "string" && graph.base_iri !== ""
+      ? graph.base_iri
+      : null,
   };
+}
+
+/**
+ * The `graph.context` mapping, keeping only the pairs that are a string to a
+ * string. `@vocab` is one of them and is not special here: what makes a bare key
+ * mean a schema term is that it is in the map, so the form and the graph loader
+ * are looking at one object.
+ */
+function prefixMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const prefixes: Record<string, string> = {};
+  for (const [prefix, iri] of Object.entries(value)) {
+    if (typeof iri !== "string" || iri === "") continue;
+    prefixes[prefix] = iri;
+  }
+  return prefixes;
 }
 
 /**

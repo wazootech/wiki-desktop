@@ -1,0 +1,27 @@
+# A deliberately small subset of a real vault's wiki.yml.
+#
+# The prefixes `foaf`, `dc`, `dcterms`, and `wazoo` are absent on purpose: the
+# app's TermResolver carries its own defaults for them, so leaving them out is
+# what makes the fixture a test of that rather than of the config file.
+#
+# `wiki` is the prefix a focus node is written with, and both sides have to
+# agree on it, so it is declared rather than defaulted.
+#
+# See README.md for what each page in this vault is for.
+
+wiki:
+  input:
+    - wiki
+
+graph:
+  content_predicate: schema:articleBody
+  context:
+    "@vocab": https://schema.org/
+    schema: https://schema.org/
+    wiki: https://wazootech.github.io/wiki/
+    sh: http://www.w3.org/ns/shacl#
+    rdfs: http://www.w3.org/2000/01/rdf-schema#
+    xsd: http://www.w3.org/2001/XMLSchema#
+
+site:
+  url_style: dir

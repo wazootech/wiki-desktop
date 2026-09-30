@@ -1,5 +1,6 @@
 import {
   ACTIVITY_BAR_WIDTH,
+  DEFAULT_FRONTMATTER_MODE,
   DEFAULT_SIDEBAR_VIEW,
   DEFAULT_SIDEBAR_WIDTH,
   DEFAULT_SPLIT_RATIO,
@@ -507,6 +508,15 @@ const pageTemplate = `<!DOCTYPE html>
       --warn-text: #8a5a00;
       --success: #17845b;
       --warning: #c77700;
+      /* A fourth state, and the only one the design system's twelve tokens do
+         not name. The frontmatter form has to distinguish valid, invalid, not
+         checked and nothing-declares-this, and the first three of those cannot
+         be told apart without it: the warning token is a marker and
+         warn-text is for a warning, and a SHACL violation is neither. Measured
+         at 7.35:1 on the light panel and 6.40:1 on the muted one, so the
+         message text is readable rather than merely coloured. */
+      --danger-text: #a32222;
+      --danger-marker: #c62828;
       /* The one role the spec's purple has: selected text. */
       --selection-soft: rgba(132, 108, 228, 0.22);
       /* Syntax, read by the editor bundle's highlight style. The design system
@@ -573,6 +583,12 @@ const pageTemplate = `<!DOCTYPE html>
       --warn-text: #ffb74d;
       --success: #35c08c;
       --warning: #ffaa00;
+      /* The same fourth state, on the dark panel: 7.05:1 on the panel and
+         6.83:1 on panel-muted. Lighter than the light palette's value for
+         the same reason the success and warning tokens are: a saturated red
+         that reads as ink on Eggshell does not read as ink on Void. */
+      --danger-text: #f2796b;
+      --danger-marker: #ef5350;
       --selection-soft: rgba(132, 108, 228, 0.32);
       --syntax-heading: #ffffff;
       --syntax-link: #ffb74d;
@@ -1282,7 +1298,172 @@ const pageTemplate = `<!DOCTYPE html>
     kbd { padding: 1px 4px; border: 1px solid var(--kbd-line); border-radius: 4px; color: var(--text-soft); background: var(--kbd-bg); font-size: 10px; }
 
     .editor-wrap { height: 100%; background: var(--panel); }
-    .editor-host { height: 100%; }
+    /*
+     * A column, because the frontmatter panel is docked above the document and
+     * shares this element with it. The editor takes what is left and can be
+     * squeezed to nothing on a short window, which is the same rule the rest of
+     * the layout follows rather than a new one: the document is the part that
+     * scrolls.
+     *
+     * The flex is on a wrapper the app owns, not on a CodeMirror class. The
+     * page styles none of CodeMirror's own selectors, because its theme is
+     * injected after this stylesheet with more specificity and a colour written
+     * here loses; a layout rule written here would be the same argument with
+     * less sense in it.
+     */
+    .editor-host { height: 100%; display: flex; flex-direction: column; }
+    .wiki-editor-body { flex: 1 1 auto; min-height: 0; }
+
+    /*
+     * The frontmatter form.
+     *
+     * Every state the model has is drawn, and none of them is carried by colour
+     * alone: a field's state is a mark beside its key, a shape as a word in the
+     * message, and a field nothing declares as a sentence rather than as a
+     * colour. A form that can say "not checked" and "nothing declares this" in
+     * the reader's own vocabulary is the only way an unreachable validator is
+     * not a silent pass.
+     */
+    .wiki-frontmatter-host { flex: 0 0 auto; }
+    .wiki-frontmatter {
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-muted);
+      color: var(--text-body);
+      padding: 10px 14px 12px;
+      max-height: 42vh; overflow: auto;
+      font-size: 11.5px; line-height: 1.5;
+    }
+    .wiki-frontmatter[hidden] { display: none; }
+    /* Raw collapses the panel to one line. In raw the editor below is already
+       showing the frontmatter, so a tall panel would only repeat it; what has
+       to survive is the reason the panel stood down and the way back. */
+    .wiki-frontmatter-collapsed { padding: 5px 14px; max-height: none; }
+    .wiki-frontmatter-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: nowrap;
+    }
+    .wiki-frontmatter-bar-text { color: var(--muted); }
+    /* Never wraps, so the toggle cannot be pushed onto a line of its own: the
+       class block takes the slack and its own text wraps inside it instead. */
+    .wiki-frontmatter-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 16px; flex-wrap: nowrap;
+    }
+    .wiki-frontmatter-class {
+      display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+      flex: 1 1 auto; min-width: 0;
+    }
+    .wiki-frontmatter-class-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px; }
+    .wiki-frontmatter-class-value { color: var(--syntax-name); font-weight: 700; }
+    /* Beside the class rather than under it. The shape that speaks for a class
+       is a fact about that class, and a reader comparing two pages wants the
+       two on one line — which is also what leaves the fields higher up. */
+    .wiki-frontmatter-class-where { margin: 0; color: var(--muted); }
+    .wiki-frontmatter-top .wiki-fm-note { margin: 3px 0 0; }
+    .wiki-frontmatter-modes { display: flex; gap: 4px; flex: 0 0 auto; }
+    .wiki-frontmatter-mode {
+      font: inherit; padding: 2px 9px; border-radius: 999px; cursor: pointer;
+      border: 1px solid var(--line); background: var(--panel); color: var(--text-soft);
+    }
+    .wiki-frontmatter-mode.is-on { border-color: var(--brand); color: var(--brand-text); font-weight: 700; }
+    .wiki-fm-group { margin: 12px 0 0; }
+    .wiki-fm-group-label {
+      margin: 0; font-size: 10px; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-soft);
+    }
+    .wiki-fm-group-hint, .wiki-fm-note { margin: 2px 0 6px; color: var(--muted); }
+    /* The offered group, folded. Its own marker rather than the browser's
+       default triangle, for the reason every icon in this app is from the
+       curated map: a glyph is not in every font the desktop, browser and CI
+       targets ship. */
+    .wiki-fm-details > summary {
+      cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
+    }
+    .wiki-fm-details > summary::-webkit-details-marker { display: none; }
+    .wiki-fm-details > summary::before {
+      content: ''; width: 0; height: 0; flex: 0 0 auto;
+      border-left: 5px solid var(--muted);
+      border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+      transition: transform 0.12s ease;
+    }
+    .wiki-fm-details[open] > summary::before { transform: rotate(90deg); }
+    .wiki-fm-details[open] > .wiki-fm-group-hint { margin-bottom: 6px; }
+    /* The third column is a fixed width rather than content-sized, because a
+       field the page does not have yet has no Remove button, and an auto
+       column sizes to what is in it: every input was a different width
+       depending on whether its row happened to carry a button. A fixed column
+       costs 60px of blank on the rows without one and makes the values line up
+       down the panel. */
+    .wiki-fm-field {
+      display: grid; grid-template-columns: minmax(130px, 180px) 1fr 60px;
+      align-items: center; gap: 8px; padding: 3px 0;
+    }
+    /* Two columns rather than a flow, so the marks line up down the panel.
+       Letting the mark follow the key put it a different distance along every
+       row, and a ragged column of nine identical dots is noise. */
+    .wiki-fm-label {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 6px; min-width: 0;
+    }
+    .wiki-fm-key {
+      color: var(--syntax-name); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    /* One mark per state, and each one is a shape as well as a colour: a filled
+       ring for invalid, a ring for valid, a dashed ring for not checked, and
+       nothing at all for a field no shape declares. That last one is the state
+       a page full of a shape's own machinery is entirely made of, so a mark on
+       every row says nothing on every row. The element stays, and keeps its
+       accessible name, because "no shape declares this" is worth hearing even
+       when it is not worth seeing. */
+    .wiki-fm-state { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+    .wiki-fm-state-valid { border: 2px solid var(--success); }
+    .wiki-fm-state-invalid { background: var(--danger-marker); border: 2px solid var(--danger-marker); }
+    .wiki-fm-state-unknown { border: 2px dashed var(--text-faint); }
+    .wiki-fm-state-undeclared { border-color: transparent; }
+    .wiki-fm-input {
+      font: inherit; width: 100%; min-width: 0; padding: 3px 7px;
+      border: 1px solid var(--line); border-radius: 4px;
+      background: var(--panel); color: var(--text-editor);
+    }
+    .wiki-fm-input:focus { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+    .wiki-fm-field.wiki-fm-invalid:not(.wiki-fm-pending) .wiki-fm-input { border-color: var(--danger-marker); }
+    /* Pinned to the last column rather than left to flow: a field whose value
+       is rows has no input, and without this its Remove would land in the
+       input column and float in the middle of an empty row. Faint until the row
+       is under the pointer or holds the focus: on a page with thirty fields
+       that is thirty copies of the word "Remove" competing with the values, and
+       removing a key is not something a reader does while reading. */
+    .wiki-fm-remove {
+      grid-column: 3;
+      font: inherit; font-size: 10px; padding: 1px 7px; cursor: pointer;
+      border: 1px solid transparent; border-radius: 4px;
+      background: none; color: var(--muted);
+      opacity: 0.32; transition: opacity 90ms ease-out;
+    }
+    .wiki-fm-field:hover .wiki-fm-remove,
+    .wiki-fm-field:focus-within .wiki-fm-remove { opacity: 1; }
+    .wiki-fm-remove:hover { border-color: var(--line); color: var(--danger-text); }
+    .wiki-fm-message {
+      grid-column: 1 / -1; margin: 2px 0 4px; display: flex; flex-wrap: wrap;
+      gap: 6px; align-items: baseline; color: var(--danger-text);
+    }
+    /* An input commits on blur. While it holds uncommitted text the verdict
+       beside it was computed from text the reader has already changed, so the
+       message is withdrawn rather than left contradicting what they typed. */
+    .wiki-fm-field.wiki-fm-pending .wiki-fm-message { display: none; }
+    .wiki-fm-message-shape { color: var(--muted); font-size: 10px; }
+    .wiki-fm-message-origin { color: var(--muted); font-size: 10px; font-style: italic; }
+    /* The recursion: a list of maps or a map inside a field draws its own rows,
+       indented under the field they belong to rather than as fields of their
+       own, so depth is visible without a tree. */
+    .wiki-fm-child {
+      grid-column: 1 / -1; margin: 4px 0 2px 18px; padding-left: 10px;
+      border-left: 1px solid var(--line);
+    }
+    .wiki-fm-child-label {
+      margin: 0 0 2px; font-size: 9.5px; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--muted);
+    }
     /*
      * The editor's own structure (.cm-editor > .cm-scroller > .cm-content) is
      * deliberately not styled here. CodeMirror injects its base theme after
@@ -1812,6 +1993,7 @@ const pageTemplate = `<!DOCTYPE html>
             container: editorHost,
             onChange: onEditorChange,
             onFollowLink: followLink,
+            onFrontmatterMode: setFrontmatterMode,
           })
         : null;
       if (editorApi === null) {
@@ -1834,6 +2016,48 @@ const pageTemplate = `<!DOCTYPE html>
         updateStatus();
       }
 
+      /**
+       * Which view the frontmatter is shown in, and the one place it changes.
+       *
+       * Written the same way as the appearance: applied to the editor first so
+       * the panel draws at once, then stored, because a reader who has chosen a
+       * view should not be waiting on a round trip to see it. The automatic
+       * mode is a real choice here and not just the default — it defers to what the vault
+       * declares, so a reader who wants raw always says so once rather than per
+       * file.
+       */
+      function setFrontmatterMode(mode, persist) {
+        vault.frontmatterMode = mode;
+        editorApi && editorApi.setFrontmatterMode(mode);
+        if (persist) call('setFrontmatterMode', [mode]);
+      }
+
+      /**
+       * What the vault declares, for the form.
+       *
+       * Fetched once per vault rather than per document: it is a fact about the
+       * vault, and it is what the panel cannot work out for itself. The editor
+       * re-derives the form from the buffer on every change, so this does not
+       * need refreshing as the reader types — only if the vault itself changes,
+       * which is what reopening one does.
+       */
+      async function loadVocabulary() {
+        if (vault.root === null) {
+          editorApi && editorApi.setVocabulary(null);
+          return;
+        }
+        let vocabulary = null;
+        try {
+          vocabulary = await call('vaultVocabulary');
+        } catch (error) {
+          // A vault the walk cannot read is a vault with no declared
+          // vocabulary, and the panel says so rather than drawing a form whose
+          // every field is undeclared because nothing was read.
+          vocabulary = null;
+        }
+        editorApi && editorApi.setVocabulary(vocabulary);
+      }
+
       let vault = {
         root: null,
         name: null,
@@ -1843,6 +2067,7 @@ const pageTemplate = `<!DOCTYPE html>
         sidebarView: '${DEFAULT_SIDEBAR_VIEW}',
         splitRatio: ${DEFAULT_SPLIT_RATIO},
         theme: '${DEFAULT_THEME}',
+        frontmatterMode: '${DEFAULT_FRONTMATTER_MODE}',
       };
       // Before the stored state arrives, every switch is worth its default, so
       // the toolbar never draws a checkbox that disagrees with the list behind
@@ -3726,6 +3951,15 @@ const pageTemplate = `<!DOCTYPE html>
       function applyState(state) {
         vault = state;
         setTheme(state.theme, false);
+        // The frontmatter view comes back with the state, before any document
+        // is opened, so the first page a reader sees is already in the view they
+        // chose rather than the one it happened to default to.
+        setFrontmatterMode(
+          typeof state.frontmatterMode === 'string'
+            ? state.frontmatterMode
+            : DEFAULT_FRONTMATTER_MODE,
+          false,
+        );
         setSidebarCollapsed(state.sidebarCollapsed === true, false);
         setSidebarView(state.sidebarView, false);
         // Every switch, from one loop and one rule. The stored state is already
@@ -3749,6 +3983,7 @@ const pageTemplate = `<!DOCTYPE html>
         const state = await call('getState');
         if (state !== null) applyState(state);
         if (vault.root !== null) await loadFiles();
+        await loadVocabulary();
         showPlaceholder();
         renderTabs();
         // With no vault the dialog is the app, so it opens itself rather than
@@ -3768,6 +4003,9 @@ const pageTemplate = `<!DOCTYPE html>
         renderTabs();
         updateStatus();
         await loadFiles();
+        // A different vault declares different shapes, so the form is re-derived
+        // from scratch rather than carried across the switch.
+        await loadVocabulary();
         showPlaceholder();
         showToast('Vault: ' + state.root);
       }
@@ -3785,6 +4023,9 @@ const pageTemplate = `<!DOCTYPE html>
         // file list over an app that now has no vault at all. switchVault
         // reloads the same way for the same reason.
         await loadFiles();
+        // Nothing declares anything in a vault that is closed, and a form drawn
+        // from the last vault's shapes would be a form about the wrong pages.
+        await loadVocabulary();
         // Closing returns to the dialog the app opened on, rather than to a
         // panel with a button that opens it: one surface for one action, and
         // the recents are the first thing in it.
@@ -4088,6 +4329,13 @@ const pageTemplate = `<!DOCTYPE html>
         { id: 'theme-system', group: 'Appearance', label: 'Match the system', keys: '', canRun: () => true, isActive: () => vault.theme === 'system', run: () => setTheme('system', true) },
         { id: 'theme-light', group: 'Appearance', label: 'Light', keys: '', canRun: () => true, isActive: () => vault.theme === 'light', run: () => setTheme('light', true) },
         { id: 'theme-dark', group: 'Appearance', label: 'Dark', keys: '', canRun: () => true, isActive: () => vault.theme === 'dark', run: () => setTheme('dark', true) },
+        // Three choices, and Automatic is one of them rather than the
+        // absence of a choice: it resolves to structured where a shape constrains the
+        // page and raw where none does, which is the answer for 83 of 85 pages
+        // and the right one for the other two.
+        { id: 'frontmatter-auto', group: 'Frontmatter', label: 'Automatic', keys: '', canRun: () => true, isActive: () => vault.frontmatterMode === 'auto', run: () => setFrontmatterMode('auto', true) },
+        { id: 'frontmatter-structured', group: 'Frontmatter', label: 'Structured fields', keys: '', canRun: () => true, isActive: () => vault.frontmatterMode === 'structured', run: () => setFrontmatterMode('structured', true) },
+        { id: 'frontmatter-raw', group: 'Frontmatter', label: 'Raw YAML', keys: '', canRun: () => true, isActive: () => vault.frontmatterMode === 'raw', run: () => setFrontmatterMode('raw', true) },
         // One menu item per switch, generated from the same table the toolbar's
         // checkboxes come from, so a switch cannot be in one surface and not
         // the other and a fourth needs no line here. A checkbox rather than a

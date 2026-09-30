@@ -28,9 +28,21 @@ deno task check        # type-check (uses --desktop for the Deno.BrowserWindow t
 deno task test         # unit tests
 deno task check:appearance  # drives both palettes in the real desktop webview
 
+deno task test:agreement  # the frontmatter form against the real `wiki` CLI,
+                          # over testdata/shacl-vault/ — needs `wiki` on the
+                          # PATH, which is why it is a task of its own and a CI
+                          # job of its own. CI calls `deno test` directly and
+                          # with a wider --allow-run, because pip's console
+                          # script is a symlink Deno's by-name check will not
+                          # follow on a hosted runner
+
 WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env --allow-run=git
                        # adds one opt-in test: every page in that vault has to
                        # survive read → editor → save with its bytes intact
+
+WIKI_DESKTOP_VAULT=/path/to/vault deno task test:agreement
+                       # the same agreement test over a real vault instead of
+                       # the fixture
 
 deno fmt           # formatting
 deno lint          # lint
@@ -113,21 +125,29 @@ pre-paint path here is the real one, not a model of it.
 
 ## Layout
 
-| File                      | Role                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main.ts`             | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.                                                                                                                                                                                                          |
-| `src/page.ts`             | The webview document (HTML, CSS, and JS as one string) — the activity bar and its panes (Explorer, Search, Recently changed), tab strip, editor, vault picker.                                                                                                                                                                                    |
-| `src/dev_server.ts`       | Browser transport: serves the page and the same operations over loopback HTTP.                                                                                                                                                                                                                                                                    |
-| `src/vault.ts`            | Vault path validation and file operations, including line-ending preservation and the whole-text search behind the Search view. Every path from the webview passes through here.                                                                                                                                                                  |
-| `src/wiki_config.ts`      | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.                                                                                                                                                                                                     |
-| `src/config.ts`           | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state, width and selected view, appearance, and the file list's three switches as one table).                                                                                                                                          |
-| `src/appearance_check.ts` | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
-| `src/editor.ts`           | The editor's document model, its find panel, and its theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                             |
-| `src/editor_entry.ts`     | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag, and the formatter as `window.WikiFormat` beside it — the page is a classic script with no import to reach either by.                                                                                                                                |
-| `src/plex_mono.ts`        | IBM Plex Mono, the design system's body face, as two embedded woff2 subsets. Generated, not hand-edited; see the file's own header for how to regenerate it.                                                                                                                                                                                      |
-| `src/fence_languages.ts`  | Which grammar highlights a fenced code block, if any. Its own module so the mapping is testable without a DOM, like `vault.ts` and `wiki_config.ts`.                                                                                                                                                                                              |
-| `src/format.ts`           | Formatting: a pure function from a page's text to the same text tidied. Its own module for the same reason, and bundled rather than reached over a binding — see the note on formatting below.                                                                                                                                                    |
-| `src/editor_bundle.js`    | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact. CI rebuilds it and fails on any diff, which is the only way drift is visible: `deno task build` makes the binary, not the bundle, so a change to `src/editor.ts` can pass every other check and still serve the old behaviour. |
+| File                          | Role                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main.ts`                 | Entrypoint: serves the page, adopts the startup window, registers bindings, restores window geometry, guards close with unsaved changes.                                                                                                                                                                                                          |
+| `src/page.ts`                 | The webview document (HTML, CSS, and JS as one string) — the activity bar and its panes (Explorer, Search, Recently changed), tab strip, editor, vault picker.                                                                                                                                                                                    |
+| `src/dev_server.ts`           | Browser transport: serves the page and the same operations over loopback HTTP.                                                                                                                                                                                                                                                                    |
+| `src/vault.ts`                | Vault path validation and file operations, including line-ending preservation and the whole-text search behind the Search view. Every path from the webview passes through here.                                                                                                                                                                  |
+| `src/wiki_config.ts`          | The vault's own `wiki.yml` (`input`, `assets`, `exclude`), read on the way into a listing so a page and a static file are not the same thing.                                                                                                                                                                                                     |
+| `src/config.ts`               | App settings in `~/.wazoo-wiki/config.json` (open vault, recent vaults, window geometry, sidebar collapsed state, width and selected view, appearance, and the file list's three switches as one table).                                                                                                                                          |
+| `src/appearance_check.ts`     | The appearance check behind `deno task check:appearance`: six cases, driven and read back in the real desktop webview.                                                                                                                                                                                                                            |
+| `src/editor.ts`               | The editor's document model, its find panel, and its theme, behind a small handle the page drives. Runs in the webview, so it is the one module that is not a string.                                                                                                                                                                             |
+| `src/editor_entry.ts`         | Bundle entry: publishes that handle as `window.WikiEditor` for the page's classic script tag, and the formatter as `window.WikiFormat` beside it — the page is a classic script with no import to reach either by.                                                                                                                                |
+| `src/plex_mono.ts`            | IBM Plex Mono, the design system's body face, as two embedded woff2 subsets. Generated, not hand-edited; see the file's own header for how to regenerate it.                                                                                                                                                                                      |
+| `src/fence_languages.ts`      | Which grammar highlights a fenced code block, if any. Its own module so the mapping is testable without a DOM, like `vault.ts` and `wiki_config.ts`.                                                                                                                                                                                              |
+| `src/format.ts`               | Formatting: a pure function from a page's text to the same text tidied. Its own module for the same reason, and bundled rather than reached over a binding — see the note on formatting below.                                                                                                                                                    |
+| `src/frontmatter.ts`          | A span-accurate YAML frontmatter scanner and the minimal-edit `TextEdit`s the panel writes with. It parses to offsets and never to a value tree, because a parse-then-serialise round trip reformats the reader's file; a write is one `TextEdit` and, over the toolchain's own 87-page vault, a one-line diff in all 304 cases.                  |
+| `src/shapes.ts`               | The shape documents as data: a `TermResolver` that mirrors `wiki/graph.py`'s prefix rules (`resolve_predicate` falls through to `@vocab`, `resolve_type` returns `None`), `parseShape`, and `documentIri`, which is what lets a report name `wiki:CSS` the way `wiki check` does.                                                                 |
+| `src/shacl.ts`                | The in-app SHACL evaluator and its default messages, pinned to pyshacl's wording. It exists because `check_shacl_file` reads through `document_data_from_path`: the CLI can only validate a file already on disk, so a pre-save verdict is not something it can give.                                                                             |
+| `src/fields.ts`               | `buildFieldModel`: the union of declared, observed, suggested and structural fields, with one field carrying the constraints of every shape that reaches it.                                                                                                                                                                                      |
+| `src/vocabulary.ts`           | `readVaultVocabulary`: an uncached walk that gathers the prefix map, the shape documents, and the keys other pages use. Shape pages are excluded from the observed keys, or a vault's two shape documents would teach every page to use `sh:property`.                                                                                            |
+| `src/frontmatter_view.ts`     | `planFrontmatter` and the `FrontmatterPanel` that draws it. Pure planning and DOM rendering, split so the plan is testable without a DOM.                                                                                                                                                                                                         |
+| `src/shacl_agreement_test.ts` | Runs the real `wiki` CLI over a temp copy of a vault and asserts the app's verdicts match it result for result — over `testdata/shacl-vault/` by default, and over a real vault when `WIKI_DESKTOP_VAULT` names one. Its own task and its own CI job, because it needs the CLI.                                                                   |
+| `testdata/shacl-vault/`       | A seven-page vault, committed, built so the two engines have something to disagree about: a shape with messages, a shape without, a page breaking `sh:maxCount` and `sh:datatype`, a page two shapes constrain, and a page no shape does. See its own README.                                                                                     |
+| `src/editor_bundle.js`        | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact. CI rebuilds it and fails on any diff, which is the only way drift is visible: `deno task build` makes the binary, not the bundle, so a change to `src/editor.ts` can pass every other check and still serve the old behaviour. |
 
 ## How it works
 
@@ -805,6 +825,82 @@ pre-paint path here is the real one, not a model of it.
   is how the browser preview and the tests drive the same path, and how
   `src/main.ts` will reach in if the native menu is ever projected. An entry's
   accelerator label is only ever a shortcut the page itself handles.
+- **The frontmatter panel is a view of the buffer, and that is the whole trick**
+  ([#8](https://github.com/wazootech/wiki-desktop/issues/8)) — a page's
+  frontmatter is shown as fields above the editor, grouped into what the page's
+  shape requires, what other pages in the vault happen to use, and the app's own
+  layout keys. Every verdict it shows is computed from the text in the editor,
+  including edits you have not saved, because `wiki check` reads through
+  `document_data_from_path` and can only see a file already on disk. So the
+  evaluator is in the app (`src/shacl.ts`) and is pinned to the CLI by a test
+  rather than trusted: over a mutated copy of the toolchain's own 87-page vault,
+  the two agree on 0, 3, 85 and 2 results — every result identical, including
+  the four whose shape carries no `sh:message` and so depend on pyshacl's
+  generated wording being reproduced byte for byte. The seam to swap for
+  `wiki check -f json` is one function, and is waiting on
+  [wiki#310](https://github.com/wazootech/wiki/issues/310).
+- **Writing a field is a one-line diff, never a reformat** — the parser produces
+  offsets and spans, not a value tree, so a write is a single `TextEdit` against
+  the buffer. A YAML frontmatter parser that parsed to values would have to
+  serialise them back, and that reformats the reader's file: reflowed quoting,
+  reordered keys, a lost comment. Measured over all 87 pages of the toolchain's
+  vault, 304 field edits were 304 one-line diffs. There is no serializer in the
+  codebase at all, and the values the parser is not sure of — anchors, explicit
+  keys, multi-line plain scalars, directives — are left alone rather than
+  guessed at.
+- **The panel stands down honestly, and says which shape spoke** — `auto` shows
+  the structured view where a shape targets the page's class and falls back to
+  raw everywhere else, because a page no shape constrains has nothing to
+  validate. When it stands down it still shows the toggle, so a page that `auto`
+  declined can be argued with from the panel rather than the command menu. A
+  field that more than one shape constrains carries both messages and names both
+  shapes, which is the `Linked_Markdown` case: constrained as a `TechArticle`
+  and as a `SoftwareApplication`, one of which has an `sh:message` and one of
+  which does not. And a field you are part-way through typing into withdraws its
+  verdict rather than leaving a stale one standing: an input commits on blur,
+  and between the keystrokes and the commit the text the verdict was computed
+  from no longer exists.
+- **The panel says one thing once, and a quiet panel is the point** — a page
+  constrained by a shape is one line above its fields: the class, the shape that
+  speaks for it, and the toggle. A page no shape constrains adds one short line
+  saying nothing here has been checked, because that is the sentence a reader
+  needs _before_ reading any row below it. Everything else that repeated a
+  heading was removed rather than restyled: the shape name was being printed
+  twice, once in the header and once as the first group's hint, and the second
+  group's hint said the same thing about the class. What survives is a hint only
+  where it says something the heading cannot — which shape, how many, and why
+  the app's own layout keys are in a group of their own. A field no shape
+  declares gets **no mark at all**, rather than a distinct fourth one: it is the
+  state a shape document is _entirely_ made of, so a mark on every row says
+  nothing on every row, and a ragged column of nine identical dots down the
+  panel is noise. Valid and invalid keep their marks, in a fixed column rather
+  than trailing each key at its own width, because a column you can scan is the
+  point of having a mark. `Remove` is faint until its row is hovered or holds
+  the focus, because on a page of thirty fields that is thirty copies of the
+  word "Remove" competing with the values, and removing a key is not something a
+  reader does while reading. The third column is a fixed 60px for the same
+  reason a mark needs a column: a field the page does not have yet has no button
+  in it, and a content-sized column made every input a different width depending
+  on whether its row happened to carry one.
+- **The panel and the editor never show the same frontmatter twice** — they are
+  two views of one buffer, so in the structured mode the document's opening
+  lines say what the form above already says. Those lines are folded to a single
+  line naming what they held, and in the raw mode the panel collapses to that
+  same single line, because there the editor _is_ the raw frontmatter and a tall
+  panel would only repeat it. The fold is a decoration and not an edit: the text
+  is untouched, undo knows nothing about it, and the buffer is still the one
+  true copy. It is a consequence of the mode rather than a setting of its own,
+  so the two cannot drift apart; switching to raw puts it away and switching
+  back folds it again. Three things deliberately do **not** fold — a selection
+  or cursor that is actually inside the block (so a search hit, a go-to-line or
+  a paste at the top of the file reveals the lines rather than hiding what the
+  reader asked for), a document that is _only_ frontmatter, and a block that
+  does not parse. The folded line is a real `button` with an accessible name, so
+  the way back is reachable from the keyboard and not only from a mouse. It
+  lives in editor state rather than in a view plugin, because CodeMirror rejects
+  a block decoration supplied by a plugin, and rightly: a block decoration a
+  plugin rebuilds on its own schedule is one that can disagree with the document
+  it is drawn against.
 - **Sidebar width** — the column's right edge is a drag handle (`col-resize`),
   clamped to 180–520px and to the width that still leaves the editor room on a
   small window. The handle is a separator, so it is tabbable and resizable from
@@ -853,6 +949,17 @@ pre-paint path here is the real one, not a model of it.
   dot-prefixed) sits ahead of `wiki.exclude`, and the walk stops at 12 levels or
   5,000 files. Build leftovers a vault does not exclude — Python's `__pycache__`
   and `.pyc`, for instance — therefore show up among its files, as `other`.
+- **The in-app evaluator implements three constraints, not SHACL.**
+  `sh:minCount`, `sh:maxCount` and `sh:datatype` are read from a shape and
+  checked; a `sh:pattern`, `sh:class` or `sh:in` in a shape document is parsed
+  but not evaluated, so a field only such a constraint guards is reported as
+  valid when `wiki check` would report it. The three are what the toolchain's
+  own two shapes use, and the agreement test is what keeps that honest — it runs
+  in CI over `testdata/shacl-vault/`, and over a real vault on request. It is
+  still a real gap, and it closes when
+  [wiki#310](https://github.com/wazootech/wiki/issues/310) lets `wiki check` be
+  asked for structured output, at which point the evaluator behind `validate()`
+  is replaced by the CLI's own answers rather than extended.
 - The vault is not watched, so external edits need the refresh button on the tab
   bar (or **Reload from disk** in the menu); it asks before discarding a buffer
   with unsaved changes.

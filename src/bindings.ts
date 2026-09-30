@@ -3,8 +3,10 @@ import { basename } from "node:path";
 import {
   clampSidebarWidth,
   clampSplitRatio,
+  coerceFrontmatterMode,
   coerceSidebarView,
   coerceTheme,
+  type FrontmatterMode,
   homeDirectory,
   LIST_VIEW_DEFAULTS,
   type ListViewKey,
@@ -28,6 +30,10 @@ import {
   pushBranch,
   type PushResult,
 } from "./git.ts";
+import {
+  readVaultVocabulary,
+  type VaultVocabularyPayload,
+} from "./vocabulary.ts";
 import {
   activityByDay,
   type ActivityDay,
@@ -62,6 +68,15 @@ export interface VaultStateBase {
   splitRatio: number;
   /** Light/dark appearance the user last chose, `system` if they never did. */
   theme: ThemePreference;
+  /**
+   * Whether frontmatter is shown as a form or as the YAML it is.
+   *
+   * Read here rather than fetched by the page, because it is a stored
+   * preference like the width and the collapsed flag: the panel has to know
+   * which view to draw before the first document is opened, and a second
+   * request for it would be a second answer to one question.
+   */
+  frontmatterMode: FrontmatterMode;
 }
 
 /**
@@ -109,6 +124,18 @@ export type WikiBindings =
      * draws rather than re-deriving it from a listing it happens to hold.
      */
     vaultActivity(): Promise<ActivityDay[]>;
+    /**
+     * What the vault declares: its prefix map, its shape documents, and the
+     * keys its pages use.
+     *
+     * Its own operation because it is the one thing the frontmatter form needs
+     * that is a fact about the vault rather than about a page, and the page is
+     * a string that cannot import the reader for it. Read fresh on every call
+     * rather than cached: shapes are documents inside the vault, so editing one
+     * has to re-derive the form, and a cache would be a second answer to "what
+     * does this vault declare" that could go stale while the app is open.
+     */
+    vaultVocabulary(): Promise<VaultVocabularyPayload>;
     /**
      * What the vault's repository has pending, or null when it is not in one.
      *
@@ -158,6 +185,14 @@ export type WikiBindings =
     setSplitRatio(ratio: number): Promise<VaultState>;
     /** Remember the appearance, so it survives a restart. */
     setTheme(theme: string): Promise<VaultState>;
+    /**
+     * Remember whether frontmatter is shown as a form or as YAML.
+     *
+     * Clamped to the modes this build knows, for the reason the width and the
+     * split ratio are: the page is a caller like any other, and a stored mode
+     * it cannot draw is one the reader could not get back to.
+     */
+    setFrontmatterMode(mode: string): Promise<VaultState>;
   }
   & {
     /**
@@ -203,6 +238,12 @@ export function createVaultApi(): VaultApi {
     search: guard(async (query: string) =>
       await searchVaultFiles(await requireVaultRoot(), query)
     ),
+    vaultVocabulary: guard(async () =>
+      await readVaultVocabulary(
+        await requireVaultRoot(),
+        await listVaultFiles(await requireVaultRoot()),
+      )
+    ),
     vaultActivity: guard(async () =>
       activityByDay(await listVaultFiles(await requireVaultRoot()))
     ),
@@ -245,6 +286,10 @@ export function createVaultApi(): VaultApi {
       // Coerced for the same reason the width is clamped: the page is a caller
       // like any other, and an unknown value here would outlive this session.
       await updateConfig({ theme: coerceTheme(theme) });
+      return await readState();
+    }),
+    setFrontmatterMode: guard(async (mode: string) => {
+      await updateConfig({ frontmatterMode: coerceFrontmatterMode(mode) });
       return await readState();
     }),
   };
@@ -329,6 +374,7 @@ async function readState(): Promise<VaultState> {
     sidebarView: config.sidebarView,
     splitRatio: config.splitRatio,
     theme: config.theme,
+    frontmatterMode: config.frontmatterMode,
   };
   if (!config.vaultRoot) {
     return { root: null, name: null, ...ui };

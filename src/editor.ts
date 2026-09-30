@@ -44,6 +44,9 @@ import {
 import { tags as t } from "@lezer/highlight";
 
 import { fenceLanguage } from "./fence_languages.ts";
+import { readFrontmatter } from "./frontmatter.ts";
+import { type FrontmatterMode, FrontmatterPanel } from "./frontmatter_view.ts";
+import type { VaultVocabularyPayload } from "./vocabulary.ts";
 import {
   asksToFollowLink,
   describeLinkTarget,
@@ -53,6 +56,8 @@ import {
 } from "./markdown_links.ts";
 import {
   closeHoverTooltips,
+  Decoration,
+  type DecorationSet,
   drawSelection,
   dropCursor,
   EditorView,
@@ -65,6 +70,7 @@ import {
   lineNumbers,
   ViewPlugin,
   type ViewUpdate,
+  WidgetType,
 } from "@codemirror/view";
 
 export interface WikiEditorHandle {
@@ -130,6 +136,25 @@ export interface WikiEditorHandle {
   closeFind(): void;
   /** Whether the find panel is up, so a caller can avoid re-opening it. */
   findIsOpen(): boolean;
+  /**
+   * Give the frontmatter panel what the vault declares, and redraw it.
+   *
+   * The page asks rather than the panel reaching for it, for the same reason
+   * every other operation here is a call: the panel is in the webview and the
+   * vault is in the Deno process, and nothing in the editor may read a file.
+   */
+  setVocabulary(vocabulary: VaultVocabularyPayload | null): void;
+  /**
+   * Set which view the frontmatter is shown in, and redraw.
+   *
+   * `auto` defers to what the vault declares. The mode is the reader's stored
+   * preference rather than a per-document one, so a page always opens in the
+   * same view as the last one and a malformed frontmatter can never be a mode
+   * a save is blocked by.
+   */
+  setFrontmatterMode(mode: FrontmatterMode): void;
+  /** The mode the reader chose, which is what the config stores. */
+  frontmatterMode(): FrontmatterMode;
   focus(): void;
 }
 
@@ -144,6 +169,14 @@ export interface WikiEditorOptions {
    * to do with the target, because it knows the vault and the folder browser.
    */
   onFollowLink?: (target: LinkTarget) => void;
+  /**
+   * The reader switched the frontmatter view, so the choice is worth keeping.
+   *
+   * Routed out to the page rather than stored here because the editor holds no
+   * settings: it is the one module in the app that runs in the webview, and the
+   * stored preference belongs with the rest of them in `src/config.ts`.
+   */
+  onFrontmatterMode?: (mode: FrontmatterMode) => void;
 }
 
 /** Two spaces, matching what the plain-textarea editor did on Tab. */
@@ -178,6 +211,139 @@ const replaceRowRevealed = StateField.define<boolean>({
     return value;
   },
 });
+
+/*
+ * Folding the frontmatter away while the panel is showing it.
+ *
+ * The panel and the editor are two views of one buffer, so in the structured
+ * mode the document's first lines say the same thing twice. Folding them is
+ * the one edit here that is not an edit: the text is untouched, the fold is a
+ * decoration, and undo knows nothing about it because there is nothing to undo.
+ *
+ * The fold is not a permanent setting but a consequence of the mode, so it
+ * lives in state as a mode plus whether the reader has asked to see the lines:
+ * switching to raw puts it away, switching back folds it again, and clicking
+ * the folded line opens it for as long as the mode lasts.
+ */
+interface FrontmatterFold {
+  /** Whether the structured panel is the one on screen. */
+  structured: boolean;
+  /** Whether the reader has opened the lines the fold covers. */
+  revealed: boolean;
+}
+
+const setFrontmatterFold = StateEffect.define<FrontmatterFold>();
+
+const frontmatterFold = StateField.define<FrontmatterFold>({
+  create: () => ({ structured: false, revealed: false }),
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setFrontmatterFold)) return effect.value;
+    }
+    return value;
+  },
+});
+
+/** The one line a folded frontmatter leaves behind, and the way to open it. */
+class FrontmatterFoldWidget extends WidgetType {
+  constructor(
+    private readonly count: number,
+    private readonly open: () => void,
+  ) {
+    super();
+  }
+
+  override eq(other: FrontmatterFoldWidget): boolean {
+    return other.count === this.count;
+  }
+
+  toDOM(): HTMLElement {
+    // A real button, so the line is reachable and operable from the keyboard
+    // rather than being a decoration only a mouse can open. CodeMirror is told
+    // to ignore events here, which stops it trying to put a cursor inside a
+    // range that is not there, and the button's own click still arrives.
+    const dom = document.createElement("button");
+    dom.type = "button";
+    dom.className = "cm-frontmatter-fold";
+    dom.textContent = `Frontmatter — ${this.count} ${
+      this.count === 1 ? "key" : "keys"
+    }, shown in the panel above`;
+    dom.setAttribute(
+      "aria-label",
+      `Frontmatter, ${this.count} ${
+        this.count === 1 ? "key" : "keys"
+      }. Activate to show the raw frontmatter.`,
+    );
+    dom.addEventListener("click", this.open);
+    return dom;
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** The decorations that fold the frontmatter, or none to leave it alone. */
+function frontmatterFoldDecorations(
+  state: EditorState,
+  open: () => void,
+): DecorationSet {
+  const { structured, revealed } = state.field(frontmatterFold);
+  if (!structured || revealed) return Decoration.none;
+
+  const text = state.doc.toString();
+  const { frontmatter } = readFrontmatter(text);
+  if (frontmatter === null) return Decoration.none;
+  // A document that is nothing but frontmatter would fold to an empty editor,
+  // which is a worse answer than the duplication.
+  if (frontmatter.to >= text.length) return Decoration.none;
+  // Anything that puts the reader *into* the folded range opens it: a search
+  // hit, a selection, a paste at the top of the file. The reader is asking for
+  // those lines, so they get them. A cursor merely resting at the very start of
+  // the document is not that — every document opens with its cursor at zero,
+  // and reading it must not mean the fold can never appear.
+  const { from, to, empty } = state.selection.main;
+  const overlaps = from < frontmatter.to && to > frontmatter.from;
+  const inside = !empty && overlaps;
+  const cursorIn = from > frontmatter.from && from < frontmatter.to;
+  if (inside || cursorIn) return Decoration.none;
+
+  const last = state.doc.lineAt(frontmatter.to);
+  return Decoration.set([
+    Decoration.replace({
+      widget: new FrontmatterFoldWidget(
+        frontmatter.mapping.entries.length,
+        open,
+      ),
+      block: true,
+    }).range(state.doc.lineAt(frontmatter.from).from, last.to),
+  ]);
+}
+
+/**
+ * The fold, as state rather than as a view plugin.
+ *
+ * CodeMirror rejects a block decoration supplied by a plugin outright, and it
+ * is right to: a block decoration a plugin rebuilds on its own schedule is one
+ * that can disagree with the document it is drawn against. So the set lives in
+ * the state, is mapped through every transaction, and is rebuilt when the
+ * document, the selection or the mode is what moved it.
+ */
+function frontmatterFolding(open: () => void): StateField<DecorationSet> {
+  const build = (state: EditorState) => frontmatterFoldDecorations(state, open);
+  return StateField.define<DecorationSet>({
+    create: build,
+    update(value, transaction) {
+      const modeMoved = transaction.startState.field(frontmatterFold) !==
+        transaction.state.field(frontmatterFold);
+      if (transaction.docChanged || transaction.selection || modeMoved) {
+        return build(transaction.state);
+      }
+      return value;
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+}
 
 /**
  * Keeps the editor root's class in step with that state.
@@ -370,6 +536,28 @@ const appTheme = EditorView.theme({
     fontSize: "13px",
   },
   "&.cm-focused": { outline: "none" },
+  /*
+   * The line a folded frontmatter leaves behind. It reads as part of the
+   * document rather than as a control bar, and says what it is standing in
+   * for, so the top of the file is not simply missing.
+   */
+  ".cm-frontmatter-fold": {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    font: "inherit",
+    fontSize: "11.5px",
+    padding: "4px 9px",
+    border: "1px solid var(--line-strong)",
+    borderRadius: "4px",
+    background: "var(--panel-muted)",
+    color: "var(--text-soft)",
+    cursor: "pointer",
+  },
+  ".cm-frontmatter-fold:hover": {
+    borderColor: "var(--brand)",
+    color: "var(--text-editor)",
+  },
   ".cm-scroller": { fontFamily: "inherit", lineHeight: "1.6" },
   ".cm-content": { padding: "12px 4px 12px 0" },
   ".cm-line": { paddingLeft: "12px" },
@@ -690,6 +878,13 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
   /** Whether the follow-link modifier is held, read by the hover tooltip. */
   let armed = false;
 
+  /*
+   * The view, held for the extensions that are built before it exists. Only
+   * the folded frontmatter's own click needs it, and it is written once, on the
+   * line that creates the view.
+   */
+  const foldTarget: { view: EditorView | null } = { view: null };
+
   const extensions: Extension[] = [
     lineNumbers(),
     highlightActiveLineGutter(),
@@ -705,6 +900,15 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     ...markdownHighlightStyles.map((style) => syntaxHighlighting(style)),
     documentLanguage,
     appTheme,
+    frontmatterFold,
+    // The folded line's own click opens the raw frontmatter, and the widget
+    // that draws it is built before the view exists, so the way back is reached
+    // through a holder the view fills in on the line below.
+    frontmatterFolding(() =>
+      foldTarget.view?.dispatch({
+        effects: setFrontmatterFold.of({ structured: true, revealed: true }),
+      })
+    ),
     // The accessible name and the spellchecker used to live on the textarea.
     EditorView.contentAttributes.of({
       "aria-label": "File contents",
@@ -854,6 +1058,9 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
         states.set(key, update.state);
         options.onChange();
       }
+      // Only on a change of text, never on a cursor move: the form's states are
+      // derived from the document, so a selection cannot alter any of them.
+      if (update.docChanged) queuePanelRefresh();
     }),
   ];
 
@@ -863,10 +1070,91 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     if (!next) view.dispatch({ effects: closeHoverTooltips });
   }
 
+  /*
+   * The frontmatter panel is docked above the document, and it is a **view**
+   * over the same buffer rather than a second document: every value it shows
+   * came from a span in this text, and every value it writes is one dispatch
+   * against it. That is what keeps criterion 1 true for a page somebody edited
+   * through the form, and it is why the panel can be redrawn on every change
+   * without any risk of the two drifting — there is only one text.
+   */
+  const panelHost = document.createElement("div");
+  panelHost.className = "wiki-frontmatter-host";
+  options.container.append(panelHost);
+  // The document gets a wrapper of the app's own rather than being a direct
+  // child of the host, so the column layout can say what the editor's share is
+  // without a rule naming one of CodeMirror's classes — the page's stylesheet
+  // has no business styling those, and `src/page_test.ts` refuses it.
+  const editorBody = document.createElement("div");
+  editorBody.className = "wiki-editor-body";
+  options.container.append(editorBody);
+  let refreshQueued = false;
+  const panel = new FrontmatterPanel(
+    document.createElement("div"),
+    {
+      text: () => view.state.doc.toString(),
+      path: () => key,
+      apply: (edit) => {
+        if (!edit.changed) return;
+        view.dispatch({
+          changes: { from: edit.from, to: edit.to, insert: edit.insert },
+          // Its own event, so one write from the form is one step in the undo
+          // history rather than one step per character of the value, and so the
+          // typing that surrounds it is not folded into it.
+          userEvent: "frontmatter.edit",
+        });
+      },
+    },
+    {
+      onModeChange: (mode) => options.onFrontmatterMode?.(mode),
+      onDirty: () => options.onChange(),
+    },
+  );
+  panelHost.append(panel.root);
+
   const view = new EditorView({
-    parent: options.container,
+    parent: editorBody,
     state: EditorState.create({ doc: "", extensions }),
   });
+  foldTarget.view = view;
+
+  /*
+   * Redraw the panel after the editor has settled rather than on every
+   * transaction. A keystroke produces a transaction, and so does every selection
+   * move, and re-planning the form on a cursor nudge is work whose result
+   * nothing can see; one frame of coalescing costs nothing and keeps a fast
+   * typist from paying for a form that is redrawn between two characters.
+   */
+  function queuePanelRefresh() {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    queueMicrotask(() => {
+      refreshQueued = false;
+      panel.render();
+      syncFrontmatterFold();
+    });
+  }
+
+  /*
+   * Keep the folded frontmatter in step with what the panel decided.
+   *
+   * The fold follows the mode rather than a setting of its own, so the two can
+   * never disagree about whether the raw frontmatter is on screen. It is
+   * written after the panel has rendered because the panel is what resolves
+   * `auto` — the editor has no opinion of its own about which pages have a
+   * shape — and the dispatch is skipped when nothing would change, so this
+   * cannot feed itself a transaction on every keystroke.
+   */
+  function syncFrontmatterFold() {
+    const structured = panel.plan().mode === "structured";
+    const current = view.state.field(frontmatterFold);
+    // Opening the fold by clicking it survives a re-render; a mode change does
+    // not, because switching to raw and back is how the reader says "fold it".
+    if (current.structured === structured) return;
+    view.dispatch({
+      effects: setFrontmatterFold.of({ structured, revealed: false }),
+    });
+  }
 
   function showDocument(nextKey: string, text: string): void {
     scrollTops.set(key, view.scrollDOM.scrollTop);
@@ -882,6 +1170,10 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     }
     view.setState(state);
     view.scrollDOM.scrollTop = scrollTops.get(key) ?? 0;
+    // A different document has a different class and different fields, so the
+    // form is re-derived rather than carried across the switch.
+    panel.render();
+    syncFrontmatterFold();
   }
 
   function applyFormatted(text: string): void {
@@ -957,6 +1249,18 @@ export function createEditor(options: WikiEditorOptions): WikiEditorHandle {
     openFind,
     closeFind,
     findIsOpen,
+    setVocabulary: (vocabulary) => {
+      panel.setVocabulary(vocabulary);
+      // The vocabulary is what resolves `auto`, and it arrives after the first
+      // document is already open, so this is the render that first knows
+      // whether a page has a shape. Folding has to follow it.
+      syncFrontmatterFold();
+    },
+    setFrontmatterMode: (mode) => {
+      panel.setMode(mode);
+      syncFrontmatterFold();
+    },
+    frontmatterMode: () => panel.chosenMode(),
     focus: () => view.focus(),
   };
 }

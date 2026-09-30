@@ -7,7 +7,8 @@
     "build:editor": "deno bundle --platform browser --minify --quiet src/editor_entry.ts -o src/editor_bundle.js",
     "check": "deno check --desktop src/main.ts src/dev_server.ts src/editor.ts src/editor_entry.ts src/appearance_check.ts src/wiki_config.ts src/format.ts",
     "check:appearance": "deno desktop --hmr --allow-read --allow-write --allow-env --allow-net src/appearance_check.ts",
-    "test": "deno test --allow-read --allow-write --allow-env --allow-net --allow-run=git"
+    "test": "deno test --allow-read --allow-write --allow-env --allow-net --allow-run=git",
+    "test:agreement": "deno test --allow-read --allow-write --allow-env --allow-run=wiki src/shacl_agreement_test.ts"
   },
   "imports": {
     "@codemirror/lang-html": "npm:@codemirror/lang-html@^6.4.12",
@@ -35,12 +36,14 @@
   },
   "fmt": {
     "exclude": [
-      "src/editor_bundle.js"
+      "src/editor_bundle.js",
+      "testdata"
     ]
   },
   "lint": {
     "exclude": [
-      "src/editor_bundle.js"
+      "src/editor_bundle.js",
+      "testdata"
     ]
   }
 }
