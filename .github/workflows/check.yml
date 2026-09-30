@@ -45,3 +45,41 @@ jobs:
 
       - name: build
         run: deno task build
+
+  # The panel decides a field's validity itself, from the vault's own shapes,
+  # rather than asking `wiki check` — because the CLI can only read a file that
+  # is already on disk, and #8's first acceptance criterion is a verdict before
+  # the save. That decision is only defensible while it agrees with the tool
+  # that owns the truth, and `src/shacl_agreement_test.ts` is what checks it.
+  #
+  # It is a separate job because it needs two things the main job has no reason
+  # to have: Python, and the `wiki` CLI itself. The test runs against
+  # `testdata/shacl-vault/`, a committed fixture, so this needs no vault and no
+  # secrets — a checkout is the whole input.
+  agreement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Not pinned to a version on purpose. The test asserts that this app and
+      # pyshacl say the same thing, so a release that changes the wording is
+      # supposed to turn this job red — that is the drift it exists to catch,
+      # and pinning would hide it until someone remembered to look.
+      - name: install the wiki CLI
+        run: pip install wazootech-wiki
+
+      - name: the app and `wiki check` agree
+        # WIKI_AGREEMENT_REQUIRED turns "the CLI is missing" from a printed note
+        # into a failure. Without it a broken install would skip the test and
+        # this job would be green for having checked nothing.
+        env:
+          WIKI_AGREEMENT_REQUIRED: "1"
+        run: deno task test:agreement

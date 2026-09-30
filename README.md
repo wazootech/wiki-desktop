@@ -28,9 +28,18 @@ deno task check        # type-check (uses --desktop for the Deno.BrowserWindow t
 deno task test         # unit tests
 deno task check:appearance  # drives both palettes in the real desktop webview
 
+deno task test:agreement  # the frontmatter form against the real `wiki` CLI,
+                          # over testdata/shacl-vault/ — needs `wiki` on the
+                          # PATH, which is why it is a task of its own and a CI
+                          # job of its own
+
 WIKI_DESKTOP_VAULT=/path/to/vault deno test --allow-read --allow-write --allow-env --allow-run=git
                        # adds one opt-in test: every page in that vault has to
                        # survive read → editor → save with its bytes intact
+
+WIKI_DESKTOP_VAULT=/path/to/vault deno task test:agreement
+                       # the same agreement test over a real vault instead of
+                       # the fixture
 
 deno fmt           # formatting
 deno lint          # lint
@@ -133,7 +142,8 @@ pre-paint path here is the real one, not a model of it.
 | `src/fields.ts`               | `buildFieldModel`: the union of declared, observed, suggested and structural fields, with one field carrying the constraints of every shape that reaches it.                                                                                                                                                                                      |
 | `src/vocabulary.ts`           | `readVaultVocabulary`: an uncached walk that gathers the prefix map, the shape documents, and the keys other pages use. Shape pages are excluded from the observed keys, or a vault's two shape documents would teach every page to use `sh:property`.                                                                                            |
 | `src/frontmatter_view.ts`     | `planFrontmatter` and the `FrontmatterPanel` that draws it. Pure planning and DOM rendering, split so the plan is testable without a DOM.                                                                                                                                                                                                         |
-| `src/shacl_agreement_test.ts` | Opt-in: runs the real `wiki` CLI over a temp copy of a real vault and asserts the app's verdicts match it result for result. Skipped unless `WIKI_DESKTOP_VAULT` is set.                                                                                                                                                                          |
+| `src/shacl_agreement_test.ts` | Runs the real `wiki` CLI over a temp copy of a vault and asserts the app's verdicts match it result for result — over `testdata/shacl-vault/` by default, and over a real vault when `WIKI_DESKTOP_VAULT` names one. Its own task and its own CI job, because it needs the CLI.                                                                   |
+| `testdata/shacl-vault/`       | A seven-page vault, committed, built so the two engines have something to disagree about: a shape with messages, a shape without, a page breaking `sh:maxCount` and `sh:datatype`, a page two shapes constrain, and a page no shape does. See its own README.                                                                                     |
 | `src/editor_bundle.js`        | The built editor, committed and served at `/editor.js` by both transports so the desktop build stays one artifact. CI rebuilds it and fails on any diff, which is the only way drift is visible: `deno task build` makes the binary, not the bundle, so a change to `src/editor.ts` can pass every other check and still serve the old behaviour. |
 
 ## How it works
@@ -941,8 +951,9 @@ pre-paint path here is the real one, not a model of it.
   checked; a `sh:pattern`, `sh:class` or `sh:in` in a shape document is parsed
   but not evaluated, so a field only such a constraint guards is reported as
   valid when `wiki check` would report it. The three are what the toolchain's
-  own two shapes use, and the agreement test is what keeps that honest over a
-  real vault — but it is a real gap, and it closes when
+  own two shapes use, and the agreement test is what keeps that honest — it runs
+  in CI over `testdata/shacl-vault/`, and over a real vault on request. It is
+  still a real gap, and it closes when
   [wiki#310](https://github.com/wazootech/wiki/issues/310) lets `wiki check` be
   asked for structured output, at which point the evaluator behind `validate()`
   is replaced by the CLI's own answers rather than extended.
