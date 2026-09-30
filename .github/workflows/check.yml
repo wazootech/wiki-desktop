@@ -87,16 +87,18 @@ jobs:
         # this job would be green for having checked nothing.
         env:
           WIKI_AGREEMENT_REQUIRED: "1"
-        # `--allow-run=wiki` alone is not enough on a hosted runner. Deno
-        # resolves the name through PATH and then checks what it resolved
-        # against, and setup-python puts console scripts under
-        # /opt/hostedtoolcache, where the by-name grant does not match what
-        # Deno found — the spawn is refused as NotCapable with the binary
-        # plainly on PATH.
+        # `deno test` rather than `deno task test:agreement`, because the task
+        # hardcodes --allow-run=wiki and an appended flag arrives as a trailing
+        # argument instead of a flag — it cannot be added to from outside.
         #
-        # Both go in one comma-separated value, and the comma is the point: a
-        # second --allow-run replaces the first rather than adding to it, so
-        # passing the path on its own leaves the name ungranted and the test
-        # skips. It skips quietly unless WIKI_AGREEMENT_REQUIRED is set, which
-        # is why that is set here.
-        run: deno task test:agreement --allow-run="wiki,$(command -v wiki)"
+        # The grant is the name and the resolved path in one comma-separated
+        # value, and both are needed. Deno resolves the name through PATH and
+        # then checks what it resolved against, and setup-python puts console
+        # scripts under /opt/hostedtoolcache, where a by-name grant does not
+        # match what Deno found: the spawn is refused as NotCapable with the
+        # binary plainly on PATH. A path grant on its own is not enough either,
+        # since the test spawns by name.
+        run: >-
+          deno test --allow-read --allow-write --allow-env
+          --allow-run="wiki,$(command -v wiki)"
+          src/shacl_agreement_test.ts
