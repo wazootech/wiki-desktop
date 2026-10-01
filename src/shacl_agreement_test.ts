@@ -36,6 +36,15 @@
  * subject is absent is a test that reports success for having done nothing —
  * which is the exact failure mode this file exists to rule out.
  *
+ * That guard covers a CLI that will not *spawn*. It does not cover one that
+ * spawns and then declines to do the work: a vault carrying a config key the
+ * installed release does not know is refused with an `Error:` line and a
+ * non-zero exit, which is indistinguishable from a clean run once you are only
+ * reading the text. Such a run used to be scored as zero results, and zero
+ * results is what a correct run over a clean vault returns, so the test went on
+ * to compare two empty sets and call it agreement. `interpretCheck` is what
+ * closes that, and the test at the end of this file is what holds it closed.
+ *
  *     deno task test:agreement
  *     WIKI_DESKTOP_VAULT=/path/to/vault deno task test:agreement
  *
@@ -160,6 +169,70 @@ async function wikiCommand(): Promise<string | null> {
 }
 
 /**
+ * What one run of `wiki check` in one directory actually did.
+ *
+ * `fault` is non-null when the CLI could not check the vault at all, which is
+ * different from it having checked and found nothing. The two are kept apart all
+ * the way to the assertion so that one cannot be scored as the other.
+ */
+interface CheckOutcome {
+  findings: Finding[];
+  /** Why this run proves nothing, or null when it does prove something. */
+  fault: string | null;
+  output: string;
+}
+
+/**
+ * Decide what one `wiki check` run means, from its exit code and its text.
+ *
+ * Neither input is sufficient on its own, which is the trap this closes.
+ *
+ * A vault that conforms exits 0 and prints *nothing*, so exit code alone reads a
+ * clean run as a failure. A vault with violations and a vault the CLI refused to
+ * read both exit 1, and a report-less failure prints no `Message:` lines, so
+ * text alone reads the second as a clean run — which is how a `wiki` release
+ * that rejects one config key came to make this file compare two empty sets and
+ * call it agreement.
+ *
+ * So: exit 0 is a clean result and nothing more, and any non-zero exit has to
+ * be carrying a report to count as a result. Silence at a non-zero exit is a
+ * fault, and the CLI's own words are carried along to explain it, because the
+ * cause is always in them.
+ */
+function interpretCheck(code: number, output: string): CheckOutcome {
+  if (code === 0) return { findings: [], fault: null, output };
+  const findings = parseReport(output);
+  if (findings === null) {
+    return {
+      findings: [],
+      fault:
+        `wiki check exited ${code} without printing a validation report, so it ` +
+        `did not check this vault and its silence is not a result to agree ` +
+        `with. It said:\n${output.trim()}`,
+      output,
+    };
+  }
+  return { findings, fault: null, output };
+}
+
+/** Run `wiki check` over one directory and say what came back. */
+async function runCheck(command: string, cwd: string): Promise<CheckOutcome> {
+  const checked = await new Deno.Command(command, {
+    args: ["check", "-v"],
+    cwd,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const decoder = new TextDecoder();
+  // pyshacl writes the report to stderr, and so does the error path, so the
+  // order of these two is not a choice so much as a fact about which stream
+  // happens to carry what.
+  const output = decoder.decode(checked.stderr) +
+    decoder.decode(checked.stdout);
+  return interpretCheck(checked.code, output);
+}
+
+/**
  * Both sides name a focus node the same way, which took one change to arrange.
  *
  * `wiki check` binds `wiki:` to the site's base and prints `wiki:Gamma`, so an
@@ -171,8 +244,34 @@ async function wikiCommand(): Promise<string | null> {
  * here.
  */
 
-/** The results `wiki check -v` printed, read back out of its report. */
-function parseReport(report: string): Finding[] {
+/**
+ * The results `wiki check -v` printed, or null when it printed no report.
+ *
+ * The null is the whole point of this function, and it is why the return type
+ * is not simply `Finding[]`.
+ *
+ * `wiki check` has three outcomes that all look alike once you are only reading
+ * its text, and this file once mistook one of them for another:
+ *
+ *   - it conforms, and prints *nothing* (exit 0, empty output);
+ *   - it finds violations, and prints a report headed `Conforms: False`;
+ *   - it cannot run at all — a config key this release does not know, a vault
+ *     it cannot read — and prints one `Error:` line (exit 1, no report).
+ *
+ * The third is the dangerous one. A parser that returns `[]` for it produces an
+ * empty result set, and an empty result set is exactly what a correct run over
+ * a clean vault produces, so "the CLI found nothing" and "the CLI never
+ * checked" score identically. A test comparing against that is green for having
+ * verified nothing — the outcome this file exists to rule out, reached by the
+ * one route the `WIKI_AGREEMENT_REQUIRED` guard does not cover, because that
+ * guard watches for a CLI that will not spawn and this one spawns happily.
+ *
+ * So "no report" is a distinct answer from "a report with no findings", and the
+ * caller is made to deal with it. `Conforms:` is the marker, because pyshacl
+ * prints it in the report proper rather than in the error path.
+ */
+function parseReport(report: string): Finding[] | null {
+  if (!/^\s*Conforms:/m.test(report)) return null;
   const findings: Finding[] = [];
   let focus: string | null = null;
   let path: string | null = null;
@@ -590,17 +689,17 @@ Deno.test({
         const workVocabulary = readVocabulary(pages, workConfig);
         const workResolver = new TermResolver(workVocabulary.context);
 
-        const checked = await new Deno.Command(command, {
-          args: ["check", "-v"],
-          cwd: work,
-          stdout: "piped",
-          stderr: "piped",
-        }).output();
-        // `wiki check` exits 1 when it finds something, which is the case here
-        // rather than a failure of the command, so the text is read either way.
-        const report = new TextDecoder().decode(checked.stderr) +
-          new TextDecoder().decode(checked.stdout);
-        const theirs = canonical(parseReport(report));
+        const checked = await runCheck(command, work);
+        /*
+         * The CLI ran and told us nothing, which is not the same as the CLI
+         * running and finding nothing. Scored as an empty result set this reads
+         * as agreement on a vault nobody checked, so it fails here instead.
+         */
+        assert(
+          checked.fault === null,
+          `${testCase.label}: ${checked.fault}`,
+        );
+        const theirs = canonical(checked.findings);
         const ours = canonical(
           appFindings(pages, workVocabulary, workResolver, workConfig),
         );
@@ -612,6 +711,133 @@ Deno.test({
         );
         console.log(`  ${testCase.label}: same results (${theirs.length})`);
       }
+    } finally {
+      await Deno.remove(work, { recursive: true });
+    }
+  },
+});
+
+/*
+ * The three ways `wiki check` can come back, told apart before anything is
+ * compared.
+ *
+ * The first two are pure and run everywhere, including in `deno task test`,
+ * because the reasoning they pin down is the whole of the fix. The third needs
+ * the CLI and is the one that would have caught the original bug against a real
+ * vault rather than a description of one.
+ */
+
+/** A violating report, abbreviated to the three lines the parser reads. */
+const VIOLATION_REPORT = `Validation Report
+Conforms: False
+Results (1):
+Constraint Violation in MinCountConstraintComponent:
+\tFocus Node: wiki:Gamma
+\tResult Path: schema:description
+\tMessage: TechArticle must have a description summary.
+`;
+
+/** What a config this release does not understand looks like. Verbatim. */
+const REJECTED_CONFIG =
+  "Error: Invalid config file wiki.yml: unknown wiki keys: inputs\n";
+
+Deno.test("a clean vault is a result, and silence at a failure is not", () => {
+  // Exit 0 with no output is a vault that conforms. It has to be scored as an
+  // answer rather than as a fault, or every conforming vault fails the test
+  // that exists to check conformance.
+  const clean = interpretCheck(0, "");
+  assert(clean.fault === null, "a clean vault was read as a fault");
+  assert(
+    clean.findings.length === 0,
+    "a clean vault produced findings out of nothing",
+  );
+
+  // Exit 1 carrying a report is the interesting case, and stays a result.
+  const violating = interpretCheck(1, VIOLATION_REPORT);
+  assert(violating.fault === null, "a report at exit 1 was read as a fault");
+  assert(
+    violating.findings.length === 1 &&
+      violating.findings[0].page === "wiki:Gamma" &&
+      violating.findings[0].path === "schema:description" &&
+      violating.findings[0].message ===
+        "TechArticle must have a description summary.",
+    "a real report stopped being read correctly",
+  );
+
+  // Exit 1 with no report is the bug. Read as findings it is indistinguishable
+  // from a clean vault, which is the whole failure: the test went on to compare
+  // two empty sets and report agreement.
+  const refused = interpretCheck(1, REJECTED_CONFIG);
+  assert(
+    refused.fault !== null,
+    "a wiki check that refused to run was read as zero results, which is " +
+      "exactly what a correct run over a clean vault returns",
+  );
+  assert(
+    refused.fault.includes("unknown wiki keys: inputs"),
+    `the fault should quote the CLI's own words, so the next failure explains ` +
+      `itself; it said: ${refused.fault}`,
+  );
+  assert(
+    interpretCheck(2, "").fault !== null,
+    "a crash with no output at all was not read as a fault",
+  );
+});
+
+Deno.test({
+  name: "a wiki check that will not run fails rather than agreeing with itself",
+  async fn() {
+    // A copy of the fixture carrying one config key `wiki 0.1.23` rejects,
+    // which is what a real vault had in it. The app reads the same vault and
+    // finds violations; the CLI cannot start, and before this was a test the
+    // two were compared as "nothing found" against "nothing found".
+    const command = await wikiCommand();
+    if (command === null) {
+      const note = "the wiki CLI is not runnable here, so the rejection case " +
+        "could not be reproduced";
+      if (cliRequired()) throw new Error(`${note}, and that is a failure here`);
+      console.log(`skipped: ${note}`);
+      return;
+    }
+
+    const source = await Deno.realPath(vaultRoot());
+    const work = await Deno.makeTempDir({ prefix: "wiki-refused-" });
+    try {
+      await Deno.copyFile(`${source}/wiki.yml`, `${work}/wiki.yml`);
+      for (const [path, text] of await readPages(source)) {
+        await Deno.mkdir(`${work}/${path}`.replace(/\/[^/]+$/, ""), {
+          recursive: true,
+        });
+        await Deno.writeTextFile(`${work}/${path}`, text);
+      }
+      const config = `${work}/wiki.yml`;
+      const original = await Deno.readTextFile(config);
+      // Under the existing `wiki:` key, so the file stays a valid-looking
+      // config that this particular release happens to refuse.
+      await Deno.writeTextFile(
+        config,
+        original.replace(/^wiki:\s*$/m, "wiki:\n  inputs:\n    - wiki"),
+      );
+
+      const checked = await runCheck(command, work);
+      assert(
+        checked.fault !== null,
+        `wiki check read a vault it cannot load as a clean result ` +
+          `(${checked.findings.length} findings, exit reported fine) — this ` +
+          `release may now accept the key, in which case this test is ` +
+          `pointing at a version bump rather than at a bug, and should be ` +
+          `replaced with whatever this release refuses instead. It said:\n` +
+          `${checked.output.trim()}`,
+      );
+      assert(
+        checked.fault.includes("wiki.yml"),
+        `the fault should name the file it could not read; it said: ` +
+          `${checked.fault}`,
+      );
+      console.log(
+        `  a vault it refuses is a failure, not an empty result: ` +
+          `${checked.output.trim()}`,
+      );
     } finally {
       await Deno.remove(work, { recursive: true });
     }
