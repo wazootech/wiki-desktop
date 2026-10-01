@@ -304,8 +304,10 @@ Deno.test("a vault whose config cannot be read lists everything, as before", asy
     );
     assertEqual(
       files.map((file) => file.scope).join(", "),
-      "other, other, other",
-      "and no file is called a page",
+      "input, other, other",
+      "a config that cannot be read still leaves `wiki/` the page folder, " +
+        "which is where `wiki` itself would look — a reader who cannot see " +
+        "the config should not be told the pages moved",
     );
   });
 });

@@ -603,7 +603,8 @@ Deno.test({
 
     const work = await Deno.makeTempDir({ prefix: "wiki-agree-" });
     try {
-      await Deno.copyFile(`${source}/wiki.yml`, `${work}/wiki.yml`);
+      const originalConfig = await Deno.readTextFile(`${source}/wiki.yml`);
+      await Deno.writeTextFile(`${work}/wiki.yml`, originalConfig);
       for (const [path, text] of originals) {
         await Deno.mkdir(`${work}/${path}`.replace(/\/[^/]+$/, ""), {
           recursive: true,
@@ -619,12 +620,39 @@ Deno.test({
       const cases: {
         label: string;
         mutate: (pages: Map<string, string>) => Map<string, string>;
+        /** Rewritten into the work copy's config before the run, if given. */
+        config?: (text: string) => string;
       }[] = [
         {
           label: bundled
             ? "the fixture as committed, invalid on purpose"
             : "an unmodified vault, which should report nothing",
           mutate: (pages) => new Map(pages),
+        },
+        /*
+         * The same pages with the config saying nothing about where they live.
+         *
+         * Both sides have to fall back the same way, and the way they fall back
+         * is not obvious: `wiki` reads a config with no `input` key from `wiki/`
+         * and names a page there `wiki:Thing`, while the app defaulted to no
+         * input directory and named it `wiki:wiki/Thing`. Those are two
+         * spellings of two different subjects, so a message about one could
+         * never be checked against a result about the other — and every case in
+         * this loop would have gone on comparing focus nodes that differ for
+         * that reason alone.
+         *
+         * It is here rather than in a unit test because the unit test can only
+         * assert what this app decided; this one is the only thing that says the
+         * decision was right.
+         *
+         * The whole `wiki:` block goes rather than just its `input` key, because
+         * a config left saying `wiki:` and nothing under it is not a config the
+         * CLI will read either — and a case that cannot run would test nothing.
+         */
+        {
+          label: "the same vault with its input directory unstated",
+          mutate: (pages) => new Map(pages),
+          config: (text) => text.replace(/^wiki:\n(?: {2}.*\n)+/m, ""),
         },
         {
           label: `${key} removed from the first three pages that carry it`,
@@ -685,6 +713,16 @@ Deno.test({
         for (const [path, text] of pages) {
           await Deno.writeTextFile(`${work}/${path}`, text);
         }
+        // Written every case rather than only the ones that change it, so a
+        // case that rewrites the config cannot leak into the next one. These run
+        // in sequence over one directory, and an earlier case's config would
+        // otherwise still be in place.
+        await Deno.writeTextFile(
+          `${work}/wiki.yml`,
+          testCase.config === undefined
+            ? originalConfig
+            : testCase.config(originalConfig),
+        );
         const workConfig = await readWikiConfig(work);
         const workVocabulary = readVocabulary(pages, workConfig);
         const workResolver = new TermResolver(workVocabulary.context);

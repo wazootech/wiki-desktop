@@ -119,6 +119,71 @@ Deno.test("an empty config leaves every file alone", () => {
   );
 });
 
+Deno.test("a config that says nothing about its pages still has some", () => {
+  // `wiki` reads a vault whose config omits `input` from `wiki/`, so a page
+  // there is `wiki:CSS` and not `wiki:wiki/CSS`. An app that defaulted to no
+  // input directory gave the same page a different name, and a validation
+  // message is addressed by that name — so the two were talking about
+  // different subjects and neither could be checked against the other.
+  //
+  // All three are the CLI's behaviour against wiki 0.1.23, not a reading of its
+  // documentation: a config with no `input` key indexes `wiki/`, one with
+  // `input: []` indexes nothing, and one with a bare `input:` indexes nothing
+  // either. The last two are the same statement — present but empty — and
+  // neither is the same as the first.
+  const silent = parseWikiConfig(
+    "graph:\n  context:\n    wiki: https://w/\n",
+    "yaml",
+  );
+  assert(
+    silent !== null,
+    "a config with no wiki section is still a config",
+  );
+  assertEqual(
+    JSON.stringify(silent!.inputs),
+    JSON.stringify(["wiki"]),
+    "an absent key is the CLI's default, not no pages at all",
+  );
+  assertEqual(
+    documentIri("wiki/CSS.md", silent!),
+    "https://w/CSS",
+    "so the page is named without the directory in front of it",
+  );
+
+  // Present and empty is a decision, and honouring it is the whole point: a
+  // vault that wrote `input: []` asked for nothing to be indexed, and quietly
+  // handing it `wiki/` back would invent pages it declined to have.
+  for (
+    const empty of ["wiki:\n  input: []\n", "wiki:\n  input:\n"]
+  ) {
+    const declared = parseWikiConfig(empty, "yaml");
+    assert(declared !== null, `parsed: ${JSON.stringify(empty)}`);
+    assertEqual(
+      JSON.stringify(declared!.inputs),
+      JSON.stringify([]),
+      `an explicitly empty input list stays empty: ${JSON.stringify(empty)}`,
+    );
+  }
+
+  // A declared directory is still the one that is used, and a second one works
+  // the same as it always did.
+  const declared = parseWikiConfig(
+    "wiki:\n  input:\n    - pages\n    - notes\n\ngraph:\n  context:\n    wiki: https://w/\n",
+    "yaml",
+  );
+  assert(declared !== null, "a config with inputs parses");
+  assertEqual(
+    JSON.stringify(declared!.inputs),
+    JSON.stringify(["pages", "notes"]),
+    "declared directories win over the default",
+  );
+  assertEqual(
+    documentIri("pages/Thing.md", declared!),
+    "https://w/Thing",
+    "and the page is named against the one it is under",
+  );
+});
+
 Deno.test("exclude globs match the paths a vault config would write", () => {
   const inside = (path: string, pattern: string) =>
     isExcludedVaultPath(path, [pattern]);
@@ -180,7 +245,11 @@ Deno.test("a config that cannot be read is an empty one, not an error", () => {
   );
   const noSections = parseWikiConfig("graph:\n  base_iri: x\n", "yaml");
   assert(noSections !== null, "a config with no `wiki:` section is still one");
-  assertEqual(noSections.inputs.length, 0, "and it names no directories");
+  assertEqual(
+    JSON.stringify(noSections.inputs),
+    JSON.stringify(["wiki"]),
+    "and it falls back to the directory `wiki` reads when told nothing",
+  );
 });
 
 Deno.test("a config cannot point the listing outside the vault", () => {
