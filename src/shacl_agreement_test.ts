@@ -222,11 +222,18 @@ function appFindings(
   return findings;
 }
 
-/** Read every page of a vault, keyed by vault path. */
+/**
+ * Read every page of a vault, keyed by vault path.
+ *
+ * The scope filter is the app's own rule, not a second one: `readVaultVocabulary`
+ * reads the same listing and the same scope, so a file outside `wiki.input` is
+ * absent on both sides. Without it this test would compare the app's page set
+ * against a CLI that never loaded those pages and call the difference agreement.
+ */
 async function readPages(root: string): Promise<Map<string, string>> {
   const pages = new Map<string, string>();
   for (const file of await listVaultFiles(root)) {
-    if (!file.isMarkdown) continue;
+    if (!file.isMarkdown || file.scope !== "input") continue;
     pages.set(
       file.path,
       await Deno.readTextFile(`${root}/${file.path}`),
