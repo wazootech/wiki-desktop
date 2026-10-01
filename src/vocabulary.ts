@@ -37,9 +37,19 @@ export interface VaultVocabularyPayload {
   observedKeys: Record<string, number>;
 }
 
-/** The pages of a vault that carry frontmatter, for the shape walk. */
+/**
+ * The pages of a vault that carry frontmatter, for the shape walk.
+ *
+ * Scope decides this, not Markdown-ness. The graph `wiki check` validates is
+ * built by walking `wiki.input` (`load_graph` in `src/wiki/graph.py`), so a
+ * Markdown file the config does not point at is not a page: it contributes no
+ * triples, carries no document IRI, and raises no result. Reading one anyway
+ * made the app report a constraint on `wiki:raw/transcripts/...` in a vault
+ * whose `input` is `wiki`, which is a statement about a subject the build
+ * never had.
+ */
 function isShapeCandidate(file: VaultFile): boolean {
-  return file.isMarkdown;
+  return file.isMarkdown && file.scope === "input";
 }
 
 /**
