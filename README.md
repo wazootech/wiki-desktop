@@ -964,6 +964,15 @@ pre-paint path here is the real one, not a model of it.
   [wiki#310](https://github.com/wazootech/wiki/issues/310) lets `wiki check` be
   asked for structured output, at which point the evaluator behind `validate()`
   is replaced by the CLI's own answers rather than extended.
+- **The toolchain is being rewritten from Python to TypeScript**, and the new
+  engine reports SHACL results differently: full IRIs instead of CURIEs, and
+  messages with no subject (`Less than 1 values` rather than
+  `Less than 1 values on wiki:X->schema:name`). Nothing here depends on the CLI
+  at runtime, so the app itself is unaffected — but the agreement test compares
+  the report literally and will fail on cutover day, and vaults with an
+  mdformat-era `fmt:` block will not load at all.
+  [`docs/cutover-deno-engine.md`](docs/cutover-deno-engine.md) records what was
+  measured, what does and does not change, and the order to do the work in.
 - The vault is not watched, so external edits need the refresh button on the tab
   bar (or **Reload from disk** in the menu); it asks before discarding a buffer
   with unsaved changes.
