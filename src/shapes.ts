@@ -371,10 +371,28 @@ export interface DocumentIriConfig {
 export function documentIri(
   path: string,
   config: DocumentIriConfig,
+  frontmatter?: Readonly<Record<string, unknown>> | null,
 ): string | null {
   const base = config.baseIri ?? config.context.wiki;
   if (base === undefined || base === "") return null;
   const normalized = path.replace(/\\/g, "/");
+
+  // Precedence: @id, then id, then filename (mirrors CLI frontmatter_to_graph)
+  if (frontmatter) {
+    const declared = frontmatter["@id"] ?? frontmatter["id"];
+    if (declared !== undefined && declared !== null) {
+      const idStr = String(declared).trim();
+      if (idStr !== "") {
+        // If absolute IRI (http(s)://, ftp://, urn:, etc.), return as-is
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(idStr) || idStr.startsWith("urn:")) {
+          return idStr;
+        }
+        // Non-absolute: return as declared (CLI keeps as-is; base is handled by context)
+        return idStr;
+      }
+    }
+  }
+
   let slug = normalized;
   for (const input of config.inputs) {
     if (normalized === input || normalized.startsWith(`${input}/`)) {
