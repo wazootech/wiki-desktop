@@ -309,7 +309,13 @@ function appFindings(
     // The app anchors a result on the page's IRI, which is the named node the
     // report also names, rather than on a blank node whose label changes.
     const { frontmatter: fm } = readFrontmatter(text);
-    const focus = documentIri(path, config, fm?.mapping ? (fm.mapping as unknown as Readonly<Record<string, unknown>>) : null);
+    const focus = documentIri(
+      path,
+      config,
+      fm?.mapping
+        ? (fm.mapping as unknown as Readonly<Record<string, unknown>>)
+        : null,
+    );
     if (focus === null) continue;
     for (const result of validate(model, resolver, focus).violations) {
       findings.push({
