@@ -283,15 +283,39 @@ function parseReport(report: string): Finding[] | null {
       path = trimmed.slice("Result Path:".length).trim();
     } else if (trimmed.startsWith("Message:") && focus !== null) {
       findings.push({
-        page: focus,
-        path: path ?? "",
-        message: trimmed.slice("Message:".length).trim(),
+        page: unbracket(focus),
+        path: unbracket(path ?? ""),
+        message: normalizeMessage(trimmed.slice("Message:".length).trim()),
       });
       focus = null;
       path = null;
     }
   }
   return findings;
+}
+
+/**
+ * Newer `wiki check` releases name nodes and paths by full IRI (`<iri>`)
+ * rather than by CURIE, so both sides are compared as bare full IRIs.
+ */
+function unbracket(term: string): string {
+  return term.replace(/^<(.*)>$/, "$1");
+}
+
+/**
+ * The one message whose wording differs between the two evaluators is the
+ * datatype violation, which also names the datatype as a CURIE on this side
+ * and as a full IRI on the other. It is reduced to the fact both say: which
+ * datatype the value failed to have. Every other message is compared verbatim.
+ */
+function normalizeMessage(message: string, resolver?: TermResolver): string {
+  const ours = /^Value is not Literal with datatype (.+)$/.exec(message);
+  const theirs = /^Value does not have datatype (.+)$/.exec(message);
+  const datatype = ours?.[1] ?? theirs?.[1];
+  if (datatype === undefined) return message;
+  const term = unbracket(datatype);
+  const iri = resolver?.datatype(term) ?? term;
+  return `Value does not have datatype ${iri}`;
 }
 
 /** The same results, from the evaluator in this app. */
@@ -319,9 +343,9 @@ function appFindings(
     if (focus === null) continue;
     for (const result of validate(model, resolver, focus).violations) {
       findings.push({
-        page: resolver.curie(focus) ?? focus,
-        path: result.resultPath,
-        message: result.message,
+        page: focus,
+        path: result.resultPathIri ?? result.resultPath,
+        message: normalizeMessage(result.message, resolver),
       });
     }
   }
