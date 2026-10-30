@@ -384,7 +384,9 @@ export function documentIri(
       const idStr = String(declared).trim();
       if (idStr !== "") {
         // If absolute IRI (http(s)://, ftp://, urn:, etc.), return as-is
-        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(idStr) || idStr.startsWith("urn:")) {
+        if (
+          /^[a-z][a-z0-9+.-]*:\/\//i.test(idStr) || idStr.startsWith("urn:")
+        ) {
           return idStr;
         }
         // Non-absolute: return as declared (CLI keeps as-is; base is handled by context)

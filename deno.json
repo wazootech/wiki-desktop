@@ -28,6 +28,12 @@
     "@codemirror/view": "npm:@codemirror/view@^6",
     "@lezer/highlight": "npm:@lezer/highlight@^1"
   },
+  "lock": {
+    "frozen": true
+  },
+  "compilerOptions": {
+    "strict": true
+  },
   "desktop": {
     "app": {
       "name": "wiki-desktop",
