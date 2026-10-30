@@ -1,0 +1,4 @@
+# Verified false positive: a keyboard-shortcut command definition in src/page.ts
+# (id/group/label/accelerator), not a credential. Exact fingerprint only; no regex
+# allowlists or rule disables. This list may only shrink.
+60c7e20dc3b44c11908c6b37573de8fc86f45f6a:src/page.ts:generic-api-key:1522
