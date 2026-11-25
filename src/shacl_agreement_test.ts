@@ -283,15 +283,43 @@ function parseReport(report: string): Finding[] | null {
       path = trimmed.slice("Result Path:".length).trim();
     } else if (trimmed.startsWith("Message:") && focus !== null) {
       findings.push({
-        page: focus,
-        path: path ?? "",
-        message: trimmed.slice("Message:".length).trim(),
+        page: unbracket(focus),
+        path: unbracket(path ?? ""),
+        message: normalizeMessage(trimmed.slice("Message:".length).trim()),
       });
       focus = null;
       path = null;
     }
   }
   return findings;
+}
+
+/**
+ * Newer `wiki check` releases name nodes and paths by full IRI (`<iri>`)
+ * rather than by CURIE, so both sides are compared as bare full IRIs.
+ */
+function unbracket(term: string): string {
+  return term.replace(/^<(.*)>$/, "$1");
+}
+
+/**
+ * The one message whose wording differs between the two evaluators is the
+ * datatype violation, which also names the datatype as a CURIE on this side
+ * and as a full IRI on the other. It is reduced to the fact both say: which
+ * datatype the value failed to have. Every other message is compared verbatim.
+ */
+function normalizeMessage(message: string, resolver?: TermResolver): string {
+  const ours = /^Value is not Literal with datatype (.+)$/.exec(message);
+  const theirs = /^Value does not have datatype (.+)$/.exec(message);
+  const datatype = ours?.[1] ?? theirs?.[1];
+  if (datatype === undefined) {
+    // The fallback count messages used to end in `on <focus>-><path>`; the
+    // newer release drops that suffix, so only the count wording is compared.
+    return message.replace(/^((?:Less|More) than \d+ values) on .+->.+$/, "$1");
+  }
+  const term = unbracket(datatype);
+  const iri = resolver?.datatype(term) ?? term;
+  return `Value does not have datatype ${iri}`;
 }
 
 /** The same results, from the evaluator in this app. */
@@ -309,13 +337,19 @@ function appFindings(
     // The app anchors a result on the page's IRI, which is the named node the
     // report also names, rather than on a blank node whose label changes.
     const { frontmatter: fm } = readFrontmatter(text);
-    const focus = documentIri(path, config, fm?.mapping ? (fm.mapping as unknown as Readonly<Record<string, unknown>>) : null);
+    const focus = documentIri(
+      path,
+      config,
+      fm?.mapping
+        ? (fm.mapping as unknown as Readonly<Record<string, unknown>>)
+        : null,
+    );
     if (focus === null) continue;
     for (const result of validate(model, resolver, focus).violations) {
       findings.push({
-        page: resolver.curie(focus) ?? focus,
-        path: result.resultPath,
-        message: result.message,
+        page: focus,
+        path: result.resultPathIri ?? result.resultPath,
+        message: normalizeMessage(result.message, resolver),
       });
     }
   }
@@ -627,6 +661,8 @@ Deno.test({
        */
       const cases: {
         label: string;
+        /** Asserted as a documented upstream divergence, not compared verbatim. */
+        knownDivergence?: boolean;
         mutate: (pages: Map<string, string>) => Map<string, string>;
         /** Rewritten into the work copy's config before the run, if given. */
         config?: (text: string) => string;
@@ -664,6 +700,9 @@ Deno.test({
         },
         {
           label: `${key} removed from the first three pages that carry it`,
+          // Known upstream divergence, asserted rather than skipped: see the
+          // comment where `knownDivergence` is checked below.
+          knownDivergence: true,
           mutate: (pages) => {
             const next = new Map(pages);
             let changed = 0;
@@ -680,6 +719,8 @@ Deno.test({
         },
         {
           label: `${key} emptied on every page that carries it`,
+          // Same upstream divergence as above (wazootech/wiki#445).
+          knownDivergence: true,
           mutate: (pages) => {
             const next = new Map(pages);
             for (const [path, text] of next) {
@@ -749,6 +790,45 @@ Deno.test({
         const ours = canonical(
           appFindings(pages, workVocabulary, workResolver, workConfig),
         );
+
+        /*
+         * KNOWN UPSTREAM DIVERGENCE (wazootech/wiki#445, wiki-desktop#50).
+         *
+         * Since wazootech-wiki 0.7.0, `wiki check` no longer reports the
+         * "must have exactly one <key>" result for a page whose required key was
+         * deleted outright (Alpha, Beta and Delta here: 2 results from the CLI
+         * against 5 from this app), while it still reports it for a key that is
+         * present twice or empty. This app keeps reporting it, and its behavior
+         * is deliberately left alone until upstream decides which side is right.
+         *
+         * The case is asserted, not skipped: the CLI must report a strict subset
+         * of this app's results, and every result it omits must be about the
+         * removed key. The moment the CLI agrees again this fails loudly, so the
+         * exception cannot go stale and the case goes back to a verbatim
+         * comparison.
+         */
+        if (testCase.knownDivergence === true) {
+          if (ours.join("\n") === theirs.join("\n")) {
+            throw new Error(
+              `${testCase.label}: upstream divergence resolved: remove this ` +
+                "known-divergence case (wazootech/wiki#445, wiki-desktop#50) " +
+                "so it is compared verbatim again",
+            );
+          }
+          const omitted = ours.filter((line) => !theirs.includes(line));
+          const invented = theirs.filter((line) => !ours.includes(line));
+          assert(
+            invented.length === 0 && omitted.length > 0 &&
+              omitted.every((line) => line.includes(`/${key} | `)),
+            `${testCase.label}: the known divergence changed shape:\n` +
+              differences(ours, theirs),
+          );
+          console.log(
+            `  ${testCase.label}: known divergence, CLI ${theirs.length} ` +
+              `vs app ${ours.length} (wazootech/wiki#445)`,
+          );
+          continue;
+        }
 
         assert(
           ours.length === theirs.length &&

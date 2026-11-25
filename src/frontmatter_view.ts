@@ -176,11 +176,17 @@ export function planFrontmatter(
     },
     resolver,
   );
-  const focus = documentIri(path, {
+  const focus = documentIri(
+    path,
+    {
       inputs: vocabulary.inputs,
       context: vocabulary.context,
       baseIri: vocabulary.baseIri,
-    }, frontmatter?.mapping ? (frontmatter.mapping as unknown as Readonly<Record<string, unknown>>) : null);
+    },
+    frontmatter?.mapping
+      ? (frontmatter.mapping as unknown as Readonly<Record<string, unknown>>)
+      : null,
+  );
   // A page with no IRI is a page the build would not name either, and a result
   // with no focus node has nowhere stable to be anchored.
   const report = focus === null ? null : validate(model, resolver, focus);
